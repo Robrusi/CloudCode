@@ -591,6 +591,11 @@ function ChatInner() {
       />
 
       <div className="relative flex flex-1 flex-col">
+        <TopBar
+          title={active?.title ?? null}
+          repoUrl={repoUrl}
+          isNew={!active}
+        />
         <div ref={threadRef} className="flex-1 overflow-y-auto">
           <div className="mx-auto flex min-h-full max-w-2xl flex-col px-6 pt-16 pb-40">
             {empty ? (
@@ -727,6 +732,38 @@ function SignedOutScreen() {
         </SignInButton>
       </div>
     </div>
+  )
+}
+
+function TopBar({
+  title,
+  repoUrl,
+  isNew,
+}: {
+  title: string | null
+  repoUrl: string
+  isNew: boolean
+}) {
+  const displayTitle = title?.trim() || (isNew ? "New chat" : "Untitled")
+  const repo = repoUrl ? repoLabel(repoUrl) : ""
+
+  return (
+    <header className="flex h-12 shrink-0 items-center gap-2.5 border-b border-border/60 bg-background/80 px-4 backdrop-blur-xl">
+      <span className="min-w-0 truncate text-sm font-medium text-foreground/85">
+        {displayTitle}
+      </span>
+      {repo ? (
+        <>
+          <span className="text-muted-foreground/40" aria-hidden>
+            /
+          </span>
+          <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <Folder className="size-3.5 shrink-0" />
+            <span className="truncate">{repo}</span>
+          </div>
+        </>
+      ) : null}
+    </header>
   )
 }
 
