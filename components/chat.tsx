@@ -1,6 +1,12 @@
 "use client"
 
 import { Show, SignInButton, UserButton } from "@clerk/nextjs"
+import {
+  File as PierreFile,
+  type FileContents,
+  type FileOptions,
+  type ThemeTypes,
+} from "@pierre/diffs/react"
 import { useMutation, useQuery } from "convex/react"
 import {
   AlertCircle,
@@ -18,7 +24,9 @@ import {
   Square,
   Terminal,
 } from "lucide-react"
+import { useTheme } from "next-themes"
 import {
+  type CSSProperties,
   type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
@@ -1194,72 +1202,66 @@ const CODE_LANGUAGE_LABELS: Record<string, string> = {
   yml: "YAML",
 }
 
-const CODE_KEYWORDS = new Set([
-  "and",
-  "as",
-  "async",
-  "await",
-  "break",
-  "case",
-  "catch",
-  "class",
-  "const",
-  "continue",
-  "def",
-  "default",
-  "delete",
-  "do",
-  "elif",
-  "else",
-  "enum",
-  "export",
-  "extends",
-  "false",
-  "finally",
-  "for",
-  "from",
-  "function",
-  "if",
-  "import",
-  "in",
-  "interface",
-  "is",
-  "let",
-  "new",
-  "none",
-  "not",
-  "null",
-  "or",
-  "private",
-  "protected",
-  "public",
-  "return",
-  "switch",
-  "this",
-  "throw",
-  "true",
-  "try",
-  "type",
-  "undefined",
-  "var",
-  "while",
-  "with",
-])
+const PIERRE_CODE_THEMES = {
+  dark: "pierre-dark",
+  light: "pierre-light",
+} as const
+
+const PIERRE_FILE_STYLE = {
+  "--diffs-font-family": "var(--font-mono)",
+  "--diffs-font-size": "13px",
+  "--diffs-gap-block": "12px",
+  "--diffs-line-height": "24px",
+} as CSSProperties
+
+const PIERRE_LANGUAGE_ALIASES: Record<string, string> = {
+  js: "javascript",
+  md: "markdown",
+  plaintext: "text",
+  py: "python",
+  sh: "bash",
+  shell: "bash",
+  text: "text",
+  ts: "typescript",
+  yml: "yaml",
+}
 
 function CodeBlock({ body, lang }: { body: string; lang?: string }) {
   const code = body.replace(/\n$/, "")
   const language = lang ?? "plaintext"
+  const { resolvedTheme } = useTheme()
+  const themeType: ThemeTypes = resolvedTheme === "dark" ? "dark" : "light"
+  const file = useMemo<FileContents>(
+    () => ({
+      cacheKey: `${language}:${code}`,
+      contents: code,
+      lang: getPierreLanguage(language),
+      name: `snippet.${language}`,
+    }),
+    [code, language]
+  )
+  const options = useMemo<FileOptions<undefined>>(
+    () => ({
+      disableFileHeader: true,
+      disableLineNumbers: true,
+      overflow: "scroll",
+      theme: PIERRE_CODE_THEMES,
+      themeType,
+    }),
+    [themeType]
+  )
 
   return (
-    <div className="overflow-hidden rounded-xl border border-border bg-muted/60">
-      <div className="flex h-8 items-center border-b border-border/70 bg-background/70 px-3 font-mono text-[11px] font-medium text-muted-foreground uppercase">
+    <div className="overflow-hidden rounded-xl border border-border bg-background">
+      <div className="flex h-8 items-center border-b border-border bg-muted/70 px-3 font-mono text-[11px] font-medium text-muted-foreground uppercase">
         {formatCodeLanguage(language)}
       </div>
-      <pre className="overflow-x-auto px-4 py-3 font-mono text-[13px] leading-6">
-        <code className={`language-${language}`}>
-          {highlightCode(code, language)}
-        </code>
-      </pre>
+      <PierreFile
+        file={file}
+        options={options}
+        disableWorkerPool
+        style={PIERRE_FILE_STYLE}
+      />
     </div>
   )
 }
@@ -1273,80 +1275,8 @@ function formatCodeLanguage(lang: string) {
   return CODE_LANGUAGE_LABELS[lang] ?? lang
 }
 
-function highlightCode(code: string, lang: string): React.ReactNode {
-  if (!code) return null
-
-  const parts: React.ReactNode[] = []
-  const backtick = "`"
-  const tokenPatterns = [
-    String.raw`<!--[\s\S]*?-->`,
-    String.raw`\/\*[\s\S]*?\*\/`,
-    String.raw`\/\/[^\n]*`,
-    ...(hasHashComments(lang) ? [String.raw`#[^\n]*`] : []),
-    String.raw`"(?:\\.|[^"\\])*"`,
-    String.raw`'(?:\\.|[^'\\])*'`,
-    `${backtick}(?:\\\\.|[^${backtick}\\\\])*${backtick}`,
-    String.raw`\b[A-Za-z_$][\w$]*\b`,
-    String.raw`\b\d+(?:\.\d+)?\b`,
-    String.raw`[{}()[\].,;:<>/=+\-*%!?&|]+`,
-  ]
-  const tokenRe = new RegExp(tokenPatterns.join("|"), "g")
-  let last = 0
-  let key = 0
-  let match: RegExpExecArray | null
-
-  while ((match = tokenRe.exec(code)) !== null) {
-    const token = match[0]
-    if (match.index > last) parts.push(code.slice(last, match.index))
-
-    const className = getCodeTokenClass(
-      token,
-      lang,
-      code.slice(match.index + token.length)
-    )
-
-    parts.push(
-      className ? (
-        <span key={key++} className={className}>
-          {token}
-        </span>
-      ) : (
-        token
-      )
-    )
-    last = match.index + token.length
-  }
-
-  if (last < code.length) parts.push(code.slice(last))
-  return <>{parts}</>
-}
-
-function getCodeTokenClass(token: string, lang: string, rest: string) {
-  if (isCommentToken(token, lang))
-    return "text-muted-foreground/80 italic"
-  if (/^["'`]/.test(token)) return "text-emerald-700 dark:text-emerald-300"
-  if (/^\d/.test(token)) return "text-amber-700 dark:text-amber-300"
-  if (CODE_KEYWORDS.has(token.toLowerCase()))
-    return "font-medium text-rose-700 dark:text-rose-300"
-  if (/^[A-Za-z_$]/.test(token) && /^\s*\(/.test(rest))
-    return "text-sky-700 dark:text-sky-300"
-  if (/^[{}()[\].,;:<>/=+\-*%!?&|]+$/.test(token))
-    return "text-muted-foreground"
-  return undefined
-}
-
-function isCommentToken(token: string, lang: string) {
-  if (
-    token.startsWith("<!--") ||
-    token.startsWith("/*") ||
-    token.startsWith("//")
-  )
-    return true
-  return token.startsWith("#") && hasHashComments(lang)
-}
-
-function hasHashComments(lang: string) {
-  return ["bash", "py", "python", "sh", "shell", "yaml", "yml"].includes(lang)
+function getPierreLanguage(lang: string) {
+  return PIERRE_LANGUAGE_ALIASES[lang] ?? lang
 }
 
 function InlineProse({ text }: { text: string }) {
