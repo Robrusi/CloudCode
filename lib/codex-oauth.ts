@@ -13,6 +13,7 @@ const SCOPE =
 type PendingLogin = {
   appOrigin: string
   codeVerifier: string
+  convexToken: string
   profile?: string
   state: string
 }
@@ -166,6 +167,7 @@ async function handleCallback(
     const tokens = await exchangeCodeForTokens(pending, code, state.port)
     await saveCodexOAuthTokens({
       ...tokens,
+      convexToken: pending.convexToken,
       profile: pending.profile,
     })
     respond(
@@ -219,9 +221,11 @@ async function getLoginServer() {
 
 export async function createCodexLoginUrl({
   appOrigin,
+  convexToken,
   profile,
 }: {
   appOrigin: string
+  convexToken: string
   profile?: string
 }) {
   const server = await getLoginServer()
@@ -231,6 +235,7 @@ export async function createCodexLoginUrl({
   server.pending.set(state, {
     appOrigin,
     codeVerifier,
+    convexToken,
     profile,
     state,
   })

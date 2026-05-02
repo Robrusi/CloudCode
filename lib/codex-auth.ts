@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto"
 
-import { Redis } from "@upstash/redis"
+import { auth } from "@clerk/nextjs/server"
+import { ConvexHttpClient } from "convex/browser"
+
+import { api } from "@/convex/_generated/api"
 
 const DEFAULT_PROFILE = "default"
-const KEY_PREFIX = "cloudcode:codex-auth"
+const CONVEX_JWT_TEMPLATE = "convex"
 
 export type CodexChatGptAuth = {
   accessToken: string
@@ -15,13 +18,6 @@ export type CodexChatGptAuth = {
   openaiApiKey?: string
   profile: string
   refreshToken: string
-  updatedAt: string
-}
-
-type LegacyStoredAuth = {
-  authJson: string
-  fingerprint: string
-  profile: string
   updatedAt: string
 }
 
@@ -37,29 +33,55 @@ export type AuthStatus = {
 
 export type SaveCodexOAuthTokensInput = {
   accessToken: string
+  convexToken?: string
   idToken: string
   openaiApiKey?: string
   profile?: string
   refreshToken: string
 }
 
-let redis: Redis | null = null
+function getConvexUrl() {
+  const url = process.env.NEXT_PUBLIC_CONVEX_URL
 
-function getRedis() {
-  if (!redis) {
-    const url = process.env.UPSTASH_REDIS_REST_URL
-    const token = process.env.UPSTASH_REDIS_REST_TOKEN
-
-    if (!url || !token) {
-      throw new Error(
-        "Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN before using Codex OAuth storage."
-      )
-    }
-
-    redis = new Redis({ token, url })
+  if (!url) {
+    throw new Error("Set NEXT_PUBLIC_CONVEX_URL before using Convex storage.")
   }
 
-  return redis
+  return url
+}
+
+function createClient(convexToken: string) {
+  const client = new ConvexHttpClient(getConvexUrl())
+  client.setAuth(convexToken)
+  return client
+}
+
+export async function getConvexAuthToken() {
+  const session = await auth()
+
+  if (!session.userId) {
+    throw new Error("Sign in with Clerk before using Codex OAuth storage.")
+  }
+
+  let token: string | null
+
+  try {
+    token = await session.getToken({ template: CONVEX_JWT_TEMPLATE })
+  } catch (error) {
+    throw new Error(
+      error instanceof Error
+        ? `Unable to create Clerk Convex JWT: ${error.message}`
+        : "Unable to create Clerk Convex JWT."
+    )
+  }
+
+  if (!token) {
+    throw new Error(
+      'Clerk did not return a Convex JWT. Create a Clerk JWT template named "convex" with audience "convex".'
+    )
+  }
+
+  return token
 }
 
 export function normalizeProfile(profile?: string) {
@@ -72,10 +94,6 @@ export function normalizeProfile(profile?: string) {
   }
 
   return normalized
-}
-
-function getAuthKey(profile: string) {
-  return `${KEY_PREFIX}:${profile}`
 }
 
 function fingerprint(...values: string[]) {
@@ -202,81 +220,27 @@ function parseCodexAuthJson(authJson: string) {
   }
 }
 
-function normalizeStoredAuth(profile: string, stored: unknown) {
-  if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
-    return null
-  }
-
-  const record = stored as Partial<CodexChatGptAuth & LegacyStoredAuth>
-
-  if (record.authJson) {
-    const parsed = parseCodexAuthJson(record.authJson)
-
-    return {
-      ...parsed,
-      authMode: "chatgpt" as const,
-      fingerprint: record.fingerprint ?? fingerprint(record.authJson),
-      profile,
-      updatedAt: record.updatedAt ?? new Date().toISOString(),
-    } satisfies CodexChatGptAuth
-  }
-
-  if (
-    record.authMode === "chatgpt" &&
-    typeof record.idToken === "string" &&
-    typeof record.accessToken === "string" &&
-    typeof record.refreshToken === "string" &&
-    typeof record.lastRefresh === "string"
-  ) {
-    return {
-      accessToken: record.accessToken,
-      accountId:
-        typeof record.accountId === "string"
-          ? record.accountId
-          : getAccountIdFromIdToken(record.idToken),
-      authMode: "chatgpt" as const,
-      fingerprint:
-        record.fingerprint ??
-        fingerprint(record.idToken, record.refreshToken, record.lastRefresh),
-      idToken: record.idToken,
-      lastRefresh: record.lastRefresh,
-      openaiApiKey: record.openaiApiKey,
-      profile,
-      refreshToken: record.refreshToken,
-      updatedAt: record.updatedAt ?? new Date().toISOString(),
-    } satisfies CodexChatGptAuth
-  }
-
-  return null
+async function getClient(convexToken?: string) {
+  return createClient(convexToken ?? (await getConvexAuthToken()))
 }
 
 export async function saveCodexOAuthTokens(input: SaveCodexOAuthTokensInput) {
   const profile = normalizeProfile(input.profile)
   const lastRefresh = new Date().toISOString()
-  const auth: CodexChatGptAuth = {
+  const auth = {
     accessToken: input.accessToken,
     accountId: getAccountIdFromIdToken(input.idToken),
-    authMode: "chatgpt",
     fingerprint: fingerprint(input.idToken, input.refreshToken, lastRefresh),
     idToken: input.idToken,
     lastRefresh,
     openaiApiKey: input.openaiApiKey,
     profile,
     refreshToken: input.refreshToken,
-    updatedAt: lastRefresh,
   }
 
-  await getRedis().set(getAuthKey(profile), auth)
-
-  return {
-    accountId: auth.accountId,
-    authMode: auth.authMode,
-    exists: true,
-    fingerprint: auth.fingerprint,
-    lastRefresh: auth.lastRefresh,
-    profile,
-    updatedAt: auth.updatedAt,
-  } satisfies AuthStatus
+  const client = await getClient(input.convexToken)
+  return (await client.mutation(api.codexAuth.saveOAuthTokens, auth)) satisfies
+    AuthStatus
 }
 
 export async function saveCodexAuthJson(
@@ -296,10 +260,8 @@ export async function saveCodexAuthJson(
 
 export async function getCodexAuthJson(profileInput?: string) {
   const profile = normalizeProfile(profileInput)
-  const stored = normalizeStoredAuth(
-    profile,
-    await getRedis().get(getAuthKey(profile))
-  )
+  const client = await getClient()
+  const stored = await client.query(api.codexAuth.get, { profile })
 
   if (!stored) {
     throw new Error(
@@ -312,22 +274,7 @@ export async function getCodexAuthJson(profileInput?: string) {
 
 export async function getCodexAuthStatus(profileInput?: string) {
   const profile = normalizeProfile(profileInput)
-  const stored = normalizeStoredAuth(
-    profile,
-    await getRedis().get(getAuthKey(profile))
-  )
-
-  if (!stored) {
-    return { exists: false, profile } satisfies AuthStatus
-  }
-
-  return {
-    accountId: stored.accountId,
-    authMode: stored.authMode,
-    exists: true,
-    fingerprint: stored.fingerprint,
-    lastRefresh: stored.lastRefresh,
-    profile,
-    updatedAt: stored.updatedAt,
-  } satisfies AuthStatus
+  const client = await getClient()
+  return (await client.query(api.codexAuth.status, { profile })) satisfies
+    AuthStatus
 }

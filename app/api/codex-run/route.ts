@@ -4,6 +4,7 @@ import { getCodexAuthJson, saveCodexAuthJson } from "@/lib/codex-auth"
 import {
   type CodexSpeed,
   type ReasoningEffort,
+  type RunCodexLog,
   runCodexInSandbox,
 } from "@/lib/e2b-codex-agent"
 
@@ -33,6 +34,14 @@ function parseSpeed(value: unknown): CodexSpeed | undefined {
   return undefined
 }
 
+function streamEvent(
+  controller: ReadableStreamDefaultController,
+  value: unknown
+) {
+  const encoder = new TextEncoder()
+  controller.enqueue(encoder.encode(`${JSON.stringify(value)}\n`))
+}
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as {
@@ -40,6 +49,7 @@ export async function POST(request: Request) {
       branchName?: unknown
       githubToken?: unknown
       model?: unknown
+      previousDiff?: unknown
       profile?: unknown
       prompt?: unknown
       reasoningEffort?: unknown
@@ -63,37 +73,88 @@ export async function POST(request: Request) {
       )
     }
 
+    const prompt = body.prompt
+    const repoUrl = body.repoUrl
     const profile = typeof body.profile === "string" ? body.profile : undefined
     const authJson = await getCodexAuthJson(profile)
 
-    const result = await runCodexInSandbox({
-      authJson,
-      baseBranch:
-        typeof body.baseBranch === "string" ? body.baseBranch : undefined,
-      branchName:
-        typeof body.branchName === "string" ? body.branchName : undefined,
-      githubToken:
-        typeof body.githubToken === "string" ? body.githubToken : undefined,
-      model: typeof body.model === "string" ? body.model : undefined,
-      prompt: body.prompt,
-      reasoningEffort: parseReasoningEffort(body.reasoningEffort),
-      repoUrl: body.repoUrl,
-      sandboxId:
-        typeof body.sandboxId === "string" ? body.sandboxId : undefined,
-      speed: parseSpeed(body.speed),
-      timeoutMs:
-        typeof body.timeoutMs === "number" ? body.timeoutMs : undefined,
+    const stream = new ReadableStream({
+      start(controller) {
+        void (async () => {
+          try {
+            const result = await runCodexInSandbox({
+              authJson,
+              baseBranch:
+                typeof body.baseBranch === "string"
+                  ? body.baseBranch
+                  : undefined,
+              branchName:
+                typeof body.branchName === "string"
+                  ? body.branchName
+                  : undefined,
+              githubToken:
+                typeof body.githubToken === "string"
+                  ? body.githubToken
+                  : undefined,
+              model: typeof body.model === "string" ? body.model : undefined,
+              onLog: (log: RunCodexLog) => {
+                streamEvent(controller, {
+                  log,
+                  time: Date.now(),
+                  type: "progress",
+                })
+              },
+              previousDiff:
+                typeof body.previousDiff === "string"
+                  ? body.previousDiff
+                  : undefined,
+              prompt,
+              reasoningEffort: parseReasoningEffort(body.reasoningEffort),
+              repoUrl,
+              sandboxId:
+                typeof body.sandboxId === "string" ? body.sandboxId : undefined,
+              speed: parseSpeed(body.speed),
+              timeoutMs:
+                typeof body.timeoutMs === "number" ? body.timeoutMs : undefined,
+            })
+            const { updatedAuthJson, ...responseBody } = result
+
+            if (updatedAuthJson !== authJson) {
+              await saveCodexAuthJson(profile, updatedAuthJson)
+            }
+
+            streamEvent(controller, {
+              result: {
+                ...responseBody,
+                ok: result.exitCode === 0,
+              },
+              type: "done",
+            })
+          } catch (error) {
+            console.error("/api/codex-run failed", error)
+            streamEvent(controller, {
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Codex sandbox run failed.",
+              type: "error",
+            })
+          } finally {
+            controller.close()
+          }
+        })()
+      },
     })
-    const { updatedAuthJson, ...responseBody } = result
 
-    if (updatedAuthJson !== authJson) {
-      await saveCodexAuthJson(profile, updatedAuthJson)
-    }
-
-    return NextResponse.json(responseBody, {
-      status: result.exitCode === 0 ? 200 : 500,
+    return new Response(stream, {
+      headers: {
+        "cache-control": "no-cache, no-transform",
+        "content-type": "application/x-ndjson; charset=utf-8",
+      },
     })
   } catch (error) {
+    console.error("/api/codex-run failed", error)
+
     return NextResponse.json(
       {
         error:
