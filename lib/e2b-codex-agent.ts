@@ -3,8 +3,13 @@ import { Sandbox } from "e2b"
 const CODEX_HOME = "/home/user/.codex"
 const REPO_PATH = "/home/user/repo"
 const PROMPT_PATH = "/tmp/cloudcode-prompt.txt"
+const PREVIOUS_DIFF_PATH = "/tmp/cloudcode-previous.diff"
 const LAST_MESSAGE_PATH = "/tmp/cloudcode-last-message.txt"
+const CODEX_LAUNCHER_PATH = "/tmp/cloudcode-codex-latest"
 const EXIT_MARKER = "__CLOUDCODE_CODEX_EXIT__"
+const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60 * 1000
+const DEFAULT_SANDBOX_LIFETIME_MS = 60 * 60 * 1000
+const CODEX_UPDATE_TIMEOUT_MS = 3 * 60 * 1000
 
 type CommandResult = {
   exitCode: number
@@ -22,12 +27,28 @@ export type ReasoningEffort =
 
 export type CodexSpeed = "standard" | "fast"
 
+export type RunCodexLogKind =
+  | "setup"
+  | "command"
+  | "reasoning"
+  | "stdout"
+  | "stderr"
+  | "result"
+
+export type RunCodexLog = {
+  detail?: string
+  kind: RunCodexLogKind
+  message: string
+}
+
 export type RunCodexInSandboxInput = {
   authJson: string
   baseBranch?: string
   branchName?: string
   githubToken?: string
+  onLog?: (log: RunCodexLog) => void | Promise<void>
   model?: string
+  previousDiff?: string
   prompt: string
   reasoningEffort?: ReasoningEffort
   repoUrl: string
@@ -47,6 +68,7 @@ export type RunCodexInSandboxResult = {
   status: string
   stdout: string
   updatedAuthJson: string
+  recoveredSandbox: boolean
 }
 
 function shellQuote(value: string) {
@@ -146,11 +168,256 @@ function defaultBranchName() {
     .slice(0, 14)}`
 }
 
+async function createSandbox(timeoutMs: number) {
+  return await Sandbox.create("codex", {
+    timeoutMs: Math.max(timeoutMs, DEFAULT_SANDBOX_LIFETIME_MS),
+  })
+}
+
+async function connectOrCreateSandbox(
+  sandboxId: string | undefined,
+  timeoutMs: number
+) {
+  if (!sandboxId) {
+    return { recoveredSandbox: false, sandbox: await createSandbox(timeoutMs) }
+  }
+
+  try {
+    return {
+      recoveredSandbox: false,
+      sandbox: await Sandbox.connect(sandboxId),
+    }
+  } catch {
+    return { recoveredSandbox: true, sandbox: await createSandbox(timeoutMs) }
+  }
+}
+
 async function readLastMessage(sandbox: Sandbox) {
   try {
     return (await sandbox.files.read(LAST_MESSAGE_PATH)).trim()
   } catch {
     return ""
+  }
+}
+
+async function getCodexExecHelp(sandbox: Sandbox) {
+  try {
+    return (
+      await sandbox.commands.run(`${CODEX_LAUNCHER_PATH} exec --help`, {
+        timeoutMs: 10_000,
+      })
+    ).stdout
+  } catch {
+    return ""
+  }
+}
+
+async function updateCodexCli(sandbox: Sandbox, input: RunCodexInSandboxInput) {
+  await emitLog(input, {
+    kind: "setup",
+    message: "Updating Codex CLI to latest",
+  })
+
+  const updateCommand = [
+    "set -e",
+    `cat > ${CODEX_LAUNCHER_PATH} <<'EOF'`,
+    "#!/usr/bin/env bash",
+    "set -e",
+    "if command -v npm >/dev/null 2>&1; then",
+    '  exec npx -y @openai/codex@latest "$@"',
+    "elif command -v bunx >/dev/null 2>&1; then",
+    '  exec bunx @openai/codex@latest "$@"',
+    "else",
+    "  echo 'Neither npm nor bunx is available to run the latest Codex CLI.' >&2",
+    "  exit 1",
+    "fi",
+    "EOF",
+    `chmod +x ${CODEX_LAUNCHER_PATH}`,
+    `${CODEX_LAUNCHER_PATH} --version`,
+  ].join("\n")
+
+  await emitLog(input, {
+    kind: "command",
+    message: "npx -y @openai/codex@latest --version",
+    detail: "Codex exec uses the same @latest launcher",
+  })
+
+  const result = await sandbox.commands.run(
+    `bash -lc ${shellQuote(updateCommand)}`,
+    {
+      onStderr: (data) => {
+        const trimmed = compactLine(data)
+        if (trimmed) {
+          void input.onLog?.({ kind: "stderr", message: trimmed })
+        }
+      },
+      onStdout: (data) => {
+        const trimmed = compactLine(data)
+        if (trimmed) {
+          void input.onLog?.({ kind: "stdout", message: trimmed })
+        }
+      },
+      timeoutMs: CODEX_UPDATE_TIMEOUT_MS,
+    }
+  )
+
+  const version =
+    result.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .at(-1) || "Codex CLI updated"
+
+  await emitLog(input, {
+    kind: "setup",
+    message: version,
+  })
+}
+
+function helpIncludes(help: string, flag: string) {
+  return help.includes(flag)
+}
+
+async function emitLog(input: RunCodexInSandboxInput, log: RunCodexLog) {
+  await input.onLog?.(log)
+}
+
+function compactLine(value: string, max = 220) {
+  const line = value.replace(/\s+/g, " ").trim()
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>
+  }
+
+  return undefined
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined
+}
+
+function readableCodexText(value: string): string {
+  try {
+    const parsed = JSON.parse(value) as unknown
+    const nested = findString(parsed, ["detail", "message", "error"])
+    return nested && nested !== value ? readableCodexText(nested) : value
+  } catch {
+    return value
+  }
+}
+
+function findString(
+  value: unknown,
+  keys: readonly string[],
+  depth = 0
+): string | undefined {
+  const record = objectRecord(value)
+  if (!record || depth > 3) return undefined
+
+  for (const key of keys) {
+    const found = stringValue(record[key])
+    if (found) return found
+  }
+
+  for (const nested of Object.values(record)) {
+    const found = findString(nested, keys, depth + 1)
+    if (found) return found
+  }
+
+  return undefined
+}
+
+function summarizeCodexEvent(event: unknown): RunCodexLog | undefined {
+  const record = objectRecord(event)
+  if (!record) return undefined
+
+  const type = stringValue(record.type)?.toLowerCase() ?? ""
+  const status = stringValue(record.status)
+  const command = findString(record, ["command", "cmd", "shell_command"])
+  const text = findString(record, [
+    "summary",
+    "message",
+    "text",
+    "content",
+    "delta",
+  ])
+
+  if (type.includes("reason")) {
+    return {
+      kind: "reasoning",
+      message: text ? compactLine(readableCodexText(text)) : "Reasoning",
+    }
+  }
+
+  if (
+    command &&
+    (type.includes("command") ||
+      type.includes("exec") ||
+      type.includes("tool") ||
+      type.includes("function"))
+  ) {
+    return {
+      kind: "command",
+      message: compactLine(command),
+      detail: status,
+    }
+  }
+
+  if (type.includes("turn") && (type.includes("start") || status)) {
+    return {
+      kind: "setup",
+      message: status ? `Codex turn ${status}` : "Codex turn started",
+    }
+  }
+
+  if (type.includes("error")) {
+    return {
+      kind: "stderr",
+      message: text
+        ? compactLine(readableCodexText(text))
+        : "Codex reported an error",
+    }
+  }
+
+  return undefined
+}
+
+function createStdoutLogger(onLog: RunCodexInSandboxInput["onLog"]) {
+  let buffer = ""
+
+  function emitPlainLine(line: string) {
+    const trimmed = compactLine(line)
+    if (!trimmed || trimmed.startsWith(EXIT_MARKER)) return
+    void onLog?.({ kind: "stdout", message: trimmed })
+  }
+
+  function flushLine(line: string) {
+    const trimmed = line.trim()
+    if (!trimmed) return
+
+    try {
+      const event = JSON.parse(trimmed) as unknown
+      const summary = summarizeCodexEvent(event)
+      if (summary) void onLog?.(summary)
+    } catch {
+      emitPlainLine(trimmed)
+    }
+  }
+
+  return {
+    chunk(data: string) {
+      buffer += data
+      const lines = buffer.split(/\r?\n/)
+      buffer = lines.pop() ?? ""
+      for (const line of lines) flushLine(line)
+    },
+    flush() {
+      if (buffer) flushLine(buffer)
+      buffer = ""
+    },
   }
 }
 
@@ -178,15 +445,29 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     parseGitRef(input.branchName, "branchName") ?? defaultBranchName()
   const githubToken = input.githubToken?.trim() || process.env.GITHUB_TOKEN
   const speed = parseSpeed(input.speed)
-  const timeoutMs = input.timeoutMs ?? 10 * 60 * 1000
-  const sandbox = input.sandboxId
-    ? await Sandbox.connect(input.sandboxId)
-    : await Sandbox.create("codex", {
-        timeoutMs: Math.max(timeoutMs + 60_000, 120_000),
-      })
-  await sandbox.setTimeout(Math.max(timeoutMs + 60_000, 120_000))
+  const timeoutMs = input.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS
+  await emitLog(input, {
+    kind: "setup",
+    message: input.sandboxId ? "Connecting to sandbox" : "Creating sandbox",
+  })
+  const { recoveredSandbox, sandbox } = await connectOrCreateSandbox(
+    input.sandboxId,
+    timeoutMs
+  )
+  await emitLog(input, {
+    kind: "setup",
+    message: recoveredSandbox
+      ? "Recovered with a fresh sandbox"
+      : "Sandbox ready",
+    detail: sandbox.sandboxId,
+  })
+  await sandbox.setTimeout(
+    Math.max(timeoutMs + 60_000, DEFAULT_SANDBOX_LIFETIME_MS)
+  )
 
   try {
+    await updateCodexCli(sandbox, input)
+    await emitLog(input, { kind: "setup", message: "Preparing Codex auth" })
     await sandbox.commands.run(
       `mkdir -p ${CODEX_HOME} && chmod 700 ${CODEX_HOME}`
     )
@@ -196,7 +477,12 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       `chmod 600 ${CODEX_HOME}/auth.json ${PROMPT_PATH}`
     )
 
-    if (!input.sandboxId) {
+    if (!input.sandboxId || recoveredSandbox) {
+      await emitLog(input, {
+        kind: "command",
+        message: `git clone ${repoUrl}`,
+        detail: baseBranch ? `branch ${baseBranch}` : undefined,
+      })
       await sandbox.git.clone(repoUrl, {
         branch: baseBranch,
         depth: 1,
@@ -204,37 +490,86 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         path: REPO_PATH,
         username: githubToken ? "x-access-token" : undefined,
       })
+      await emitLog(input, {
+        kind: "command",
+        message: `git checkout -b ${branchName}`,
+      })
       await sandbox.git.createBranch(REPO_PATH, branchName)
+      if (input.previousDiff?.trim()) {
+        await emitLog(input, {
+          kind: "command",
+          message: "git apply previous changes",
+        })
+        await sandbox.files.write(PREVIOUS_DIFF_PATH, input.previousDiff)
+        await sandbox.commands.run(
+          `git -C ${REPO_PATH} apply --whitespace=nowarn ${PREVIOUS_DIFF_PATH}`,
+          {
+            timeoutMs: 60_000,
+          }
+        )
+      }
     } else {
+      await emitLog(input, {
+        kind: "command",
+        message: `test -d ${REPO_PATH}/.git`,
+      })
       await sandbox.commands.run(`test -d ${REPO_PATH}/.git`, {
         timeoutMs: 10_000,
       })
     }
 
-    const modelFlag = model ? ` --model ${shellQuote(model)}` : ""
+    await emitLog(input, {
+      kind: "setup",
+      message: "Reading Codex CLI capabilities",
+    })
+    const help = await getCodexExecHelp(sandbox)
+    const modelFlag =
+      model && (helpIncludes(help, "--model") || helpIncludes(help, "-m,"))
+        ? `--model ${shellQuote(model)}`
+        : ""
     const configFlags = [
-      reasoningEffort
+      reasoningEffort && helpIncludes(help, "--config")
         ? `-c ${shellQuote(`model_reasoning_effort="${reasoningEffort}"`)}`
         : "",
-      speed === "fast" ? `-c ${shellQuote('service_tier="fast"')}` : "",
+      speed === "fast" && helpIncludes(help, "--config")
+        ? `-c ${shellQuote('service_tier="fast"')}`
+        : "",
     ]
       .filter(Boolean)
       .join(" ")
+    const optionalFlags = [
+      helpIncludes(help, "--full-auto") ? "--full-auto" : "",
+      helpIncludes(help, "--skip-git-repo-check")
+        ? "--skip-git-repo-check"
+        : "",
+      helpIncludes(help, "--ignore-user-config") ? "--ignore-user-config" : "",
+      helpIncludes(help, "--ignore-rules") ? "--ignore-rules" : "",
+      helpIncludes(help, "--ephemeral") ? "--ephemeral" : "",
+      helpIncludes(help, "--json") ? "--json" : "",
+    ]
+      .filter(Boolean)
+      .join(" ")
+    const outputFlag = helpIncludes(help, "--output-last-message")
+      ? `--output-last-message ${LAST_MESSAGE_PATH}`
+      : ""
+    const cdFlag =
+      helpIncludes(help, "--cd") || helpIncludes(help, "-C,")
+        ? `-C ${REPO_PATH}`
+        : ""
+    const cdCommand = cdFlag ? "" : `cd ${REPO_PATH} &&`
     const codexCommand = [
+      cdCommand,
       `CODEX_HOME=${CODEX_HOME}`,
-      "codex exec",
-      "--full-auto",
-      "--skip-git-repo-check",
-      "--ignore-user-config",
-      "--ignore-rules",
-      "--ephemeral",
-      "--json",
+      `${CODEX_LAUNCHER_PATH} exec`,
+      optionalFlags,
       configFlags,
       modelFlag,
-      `--output-last-message ${LAST_MESSAGE_PATH}`,
-      `-C ${REPO_PATH}`,
-      `- < ${PROMPT_PATH}`,
-    ].join(" ")
+      outputFlag,
+      cdFlag,
+      `< ${PROMPT_PATH}`,
+    ]
+      .filter(Boolean)
+      .join(" ")
     const command = shellQuote(
       [
         "set +e",
@@ -245,46 +580,75 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       ].join("\n")
     )
 
+    await emitLog(input, {
+      kind: "command",
+      message: compactLine(codexCommand),
+    })
+    const stdoutLogger = createStdoutLogger(input.onLog)
     const result = redactAuthPathOutput(
       await sandbox.commands.run(`bash -lc ${command}`, {
         envs: {
           CODEX_HOME,
           HOME: "/home/user",
         },
+        onStderr: (data) => {
+          const trimmed = compactLine(data)
+          if (trimmed) {
+            void input.onLog?.({ kind: "stderr", message: trimmed })
+          }
+        },
+        onStdout: (data) => stdoutLogger.chunk(data),
         timeoutMs,
       })
     )
+    stdoutLogger.flush()
+
+    await emitLog(input, { kind: "command", message: "git diff --binary HEAD" })
+    const diff = (
+      await sandbox.commands.run(
+        `git -C ${REPO_PATH} add -N . >/dev/null 2>&1 || true; git -C ${REPO_PATH} diff --binary HEAD`,
+        {
+          timeoutMs: 60_000,
+        }
+      )
+    ).stdout
+    await emitLog(input, {
+      kind: "command",
+      message: "git status --short --branch",
+    })
+    const status = (
+      await sandbox.commands.run(
+        `git -C ${REPO_PATH} status --short --branch`,
+        {
+          timeoutMs: 60_000,
+        }
+      )
+    ).stdout
+    await emitLog(input, {
+      kind: "result",
+      message:
+        result.exitCode === 0
+          ? "Codex run completed"
+          : `Codex exited with code ${result.exitCode}`,
+    })
 
     return {
       branchName,
-      diff: (
-        await sandbox.commands.run(
-          `git -C ${REPO_PATH} add -N . >/dev/null 2>&1 || true; git -C ${REPO_PATH} diff --binary HEAD`,
-          {
-            timeoutMs: 60_000,
-          }
-        )
-      ).stdout,
+      diff,
       exitCode: result.exitCode,
       lastMessage: await readLastMessage(sandbox),
       repoUrl,
       sandboxId: sandbox.sandboxId,
       stderr: result.stderr,
-      status: (
-        await sandbox.commands.run(
-          `git -C ${REPO_PATH} status --short --branch`,
-          {
-            timeoutMs: 60_000,
-          }
-        )
-      ).stdout,
+      status,
       stdout: result.stdout,
       updatedAuthJson: await sandbox.files.read(`${CODEX_HOME}/auth.json`),
+      recoveredSandbox,
     } satisfies RunCodexInSandboxResult
   } finally {
     await sandbox.commands
       .run(
-        `rm -f ${CODEX_HOME}/auth.json ${PROMPT_PATH} ${LAST_MESSAGE_PATH}`,
+        `rm -f ${CODEX_HOME}/auth.json ${PROMPT_PATH} ${PREVIOUS_DIFF_PATH} ${LAST_MESSAGE_PATH} ${CODEX_LAUNCHER_PATH}`,
         {
           timeoutMs: 10_000,
         }

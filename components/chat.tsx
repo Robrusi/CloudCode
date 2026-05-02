@@ -1,8 +1,11 @@
 "use client"
 
+import { Show, SignInButton, UserButton } from "@clerk/nextjs"
+import { useMutation, useQuery } from "convex/react"
 import {
   AlertCircle,
   ArrowUp,
+  Brain,
   Check,
   CheckCircle2,
   Folder,
@@ -10,8 +13,10 @@ import {
   LogIn,
   Loader2,
   Plus,
+  ScrollText,
   SquarePen,
   Square,
+  Terminal,
 } from "lucide-react"
 import {
   type ChangeEvent,
@@ -23,18 +28,63 @@ import {
   useState,
 } from "react"
 
+import { api } from "@/convex/_generated/api"
+import type { Id } from "@/convex/_generated/dataModel"
+import { useStoreUserEffect } from "@/hooks/use-store-user-effect"
 import { cn } from "@/lib/utils"
 
 type Role = "user" | "assistant"
 
 type Message = {
-  id: string
+  id: Id<"messages">
   role: Role
   content: string
   pending?: boolean
   error?: boolean
   meta?: { branch?: string; status?: string; diff?: string }
 }
+
+type RunLogKind =
+  | "setup"
+  | "command"
+  | "reasoning"
+  | "stdout"
+  | "stderr"
+  | "result"
+
+type RunLog = {
+  detail?: string
+  id: string
+  kind: RunLogKind
+  message: string
+  time: number
+}
+
+type CodexRunResult = {
+  branchName?: unknown
+  diff?: unknown
+  error?: unknown
+  lastMessage?: unknown
+  sandboxId?: unknown
+  status?: unknown
+  stderr?: unknown
+  stdout?: unknown
+}
+
+type CodexRunStreamEvent =
+  | {
+      log?: Omit<RunLog, "id" | "time">
+      time?: number
+      type: "progress"
+    }
+  | {
+      result?: CodexRunResult
+      type: "done"
+    }
+  | {
+      error?: string
+      type: "error"
+    }
 
 type AuthStatus = {
   accountId?: string | null
@@ -45,7 +95,7 @@ type AuthStatus = {
 }
 
 type ChatRecord = {
-  id: string
+  id: Id<"threads">
   repoUrl: string
   sandboxId?: string
   title: string
@@ -70,7 +120,6 @@ const REPO_KEY = "cloudcode:repoUrl"
 const MODEL_KEY = "cloudcode:model"
 const SPEED_KEY = "cloudcode:speed"
 const THINKING_KEY = "cloudcode:thinking"
-const CHATS_KEY = "cloudcode:chats"
 const ACTIVE_KEY = "cloudcode:activeChatId"
 
 const MODEL_LABEL: Record<Model, string> = {
@@ -103,42 +152,98 @@ function repoLabel(url: string) {
     .replace(/\.git$/, "")
 }
 
-function loadChats(): ChatRecord[] {
+async function readJsonError(res: Response) {
   try {
-    const raw = localStorage.getItem(CHATS_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw) as Array<
-      Omit<ChatRecord, "speed" | "thinking"> & {
-        speed?: unknown
-        thinking?: unknown
-      }
-    >
-    return Array.isArray(parsed)
-      ? parsed.map((chat) => ({
-          ...chat,
-          speed:
-            typeof chat.speed === "string" &&
-            (SPEEDS as readonly string[]).includes(chat.speed)
-              ? (chat.speed as Speed)
-              : "standard",
-          thinking:
-            typeof chat.thinking === "string" &&
-            (THINKINGS as readonly string[]).includes(chat.thinking)
-              ? (chat.thinking as Thinking)
-              : "medium",
-        }))
-      : []
+    const data = (await res.json()) as CodexRunResult
+    return (
+      (typeof data.lastMessage === "string" && data.lastMessage.trim()) ||
+      (typeof data.stderr === "string" && data.stderr.trim()) ||
+      (typeof data.stdout === "string" && data.stdout.trim()) ||
+      (typeof data.error === "string" && data.error.trim()) ||
+      `Request failed (${res.status})`
+    )
   } catch {
-    return []
+    return `Request failed (${res.status})`
   }
 }
 
+async function readCodexRunResponse(
+  res: Response,
+  onLog: (log: Omit<RunLog, "id" | "time">, time?: number) => void
+) {
+  const contentType = res.headers.get("content-type") ?? ""
+
+  if (!res.ok) {
+    throw new Error(await readJsonError(res))
+  }
+
+  if (!contentType.includes("application/x-ndjson") || !res.body) {
+    return (await res.json()) as CodexRunResult
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  let result: CodexRunResult | null = null
+
+  function consume(line: string) {
+    const trimmed = line.trim()
+    if (!trimmed) return
+
+    const event = JSON.parse(trimmed) as CodexRunStreamEvent
+    if (event.type === "progress" && event.log) {
+      onLog(event.log, event.time)
+    } else if (event.type === "done") {
+      result = event.result ?? {}
+    } else if (event.type === "error") {
+      throw new Error(event.error ?? "Codex sandbox run failed.")
+    }
+  }
+
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split(/\r?\n/)
+    buffer = lines.pop() ?? ""
+    for (const line of lines) consume(line)
+  }
+
+  buffer += decoder.decode()
+  if (buffer) consume(buffer)
+  if (!result) throw new Error("Codex run ended without a result.")
+
+  return result
+}
+
 export function Chat() {
-  const [chats, setChats] = useState<ChatRecord[]>(() =>
-    typeof window === "undefined" ? [] : loadChats()
+  return (
+    <>
+      <Show when="signed-out">
+        <SignedOutScreen />
+      </Show>
+      <Show when="signed-in">
+        <ChatInner />
+      </Show>
+    </>
   )
-  const [activeId, setActiveId] = useState<string | null>(() =>
-    typeof window === "undefined" ? null : localStorage.getItem(ACTIVE_KEY)
+}
+
+function ChatInner() {
+  const { isLoading: userLoading } = useStoreUserEffect()
+  const rawChats = useQuery(api.chats.list)
+  const chats = useMemo(() => (rawChats ?? []) as ChatRecord[], [rawChats])
+  const createThread = useMutation(api.chats.createThread)
+  const appendRunMessages = useMutation(api.chats.appendRunMessages)
+  const completeAssistantMessage = useMutation(
+    api.chats.completeAssistantMessage
+  )
+  const deleteThreadMutation = useMutation(api.chats.deleteThread)
+  const updateThread = useMutation(api.chats.updateThread)
+  const [activeId, setActiveId] = useState<Id<"threads"> | null>(() =>
+    typeof window === "undefined"
+      ? null
+      : (localStorage.getItem(ACTIVE_KEY) as Id<"threads"> | null)
   )
   const [input, setInput] = useState("")
   const [draftRepo, setDraftRepo] = useState(() =>
@@ -170,6 +275,7 @@ export function Chat() {
   const [speedOpen, setSpeedOpen] = useState(false)
   const [thinkingOpen, setThinkingOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [runLogs, setRunLogs] = useState<Record<string, RunLog[]>>({})
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
   const [authError, setAuthError] = useState("")
   const abortRef = useRef<AbortController | null>(null)
@@ -189,6 +295,8 @@ export function Chat() {
   const empty = messages.length === 0
 
   useEffect(() => {
+    if (userLoading) return
+
     async function refreshAuth() {
       try {
         const res = await fetch("/api/codex-auth", { cache: "no-store" })
@@ -211,11 +319,7 @@ export function Chat() {
     void refreshAuth()
     window.addEventListener("focus", refreshAuth)
     return () => window.removeEventListener("focus", refreshAuth)
-  }, [])
-
-  useEffect(() => {
-    localStorage.setItem(CHATS_KEY, JSON.stringify(chats))
-  }, [chats])
+  }, [userLoading])
 
   useEffect(() => {
     if (activeId) localStorage.setItem(ACTIVE_KEY, activeId)
@@ -233,11 +337,36 @@ export function Chat() {
     const el = threadRef.current
     if (!el) return
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
-  }, [messages.length, activeId])
+  }, [messages.length, activeId, runLogs])
+
+  function appendRunLog(
+    messageId: Id<"messages">,
+    log: Omit<RunLog, "id" | "time">,
+    time?: number
+  ) {
+    setRunLogs((current) => {
+      const key = messageId as string
+      const nextLog = {
+        ...log,
+        id: `${time ?? Date.now()}-${Math.random().toString(36).slice(2)}`,
+        time: time ?? Date.now(),
+      }
+      const logs = [...(current[key] ?? []), nextLog].slice(-80)
+      return { ...current, [key]: logs }
+    })
+  }
+
+  function clearRunLogs(messageId: Id<"messages">) {
+    setRunLogs((current) => {
+      const next = { ...current }
+      delete next[messageId as string]
+      return next
+    })
+  }
 
   function persistRepo(value: string) {
     if (active) {
-      updateActive((c) => ({ ...c, repoUrl: value }))
+      void updateThread({ repoUrl: value, threadId: active.id })
     } else {
       setDraftRepo(value)
     }
@@ -247,7 +376,7 @@ export function Chat() {
 
   function persistModel(next: Model) {
     if (active) {
-      updateActive((c) => ({ ...c, model: next }))
+      void updateThread({ model: next, threadId: active.id })
     } else {
       setDraftModel(next)
     }
@@ -256,7 +385,7 @@ export function Chat() {
 
   function persistSpeed(next: Speed) {
     if (active) {
-      updateActive((c) => ({ ...c, speed: next }))
+      void updateThread({ speed: next, threadId: active.id })
     } else {
       setDraftSpeed(next)
     }
@@ -265,15 +394,11 @@ export function Chat() {
 
   function persistThinking(next: Thinking) {
     if (active) {
-      updateActive((c) => ({ ...c, thinking: next }))
+      void updateThread({ thinking: next, threadId: active.id })
     } else {
       setDraftThinking(next)
     }
     localStorage.setItem(THINKING_KEY, next)
-  }
-
-  function updateActive(fn: (c: ChatRecord) => ChatRecord) {
-    setChats((prev) => prev.map((c) => (c.id === activeId ? fn(c) : c)))
   }
 
   function startNewChat() {
@@ -282,19 +407,20 @@ export function Chat() {
     setEditingRepo(false)
   }
 
-  function selectChat(id: string) {
+  function selectChat(id: Id<"threads">) {
     setActiveId(id)
     setInput("")
     setEditingRepo(false)
   }
 
-  function deleteChat(id: string) {
-    setChats((prev) => prev.filter((c) => c.id !== id))
+  function deleteChat(id: Id<"threads">) {
+    void deleteThreadMutation({ threadId: id })
     if (activeId === id) setActiveId(null)
   }
 
   async function send(prompt: string) {
-    if (!prompt.trim() || busy) return
+    const trimmed = prompt.trim()
+    if (!trimmed || busy || userLoading) return
     if (!repoUrl.trim()) {
       setEditingRepo(true)
       return
@@ -304,51 +430,8 @@ export function Chat() {
       return
     }
 
-    const userMsg: Message = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: prompt.trim(),
-    }
-    const assistantId = crypto.randomUUID()
-    const pending: Message = {
-      id: assistantId,
-      role: "assistant",
-      content: "",
-      pending: true,
-    }
-
     let chatId = activeId
-    if (!chatId) {
-      const id = crypto.randomUUID()
-      const now = Date.now()
-      const newChat: ChatRecord = {
-        id,
-        repoUrl: repoUrl.trim(),
-        sandboxId: undefined,
-        title: prompt.trim().split("\n")[0].slice(0, 60),
-        messages: [userMsg, pending],
-        model: draftModel,
-        speed: draftSpeed,
-        thinking: draftThinking,
-        createdAt: now,
-        updatedAt: now,
-      }
-      setChats((prev) => [newChat, ...prev])
-      setActiveId(id)
-      chatId = id
-    } else {
-      setChats((prev) =>
-        prev.map((c) =>
-          c.id === chatId
-            ? {
-                ...c,
-                messages: [...c.messages, userMsg, pending],
-                updatedAt: Date.now(),
-              }
-            : c
-        )
-      )
-    }
+    let assistantMessageId: Id<"messages"> | null = null
 
     setInput("")
     setBusy(true)
@@ -357,15 +440,41 @@ export function Chat() {
     abortRef.current = controller
 
     try {
+      if (!chatId) {
+        const created = await createThread({
+          model: draftModel,
+          prompt: trimmed,
+          repoUrl: repoUrl.trim(),
+          speed: draftSpeed,
+          thinking: draftThinking,
+          title: trimmed.split("\n")[0].slice(0, 60),
+        })
+        chatId = created.threadId
+        assistantMessageId = created.assistantMessageId
+        setActiveId(chatId)
+      } else {
+        const appended = await appendRunMessages({
+          prompt: trimmed,
+          threadId: chatId,
+        })
+        assistantMessageId = appended.assistantMessageId
+      }
+
+      if (!chatId || !assistantMessageId) {
+        throw new Error("Unable to create a thread for this run.")
+      }
+
+      const previousAssistant = active?.messages
+        .toReversed()
+        .find((m) => m.role === "assistant" && m.meta?.branch)
+
       const res = await fetch("/api/codex-run", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          branchName: active?.messages
-            .toReversed()
-            .find((m) => m.role === "assistant" && m.meta?.branch)?.meta
-            ?.branch,
-          prompt: prompt.trim(),
+          branchName: previousAssistant?.meta?.branch,
+          previousDiff: previousAssistant?.meta?.diff,
+          prompt: trimmed,
           reasoningEffort: thinking,
           repoUrl: repoUrl.trim(),
           sandboxId: active?.sandboxId,
@@ -374,42 +483,29 @@ export function Chat() {
         }),
         signal: controller.signal,
       })
-      const data = await res.json()
-      if (!res.ok) {
-        throw new Error(data?.error ?? `Request failed (${res.status})`)
-      }
+      const runMessageId = assistantMessageId
+      const data = await readCodexRunResponse(res, (log, time) =>
+        appendRunLog(runMessageId, log, time)
+      )
       const content =
         (typeof data.lastMessage === "string" && data.lastMessage.trim()) ||
         (typeof data.stdout === "string" && data.stdout.trim()) ||
+        (typeof data.stderr === "string" && data.stderr.trim()) ||
         "(no output)"
-      setChats((prev) =>
-        prev.map((c) =>
-          c.id === chatId
-            ? {
-                ...c,
-                sandboxId:
-                  typeof data.sandboxId === "string"
-                    ? data.sandboxId
-                    : c.sandboxId,
-                updatedAt: Date.now(),
-                messages: c.messages.map((m) =>
-                  m.id === assistantId
-                    ? {
-                        ...m,
-                        pending: false,
-                        content,
-                        meta: {
-                          branch: data.branchName,
-                          status: data.status,
-                          diff: data.diff,
-                        },
-                      }
-                    : m
-                ),
-              }
-            : c
-        )
-      )
+      await completeAssistantMessage({
+        content,
+        messageId: assistantMessageId,
+        meta: {
+          branch:
+            typeof data.branchName === "string" ? data.branchName : undefined,
+          diff: typeof data.diff === "string" ? data.diff : undefined,
+          status: typeof data.status === "string" ? data.status : undefined,
+        },
+        sandboxId:
+          typeof data.sandboxId === "string" ? data.sandboxId : undefined,
+        threadId: chatId,
+      })
+      clearRunLogs(runMessageId)
     } catch (err) {
       const aborted = err instanceof DOMException && err.name === "AbortError"
       const msg = aborted
@@ -417,20 +513,17 @@ export function Chat() {
         : err instanceof Error
           ? err.message
           : "Request failed."
-      setChats((prev) =>
-        prev.map((c) =>
-          c.id === chatId
-            ? {
-                ...c,
-                messages: c.messages.map((m) =>
-                  m.id === assistantId
-                    ? { ...m, pending: false, error: !aborted, content: msg }
-                    : m
-                ),
-              }
-            : c
-        )
-      )
+      if (chatId && assistantMessageId) {
+        await completeAssistantMessage({
+          content: msg,
+          error: !aborted,
+          messageId: assistantMessageId,
+          threadId: chatId,
+        })
+      }
+      if (assistantMessageId) {
+        clearRunLogs(assistantMessageId)
+      }
     } finally {
       setBusy(false)
       abortRef.current = null
@@ -476,7 +569,11 @@ export function Chat() {
             ) : (
               <div className="space-y-8">
                 {messages.map((m) => (
-                  <MessageBlock key={m.id} message={m} />
+                  <MessageBlock
+                    key={m.id}
+                    message={m}
+                    logs={runLogs[m.id as string] ?? []}
+                  />
                 ))}
               </div>
             )}
@@ -577,6 +674,26 @@ export function Chat() {
   )
 }
 
+function SignedOutScreen() {
+  return (
+    <div className="flex h-svh items-center justify-center bg-background px-6 text-foreground">
+      <div className="w-full max-w-sm text-center">
+        <h1 className="text-3xl font-medium tracking-tight text-foreground/90">
+          Cloudcode
+        </h1>
+        <p className="mt-3 text-sm leading-6 text-muted-foreground">
+          Sign in to keep threads and Codex auth attached to your profile.
+        </p>
+        <SignInButton mode="modal">
+          <button className="mt-6 inline-flex h-10 items-center justify-center rounded-full bg-foreground px-5 text-sm font-medium text-background transition-opacity hover:opacity-85">
+            Sign in
+          </button>
+        </SignInButton>
+      </div>
+    </div>
+  )
+}
+
 function Sidebar({
   authError,
   authStatus,
@@ -589,10 +706,10 @@ function Sidebar({
   authError: string
   authStatus: AuthStatus | null
   chats: ChatRecord[]
-  activeId: string | null
+  activeId: Id<"threads"> | null
   onNewChat: () => void
-  onSelect: (id: string) => void
-  onDelete: (id: string) => void
+  onSelect: (id: Id<"threads">) => void
+  onDelete: (id: Id<"threads">) => void
 }) {
   const groups = useMemo(() => {
     const map = new Map<string, ChatRecord[]>()
@@ -655,6 +772,10 @@ function Sidebar({
       </div>
 
       <div className="border-t border-border/60 p-3">
+        <div className="mb-2 flex items-center justify-between px-2.5">
+          <span className="text-xs text-muted-foreground">Signed in</span>
+          <UserButton />
+        </div>
         <a
           href="/api/codex-auth/login"
           className="flex items-center gap-2 rounded-xl px-2.5 py-2 text-sm text-foreground/80 transition-colors hover:bg-muted"
@@ -912,7 +1033,7 @@ function Pill<T extends string>({
   )
 }
 
-function MessageBlock({ message }: { message: Message }) {
+function MessageBlock({ logs, message }: { logs: RunLog[]; message: Message }) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
@@ -926,10 +1047,7 @@ function MessageBlock({ message }: { message: Message }) {
   return (
     <div className="space-y-3">
       {message.pending ? (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="size-3.5 animate-spin" />
-          <span className="animate-pulse">working in sandbox…</span>
-        </div>
+        <PendingRunLogs logs={logs} />
       ) : (
         <Markdown
           text={message.content}
@@ -944,6 +1062,56 @@ function MessageBlock({ message }: { message: Message }) {
           ↳ {message.meta.branch}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+function PendingRunLogs({ logs }: { logs: RunLog[] }) {
+  const visible = logs.slice(-8)
+  const current = logs.at(-1)
+
+  return (
+    <div className="space-y-2 text-sm text-muted-foreground">
+      <div className="flex items-center gap-2">
+        <Loader2 className="size-3.5 animate-spin" />
+        <span className="truncate">
+          {current?.message ?? "Starting Codex run"}
+        </span>
+      </div>
+
+      {visible.length > 0 ? (
+        <div className="space-y-1 border-l border-border/70 pl-3">
+          {visible.map((log) => (
+            <RunLogRow key={log.id} log={log} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function RunLogRow({ log }: { log: RunLog }) {
+  const Icon =
+    log.kind === "reasoning"
+      ? Brain
+      : log.kind === "command"
+        ? Terminal
+        : ScrollText
+
+  return (
+    <div
+      className={cn(
+        "flex min-w-0 items-start gap-2 font-mono text-[11px] leading-5",
+        log.kind === "stderr" && "text-destructive"
+      )}
+    >
+      <Icon className="mt-1 size-3 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <div className="break-words">{log.message}</div>
+        {log.detail ? (
+          <div className="truncate text-muted-foreground/70">{log.detail}</div>
+        ) : null}
+      </div>
     </div>
   )
 }
