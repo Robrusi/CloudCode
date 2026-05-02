@@ -54,6 +54,7 @@ export async function POST(request: Request) {
       profile?: unknown
       prompt?: unknown
       reasoningEffort?: unknown
+      resumeContext?: unknown
       repoUrl?: unknown
       sandboxId?: unknown
       speed?: unknown
@@ -115,6 +116,10 @@ export async function POST(request: Request) {
                   : undefined,
               prompt,
               reasoningEffort: parseReasoningEffort(body.reasoningEffort),
+              resumeContext:
+                typeof body.resumeContext === "string"
+                  ? body.resumeContext
+                  : undefined,
               repoUrl,
               sandboxId:
                 typeof body.sandboxId === "string" ? body.sandboxId : undefined,

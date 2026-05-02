@@ -1,4 +1,5 @@
 import { Geist, Geist_Mono } from "next/font/google"
+import { GeistPixelSquare } from "geist/font/pixel"
 import { ClerkProvider } from "@clerk/nextjs"
 
 import "./globals.css"
@@ -25,6 +26,7 @@ export default function RootLayout({
       className={cn(
         "antialiased",
         fontMono.variable,
+        GeistPixelSquare.variable,
         "font-sans",
         geist.variable
       )}

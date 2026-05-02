@@ -14,6 +14,7 @@ import {
   Brain,
   Check,
   CheckCircle2,
+  ChevronRight,
   Folder,
   GitBranch,
   LogIn,
@@ -35,6 +36,8 @@ import {
   useRef,
   useState,
 } from "react"
+
+import { GeistPixelSquare } from "geist/font/pixel"
 
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -135,6 +138,35 @@ type Thinking = (typeof THINKINGS)[number]
 
 const REPO_KEY = "cloudcode:repoUrl"
 const MODEL_KEY = "cloudcode:model"
+const RESUME_CONTEXT_MESSAGE_LIMIT = 8
+const RESUME_CONTEXT_CONTENT_LIMIT = 2_000
+
+function truncateResumeContext(content: string) {
+  const trimmed = content.trim()
+
+  if (trimmed.length <= RESUME_CONTEXT_CONTENT_LIMIT) {
+    return trimmed
+  }
+
+  return `${trimmed.slice(0, RESUME_CONTEXT_CONTENT_LIMIT)}\n[truncated]`
+}
+
+function buildResumeContext(messages: Message[]) {
+  const contextMessages = messages
+    .filter((message) => !message.pending && message.content.trim())
+    .slice(-RESUME_CONTEXT_MESSAGE_LIMIT)
+
+  if (contextMessages.length === 0) {
+    return undefined
+  }
+
+  return contextMessages
+    .map(
+      (message) =>
+        `${message.role === "user" ? "User" : "Assistant"}:\n${truncateResumeContext(message.content)}`
+    )
+    .join("\n\n---\n\n")
+}
 const SPEED_KEY = "cloudcode:speed"
 const THINKING_KEY = "cloudcode:thinking"
 const ACTIVE_KEY = "cloudcode:activeChatId"
@@ -497,6 +529,7 @@ function ChatInner() {
           prompt: trimmed,
           reasoningEffort: thinking,
           repoUrl: repoUrl.trim(),
+          resumeContext: buildResumeContext(active?.messages ?? []),
           sandboxId: cachedRunState?.sandboxId ?? active?.sandboxId,
           speed,
           model,
@@ -531,6 +564,7 @@ function ChatInner() {
         ...nextRunState,
       }
       await completeAssistantMessage({
+        codexThreadId: nextRunState.codexThreadId,
         content,
         messageId: assistantMessageId,
         meta: {
@@ -758,7 +792,7 @@ function TopBar({
             /
           </span>
           <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-            <Folder className="size-3.5 shrink-0" />
+            <Folder className="size-4 shrink-0" />
             <span className="truncate">{repo}</span>
           </div>
         </>
@@ -803,13 +837,18 @@ function Sidebar({
 
   return (
     <aside className="flex h-full w-64 shrink-0 flex-col border-r border-border/60 bg-sidebar text-sidebar-foreground">
-      <div className="px-3 pt-4">
+      <div className="px-[1.125rem] pt-6 pb-5">
+        <span className={cn(GeistPixelSquare.className, "text-4xl tracking-tight text-foreground")}>
+          CloudCode
+        </span>
+      </div>
+      <div className="px-2 pt-2">
         <button
           type="button"
           onClick={onNewChat}
-          className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-sm text-foreground/80 transition-colors hover:bg-muted"
+          className="flex w-full items-center gap-2 rounded-xl px-[0.625rem] py-2 text-sm text-foreground/80 transition-colors hover:bg-muted"
         >
-          <SquarePen className="size-4" />
+          <SquarePen className="size-3.5 shrink-0" />
           <span>New chat</span>
         </button>
       </div>
@@ -820,25 +859,16 @@ function Sidebar({
             No chats yet
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-1">
             {groups.map((g) => (
-              <div key={g.repo || "untitled"}>
-                <div className="flex items-center gap-2 px-2.5 py-1.5 text-xs text-muted-foreground">
-                  <Folder className="size-3.5 shrink-0" />
-                  <span className="truncate">{repoLabel(g.repo)}</span>
-                </div>
-                <div>
-                  {g.items.map((c) => (
-                    <SidebarItem
-                      key={c.id}
-                      chat={c}
-                      active={c.id === activeId}
-                      onSelect={() => onSelect(c.id)}
-                      onDelete={() => onDelete(c.id)}
-                    />
-                  ))}
-                </div>
-              </div>
+              <FolderGroup
+                key={g.repo || "untitled"}
+                label={repoLabel(g.repo)}
+                items={g.items}
+                activeId={activeId}
+                onSelect={onSelect}
+                onDelete={onDelete}
+              />
             ))}
           </div>
         )}
@@ -871,6 +901,54 @@ function Sidebar({
         ) : null}
       </div>
     </aside>
+  )
+}
+
+function FolderGroup({
+  label,
+  items,
+  activeId,
+  onSelect,
+  onDelete,
+}: {
+  label: string
+  items: ChatRecord[]
+  activeId: Id<"threads"> | null
+  onSelect: (id: Id<"threads">) => void
+  onDelete: (id: Id<"threads">) => void
+}) {
+  const [open, setOpen] = useState(true)
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <Folder className="size-3.5 shrink-0" />
+        <span className="truncate flex-1 text-left">{label}</span>
+        <ChevronRight
+          className={cn(
+            "size-3.5 shrink-0 transition-transform",
+            open && "rotate-90"
+          )}
+        />
+      </button>
+      {open && (
+        <div>
+          {items.map((c) => (
+            <SidebarItem
+              key={c.id}
+              chat={c}
+              active={c.id === activeId}
+              onSelect={() => onSelect(c.id)}
+              onDelete={() => onDelete(c.id)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 

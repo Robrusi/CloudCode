@@ -52,6 +52,7 @@ export type RunCodexInSandboxInput = {
   previousDiff?: string
   prompt: string
   reasoningEffort?: ReasoningEffort
+  resumeContext?: string
   repoUrl: string
   sandboxId?: string
   speed?: CodexSpeed
@@ -479,6 +480,15 @@ function redactAuthPathOutput(result: CommandResult) {
   }
 }
 
+function restoredConversationPrompt(context: string, prompt: string) {
+  return [
+    "The previous sandbox state was restored into this fresh sandbox by applying the saved git diff. Continue the same task using this prior Cloudcode conversation context.",
+    context.trim(),
+    "Current user request:",
+    prompt,
+  ].join("\n\n")
+}
+
 export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
   const model = parseModel(input.model)
   const reasoningEffort = parseReasoningEffort(input.reasoningEffort)
@@ -513,6 +523,15 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
   )
 
   try {
+    const codexThreadIdToResume =
+      input.sandboxId && !recoveredSandbox ? existingCodexThreadId : undefined
+    const shouldRestoreConversation = Boolean(
+      existingCodexThreadId && !codexThreadIdToResume
+    )
+    const prompt =
+      shouldRestoreConversation && input.resumeContext?.trim()
+        ? restoredConversationPrompt(input.resumeContext, input.prompt)
+        : input.prompt
     const needsCodexSetup =
       !input.sandboxId ||
       recoveredSandbox ||
@@ -526,7 +545,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       `mkdir -p ${CODEX_HOME} && chmod 700 ${CODEX_HOME}`
     )
     await sandbox.files.write(`${CODEX_HOME}/auth.json`, input.authJson)
-    await sandbox.files.write(PROMPT_PATH, input.prompt)
+    await sandbox.files.write(PROMPT_PATH, prompt)
     await sandbox.commands.run(
       `chmod 600 ${CODEX_HOME}/auth.json ${PROMPT_PATH}`
     )
@@ -577,7 +596,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       message: "Reading Codex CLI capabilities",
     })
     const help = await getCodexExecHelp(sandbox)
-    const resumeHelp = existingCodexThreadId
+    const resumeHelp = codexThreadIdToResume
       ? await getCodexResumeHelp(sandbox)
       : ""
     const modelFlag =
@@ -622,6 +641,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       .filter(Boolean)
       .join(" ")
     const resumeOptionalFlags = [
+      helpIncludes(resumeHelp, "--full-auto") ? "--full-auto" : "",
       helpIncludes(resumeHelp, "--skip-git-repo-check")
         ? "--skip-git-repo-check"
         : "",
@@ -644,7 +664,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         ? `-C ${REPO_PATH}`
         : ""
     const cdCommand = cdFlag ? "" : `cd ${REPO_PATH} &&`
-    const codexCommand = existingCodexThreadId
+    const codexCommand = codexThreadIdToResume
       ? [
           `cd ${REPO_PATH} &&`,
           `CODEX_HOME=${CODEX_HOME}`,
@@ -653,7 +673,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
           resumeConfigFlags,
           resumeModelFlag,
           resumeOutputFlag,
-          shellQuote(existingCodexThreadId),
+          shellQuote(codexThreadIdToResume),
           "-",
           `< ${PROMPT_PATH}`,
         ]
@@ -686,7 +706,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       kind: "command",
       message: compactLine(codexCommand),
     })
-    let codexThreadId = existingCodexThreadId
+    let codexThreadId = codexThreadIdToResume
     const stdoutLogger = createStdoutLogger(input.onLog, (threadId) => {
       codexThreadId = threadId
     })
