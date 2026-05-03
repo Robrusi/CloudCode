@@ -7,10 +7,10 @@ import {
   type FileOptions,
   type ThemeTypes,
 } from "@pierre/diffs/react"
-import type {
-  FileDiffMetadata,
-  FileDiffOptions,
-  LineAnnotation,
+import {
+  parseDiffFromFile,
+  type FileDiffMetadata,
+  type FileDiffOptions,
 } from "@pierre/diffs"
 import { Loader2, X } from "lucide-react"
 import { useTheme } from "next-themes"
@@ -33,13 +33,6 @@ type ReadResponse = {
   modifiedTime: string | null
   error?: string
   tooLarge?: boolean
-}
-
-type FileChangeAnnotation = {
-  additions: number
-  deletions: number
-  addedLines: string[]
-  removedLines: string[]
 }
 
 const PIERRE_CODE_THEMES = {
@@ -79,46 +72,51 @@ function basename(path: string): string {
   return path.split("/").pop() ?? path
 }
 
-function buildFileChangeAnnotations(
-  fileDiff?: FileDiffMetadata
-): LineAnnotation<FileChangeAnnotation>[] {
-  if (!fileDiff) return []
-  const annotations: LineAnnotation<FileChangeAnnotation>[] = []
+/**
+ * Reverse-apply the parsed patch to the *current* file contents to recover
+ * the file as it looked before the changes. This lets us hand both old/new
+ * full-file blobs to `parseDiffFromFile`, producing a non-partial
+ * `FileDiffMetadata` that `<FileDiff>` can render with `expandUnchanged: true`
+ * — i.e. the same diff styling as the Diffs view, but with every unchanged
+ * line still visible around the hunks.
+ *
+ * NOTE on line splitting: `@pierre/diffs` splits with the lookbehind
+ * `/(?<=\n)/`, which keeps the trailing newline attached to each entry of
+ * `additionLines` / `deletionLines`. We mirror that so the lines we splice in
+ * are byte-for-byte compatible (then join with `""`, not `"\n"`). Splitting
+ * with `"\n"` and joining with `"\n"` here produces doubled newlines around
+ * every replaced line and corrupts the reconstructed file.
+ */
+const SPLIT_KEEP_NEWLINES = /(?<=\n)/
 
-  for (const hunk of fileDiff.hunks) {
-    let additionLine = hunk.additionStart
+function reconstructOldContent(
+  newContent: string,
+  fileDiff: FileDiffMetadata
+): string {
+  const oldLines = newContent.split(SPLIT_KEEP_NEWLINES)
+
+  // Walk hunks back-to-front so earlier indices stay valid as we splice.
+  for (let i = fileDiff.hunks.length - 1; i >= 0; i--) {
+    const hunk = fileDiff.hunks[i]
+    const oldHunkLines: string[] = []
+
     for (const block of hunk.hunkContent) {
       if (block.type === "context") {
-        additionLine += block.lines
-        continue
+        for (let j = 0; j < block.lines; j++) {
+          oldHunkLines.push(fileDiff.deletionLines[block.deletionLineIndex + j])
+        }
+      } else {
+        for (let j = 0; j < block.deletions; j++) {
+          oldHunkLines.push(fileDiff.deletionLines[block.deletionLineIndex + j])
+        }
       }
-
-      // Slice the actual line text out of the parsed patch so we can render
-      // the removed/added lines inline at the change site, instead of only
-      // surfacing the +N / -N stat.
-      const removedLines = fileDiff.deletionLines.slice(
-        block.deletionLineIndex,
-        block.deletionLineIndex + block.deletions
-      )
-      const addedLines = fileDiff.additionLines.slice(
-        block.additionLineIndex,
-        block.additionLineIndex + block.additions
-      )
-
-      annotations.push({
-        lineNumber: Math.max(1, additionLine),
-        metadata: {
-          additions: block.additions,
-          deletions: block.deletions,
-          addedLines,
-          removedLines,
-        },
-      })
-      additionLine += block.additions
     }
+
+    const start = Math.max(0, hunk.additionStart - 1)
+    oldLines.splice(start, hunk.additionCount, ...oldHunkLines)
   }
 
-  return annotations
+  return oldLines.join("")
 }
 
 const MIN_PANEL_WIDTH = 280
@@ -327,7 +325,7 @@ function FileViewer({
     }
   }, [content, language, path])
 
-  const options = useMemo<FileOptions<FileChangeAnnotation>>(
+  const options = useMemo<FileOptions<undefined>>(
     () => ({
       disableFileHeader: true,
       disableLineNumbers: false,
@@ -336,11 +334,6 @@ function FileViewer({
       themeType,
     }),
     [themeType]
-  )
-
-  const changeAnnotations = useMemo(
-    () => (mode === "file" ? buildFileChangeAnnotations(fileDiff) : []),
-    [fileDiff, mode]
   )
 
   const diffOptions = useMemo<FileDiffOptions<undefined>>(
@@ -356,6 +349,43 @@ function FileViewer({
       themeType,
     }),
     [themeType]
+  )
+
+  // In file mode, if the file actually changed, build a *non-partial*
+  // FileDiffMetadata so `<FileDiff>` can render the hunks against the full
+  // file (every unchanged line stays visible). Returns null when there's no
+  // current content yet, no patch for this path, or reconstruction fails —
+  // in any of those cases we fall back to the plain `<PierreFile>` viewer.
+  const fileModeDiff = useMemo<FileDiffMetadata | null>(() => {
+    if (mode !== "file") return null
+    if (!fileDiff || content === null) return null
+    try {
+      const oldContent = reconstructOldContent(content, fileDiff)
+      const oldFile: FileContents = {
+        cacheKey: `${path}:old:${fileDiff.cacheKey ?? ""}`,
+        contents: oldContent,
+        lang: language,
+        name: basename(path),
+      }
+      const newFile: FileContents = {
+        cacheKey: `${path}:new:${content.length}`,
+        contents: content,
+        lang: language,
+        name: basename(path),
+      }
+      return parseDiffFromFile(oldFile, newFile)
+    } catch {
+      return null
+    }
+  }, [content, fileDiff, language, mode, path])
+
+  const fileModeDiffOptions = useMemo<FileDiffOptions<undefined>>(
+    () => ({
+      ...diffOptions,
+      // Show every line of the file, not just hunks + a few context lines.
+      expandUnchanged: true,
+    }),
+    [diffOptions]
   )
 
   if (mode === "diff") {
@@ -407,15 +437,27 @@ function FileViewer({
 
   if (!file) return null
 
+  // File has changes — render the full file as a diff (same component the
+  // Diffs view uses) so removals/additions look identical. `expandUnchanged`
+  // keeps every line visible, so the user sees the whole file plus the diff.
+  if (fileModeDiff) {
+    return (
+      <div className="h-full min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-background">
+        <FileDiff
+          fileDiff={fileModeDiff}
+          options={fileModeDiffOptions}
+          disableWorkerPool
+          style={PIERRE_FILE_STYLE}
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="h-full min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-background">
-      <PierreFile<FileChangeAnnotation>
+      <PierreFile<undefined>
         file={file}
-        lineAnnotations={changeAnnotations}
         options={options}
-        renderAnnotation={(annotation) => (
-          <ChangeAnnotation annotation={annotation} />
-        )}
         disableWorkerPool
         style={PIERRE_FILE_STYLE}
       />
@@ -423,57 +465,3 @@ function FileViewer({
   )
 }
 
-function ChangeAnnotation({
-  annotation,
-}: {
-  annotation: LineAnnotation<FileChangeAnnotation>
-}) {
-  const { additions, deletions, addedLines, removedLines } = annotation.metadata
-
-  return (
-    <div className="border-l-2 border-emerald-500/70 bg-muted/40">
-      <div className="flex items-center gap-2 px-3 py-1 font-sans text-[11px] text-muted-foreground">
-        <span className="font-medium text-foreground">Changed here</span>
-        <span className="font-mono tabular-nums">
-          <span className="text-emerald-600 dark:text-emerald-400">
-            +{additions}
-          </span>
-          <span className="text-muted-foreground/60"> / </span>
-          <span className="text-destructive">-{deletions}</span>
-        </span>
-      </div>
-      {removedLines.length > 0 || addedLines.length > 0 ? (
-        <pre className="overflow-x-auto border-t border-border/40 px-0 py-1 font-mono text-[12px] leading-[1.55]">
-          {removedLines.map((line, i) => (
-            <DiffLine key={`d${i}`} kind="del" text={line} />
-          ))}
-          {addedLines.map((line, i) => (
-            <DiffLine key={`a${i}`} kind="add" text={line} />
-          ))}
-        </pre>
-      ) : null}
-    </div>
-  )
-}
-
-function DiffLine({ kind, text }: { kind: "add" | "del"; text: string }) {
-  const isAdd = kind === "add"
-  return (
-    <div
-      className={cn(
-        "flex min-w-0 whitespace-pre",
-        isAdd
-          ? "bg-emerald-500/[0.10] text-emerald-700 dark:text-emerald-300"
-          : "bg-destructive/[0.10] text-destructive"
-      )}
-    >
-      <span
-        aria-hidden
-        className="inline-block w-6 shrink-0 select-none text-center opacity-70"
-      >
-        {isAdd ? "+" : "-"}
-      </span>
-      <span className="min-w-0 pr-3">{text === "" ? " " : text}</span>
-    </div>
-  )
-}

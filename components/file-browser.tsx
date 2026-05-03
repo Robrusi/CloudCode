@@ -39,6 +39,30 @@ const fileListCache = new Map<
   { entries: FileEntry[]; truncated: boolean }
 >()
 
+function applyLiveDiffToEntries(
+  entries: readonly FileEntry[],
+  changedFiles: readonly DiffFileStat[]
+): FileEntry[] {
+  const byPath = new Map(entries.map((entry) => [entry.path, entry]))
+
+  for (const file of changedFiles) {
+    if (file.prevPath && file.prevPath !== file.path) {
+      byPath.delete(file.prevPath)
+    }
+
+    if (file.type === "deleted") {
+      byPath.delete(file.path)
+      continue
+    }
+
+    byPath.set(file.path, { path: file.path, type: "file" })
+  }
+
+  return Array.from(byPath.values()).sort((a, b) =>
+    a.path.localeCompare(b.path)
+  )
+}
+
 const TREE_SCROLLBAR_CSS = `
 [data-file-tree-virtualized-scroll='true'],
 [data-file-tree-scrollbar-measure='true'] {
@@ -112,12 +136,16 @@ export function FileBrowser({
   const [view, setView] = useState<BrowserView>("files")
 
   const diffStats = useMemo(() => getDiffStats(diff), [diff])
+  const liveEntries = useMemo(
+    () => applyLiveDiffToEntries(entries, diffStats.files),
+    [diffStats.files, entries]
+  )
 
   const sandboxFilePaths = useMemo(() => {
     // @pierre/trees expects paths; directories should end with "/" so they
     // are explicitly recognised even when empty.
-    return entries.map((e) => (e.type === "dir" ? `${e.path}/` : e.path))
-  }, [entries])
+    return liveEntries.map((e) => (e.type === "dir" ? `${e.path}/` : e.path))
+  }, [liveEntries])
 
   const diffFilePaths = useMemo(
     () => diffStats.files.map((file) => file.path),
@@ -151,6 +179,14 @@ export function FileBrowser({
     return map
   }, [diffStats.files])
 
+  // In the diffs view we want every ancestor folder of a changed file open by
+  // default so the user can see all changes at a glance. The files view keeps
+  // the tree's default `initialExpansion: "closed"` behaviour.
+  const expandedDirPaths = useMemo<readonly string[] | undefined>(() => {
+    if (view !== "diffs") return undefined
+    return Array.from(diffStatsByDirectory.keys())
+  }, [view, diffStatsByDirectory])
+
   const gitStatus = useMemo<GitStatusEntry[]>(
     () =>
       diffStats.files.flatMap((file) => {
@@ -175,10 +211,10 @@ export function FileBrowser({
     if (view === "diffs") {
       for (const file of diffStats.files) set.add(file.path)
     } else {
-      for (const e of entries) if (e.type === "file") set.add(e.path)
+      for (const e of liveEntries) if (e.type === "file") set.add(e.path)
     }
     fileEntryPathsRef.current = set
-  }, [diffStats.files, entries, view])
+  }, [diffStats.files, liveEntries, view])
 
   const onOpenFileRef = useRef(onOpenFile)
   const viewRef = useRef(view)
@@ -227,12 +263,20 @@ export function FileBrowser({
     onSelectionChange: handleSelectionChange,
   })
 
-  // Keep tree in sync with the entry list.
+  // Keep tree in sync with the entry list. When viewing diffs we hand the
+  // tree the full set of ancestor directory paths so it rebuilds with every
+  // folder pre-expanded; otherwise we let the tree fall back to its
+  // `initialExpansion: "closed"` default.
   useEffect(() => {
     if (!model) return
     if (filePaths.length === 0) return
-    model.resetPaths(filePaths)
-  }, [model, filePaths])
+    model.resetPaths(
+      filePaths,
+      expandedDirPaths !== undefined
+        ? { initialExpandedPaths: expandedDirPaths }
+        : undefined
+    )
+  }, [model, filePaths, expandedDirPaths])
 
   useEffect(() => {
     model.setGitStatus(gitStatus)
@@ -326,19 +370,18 @@ export function FileBrowser({
         </button>
       </header>
 
-      <div className="flex h-[3.25rem] shrink-0 items-center border-b border-border/60 px-2">
-        <div className="grid h-8 w-full grid-cols-2 gap-1 rounded-md bg-sidebar-accent/60 p-1">
-          <ViewButton
-            active={view === "files"}
-            label="Files"
-            onClick={() => setView("files")}
-          />
-          <ViewButton
-            active={view === "diffs"}
-            label="Diffs"
-            onClick={() => setView("diffs")}
-          />
-        </div>
+      <div className="flex h-[3.25rem] shrink-0 items-stretch border-b border-border/60">
+        <ViewButton
+          active={view === "files"}
+          label="Files"
+          onClick={() => setView("files")}
+        />
+        <div aria-hidden className="w-px self-stretch bg-border/60" />
+        <ViewButton
+          active={view === "diffs"}
+          label="Diffs"
+          onClick={() => setView("diffs")}
+        />
       </div>
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
@@ -425,10 +468,11 @@ function ViewButton({
     <button
       type="button"
       onClick={onClick}
+      aria-pressed={active}
       className={
         active
-          ? "rounded-sm bg-background px-2 text-xs font-medium text-foreground shadow-sm"
-          : "rounded-sm px-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+          ? "flex-1 text-center text-xs font-medium text-foreground transition-colors"
+          : "flex-1 text-center text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
       }
     >
       {label}
