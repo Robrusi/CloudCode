@@ -81,8 +81,8 @@ The runner creates an E2B sandbox from the `codex` template, clones the repo to
 final Codex message.
 
 `reasoningEffort` maps to Codex `model_reasoning_effort` and accepts `none`,
-`minimal`, `low`, `medium`, `high`, or `xhigh`. `speed` accepts `standard` or
-`fast`; `fast` maps to Codex `service_tier = "fast"`.
+`low`, `medium`, `high`, or `xhigh`. `speed` accepts `standard` or `fast`;
+`fast` maps to Codex `service_tier = "fast"`.
 
 ## Run
 

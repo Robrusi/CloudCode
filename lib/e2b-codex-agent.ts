@@ -171,7 +171,6 @@ type CommandResult = {
 
 export type ReasoningEffort =
   | "none"
-  | "minimal"
   | "low"
   | "medium"
   | "high"
@@ -247,7 +246,6 @@ function parseModel(model?: string) {
 function parseReasoningEffort(effort?: string): ReasoningEffort | undefined {
   if (
     effort === "none" ||
-    effort === "minimal" ||
     effort === "low" ||
     effort === "medium" ||
     effort === "high" ||
@@ -258,7 +256,7 @@ function parseReasoningEffort(effort?: string): ReasoningEffort | undefined {
 
   if (effort) {
     throw new Error(
-      "reasoningEffort must be none, minimal, low, medium, high, or xhigh."
+      "reasoningEffort must be none, low, medium, high, or xhigh."
     )
   }
 

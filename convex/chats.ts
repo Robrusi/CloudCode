@@ -9,7 +9,6 @@ const model = v.union(v.literal("gpt-5.5"), v.literal("gpt-5.4"))
 const speed = v.union(v.literal("standard"), v.literal("fast"))
 const thinking = v.union(
   v.literal("none"),
-  v.literal("minimal"),
   v.literal("low"),
   v.literal("medium"),
   v.literal("high"),

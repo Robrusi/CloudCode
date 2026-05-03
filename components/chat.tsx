@@ -153,7 +153,7 @@ type Model = (typeof MODELS)[number]
 const SPEEDS = ["standard", "fast"] as const
 type Speed = (typeof SPEEDS)[number]
 
-const THINKINGS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const
+const THINKINGS = ["none", "low", "medium", "high", "xhigh"] as const
 type Thinking = (typeof THINKINGS)[number]
 
 const REPO_KEY = "cloudcode:repoUrl"
@@ -502,7 +502,6 @@ const SPEED_LABEL: Record<Speed, string> = {
 
 const THINKING_LABEL: Record<Thinking, string> = {
   none: "None",
-  minimal: "Minimal",
   low: "Low",
   medium: "Medium",
   high: "High",

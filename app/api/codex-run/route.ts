@@ -14,7 +14,6 @@ export const maxDuration = 300
 function parseReasoningEffort(value: unknown): ReasoningEffort | undefined {
   if (
     value === "none" ||
-    value === "minimal" ||
     value === "low" ||
     value === "medium" ||
     value === "high" ||
