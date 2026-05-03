@@ -120,8 +120,15 @@
   * {
     @apply border-border outline-ring/50;
     }
+  html,
+  body {
+    @apply h-full overflow-hidden;
+    }
   body {
     @apply bg-background text-foreground;
+    }
+  #__next {
+    @apply h-full;
     }
   html {
     @apply font-sans;

@@ -22,6 +22,7 @@ import {
   GitBranch,
   LogIn,
   Loader2,
+  PanelLeft,
   Plus,
   ScrollText,
   SquarePen,
@@ -44,10 +45,19 @@ import {
 import { GeistPixelSquare } from "geist/font/pixel"
 
 import { Button } from "@/components/ui/button"
-import { FileBrowser } from "@/components/file-browser"
+import {
+  FileBrowser,
+  type FileBrowserOpenMode,
+} from "@/components/file-browser"
+import { FileEditorPanel } from "@/components/file-editor"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { useStoreUserEffect } from "@/hooks/use-store-user-effect"
+import {
+  getDiffStats,
+  type DiffFileStat,
+  type DiffStats,
+} from "@/lib/diff-metadata"
 import { cn } from "@/lib/utils"
 
 type Role = "user" | "assistant"
@@ -413,6 +423,10 @@ function ChatInner() {
   const [speedOpen, setSpeedOpen] = useState(false)
   const [thinkingOpen, setThinkingOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
+  const [activeFilePath, setActiveFilePath] = useState<string | null>(null)
+  const [activeFileMode, setActiveFileMode] =
+    useState<FileBrowserOpenMode>("file")
+  const [sidebarOpen, setSidebarOpen] = useState(true)
   const [busy, setBusy] = useState(false)
   const [runLogs, setRunLogs] = useState<Record<string, RunLog[]>>({})
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
@@ -433,6 +447,14 @@ function ChatInner() {
   const thinking = draftThinking
   const messages = active?.messages ?? []
   const empty = messages.length === 0
+  const activeDiff = useMemo(
+    () =>
+      active
+        ? (active.messages.toReversed().find((m) => m.meta?.diff)?.meta
+            ?.diff ?? null)
+        : null,
+    [active]
+  )
 
   useEffect(() => {
     if (userLoading) return
@@ -529,12 +551,14 @@ function ChatInner() {
     setActiveId(null)
     setInput("")
     setEditingRepo(false)
+    setActiveFilePath(null)
   }
 
   function selectChat(id: Id<"threads">) {
     setActiveId(id)
     setInput("")
     setEditingRepo(false)
+    setActiveFilePath(null)
   }
 
   function deleteChat(id: Id<"threads">) {
@@ -734,18 +758,20 @@ function ChatInner() {
   }
 
   return (
-    <div className="flex h-svh bg-background text-foreground">
-      <Sidebar
-        authError={authError}
-        authStatus={authStatus}
-        chats={chats}
-        activeId={activeId}
-        onNewChat={startNewChat}
-        onSelect={selectChat}
-        onDelete={deleteChat}
-      />
+    <div className="fixed inset-0 flex min-w-0 overflow-hidden bg-background text-foreground">
+      {sidebarOpen ? (
+        <Sidebar
+          authError={authError}
+          authStatus={authStatus}
+          chats={chats}
+          activeId={activeId}
+          onNewChat={startNewChat}
+          onSelect={selectChat}
+          onDelete={deleteChat}
+        />
+      ) : null}
 
-      <div className="relative flex flex-1 flex-col">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <TopBar
           title={active?.title ?? null}
           repoUrl={repoUrl}
@@ -754,33 +780,51 @@ function ChatInner() {
           onKillSandbox={killActiveSandbox}
           filesOpen={filesOpen}
           onToggleFiles={() => setFilesOpen((v) => !v)}
+          sidebarOpen={sidebarOpen}
+          onToggleSidebar={() => setSidebarOpen((v) => !v)}
         />
-        <div ref={threadRef} className="flex-1 overflow-y-auto">
-          <div className="mx-auto flex min-h-full max-w-2xl flex-col px-6 pt-16 pb-40">
-            {empty ? (
-              <div className="flex flex-1 flex-col items-center justify-center text-center">
-                <h1 className="text-3xl font-medium tracking-tight text-foreground/90">
-                  What should we build?
-                </h1>
-                <p className="mt-3 text-sm text-muted-foreground">
-                  Describe a change. It runs in a sandbox against your repo.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-8">
-                {messages.map((m) => (
-                  <MessageBlock
-                    key={m.id}
-                    message={m}
-                    logs={runLogs[m.id as string] ?? []}
-                  />
-                ))}
-              </div>
-            )}
+        {activeFilePath ? (
+          <FileEditorPanel
+            sandboxId={active?.sandboxId ?? null}
+            activePath={activeFilePath}
+            diff={activeDiff ?? undefined}
+            mode={activeFileMode}
+            onClose={() => setActiveFilePath(null)}
+            placement="main"
+          />
+        ) : (
+          <div ref={threadRef} className="min-h-0 flex-1 overflow-y-auto">
+            <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col px-6 pt-16 pb-40">
+              {empty ? (
+                <div className="flex flex-1 flex-col items-center justify-center text-center">
+                  <h1 className="text-3xl font-medium tracking-tight text-foreground/90">
+                    What should we build?
+                  </h1>
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    Describe a change. It runs in a sandbox against your repo.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-8">
+                  {messages.map((m) => (
+                    <MessageBlock
+                      key={m.id}
+                      message={m}
+                      logs={runLogs[m.id as string] ?? []}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
 
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center px-4 pb-6">
+        <div
+          className={cn(
+            "pointer-events-none absolute inset-x-0 bottom-0 flex justify-center px-4 pb-6",
+            activeFilePath && "hidden"
+          )}
+        >
           <form
             onSubmit={onSubmit}
             className="pointer-events-auto w-full max-w-2xl rounded-3xl border border-border/70 bg-background/80 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-12px_rgba(0,0,0,0.12)] backdrop-blur-xl transition-colors focus-within:border-border"
@@ -874,7 +918,15 @@ function ChatInner() {
       <FileBrowser
         open={filesOpen && Boolean(active?.sandboxId)}
         sandboxId={active?.sandboxId ?? null}
+        diff={activeDiff ?? undefined}
+        activePath={activeFilePath}
         onClose={() => setFilesOpen(false)}
+        onOpenFile={(p, mode) => {
+          setActiveFilePath(p)
+          setActiveFileMode(mode)
+          // Collapse the chat-list sidebar to give the editor more width.
+          setSidebarOpen(false)
+        }}
       />
     </div>
   )
@@ -882,19 +934,21 @@ function ChatInner() {
 
 function SignedOutScreen() {
   return (
-    <div className="flex h-svh items-center justify-center bg-background px-6 text-foreground">
-      <div className="w-full max-w-sm text-center">
-        <h1 className="text-3xl font-medium tracking-tight text-foreground/90">
-          Cloudcode
-        </h1>
-        <p className="mt-3 text-sm leading-6 text-muted-foreground">
-          Sign in to keep threads and Codex auth attached to your profile.
-        </p>
-        <SignInButton mode="modal">
-          <button className="mt-6 inline-flex h-10 items-center justify-center rounded-full bg-foreground px-5 text-sm font-medium text-background transition-opacity hover:opacity-85">
-            Sign in
-          </button>
-        </SignInButton>
+    <div className="fixed inset-0 flex overflow-hidden bg-background px-6 text-foreground">
+      <div className="flex min-h-0 flex-1 items-center justify-center">
+        <div className="w-full max-w-sm text-center">
+          <h1 className="text-3xl font-medium tracking-tight text-foreground/90">
+            Cloudcode
+          </h1>
+          <p className="mt-3 text-sm leading-6 text-muted-foreground">
+            Sign in to keep threads and Codex auth attached to your profile.
+          </p>
+          <SignInButton mode="modal">
+            <button className="mt-6 inline-flex h-10 items-center justify-center rounded-full bg-foreground px-5 text-sm font-medium text-background transition-opacity hover:opacity-85">
+              Sign in
+            </button>
+          </SignInButton>
+        </div>
       </div>
     </div>
   )
@@ -908,6 +962,8 @@ function TopBar({
   onKillSandbox,
   filesOpen,
   onToggleFiles,
+  sidebarOpen,
+  onToggleSidebar,
 }: {
   title: string | null
   repoUrl: string
@@ -916,12 +972,23 @@ function TopBar({
   onKillSandbox: () => void | Promise<void>
   filesOpen: boolean
   onToggleFiles: () => void
+  sidebarOpen: boolean
+  onToggleSidebar: () => void
 }) {
   const displayTitle = title?.trim() || (isNew ? "New chat" : "Untitled")
   const repo = repoUrl ? repoLabel(repoUrl) : ""
 
   return (
-    <header className="flex h-[3.25rem] shrink-0 items-center gap-2.5 border-b border-border/60 bg-background/80 px-4 backdrop-blur-xl">
+    <header className="flex h-[3.25rem] shrink-0 items-center gap-2.5 border-b border-border/60 bg-background/80 pr-4 pl-2 backdrop-blur-xl">
+      <button
+        type="button"
+        onClick={onToggleSidebar}
+        aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+        title={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+        className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      >
+        <PanelLeft className="size-3.5" />
+      </button>
       <span className="min-w-0 truncate text-sm font-medium text-foreground/85">
         {displayTitle}
       </span>
@@ -944,13 +1011,9 @@ function TopBar({
           type="button"
           onClick={onToggleFiles}
           aria-label={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
-          aria-pressed={filesOpen}
           title={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
           disabled={!sandboxId}
-          className={cn(
-            "inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
-            filesOpen && "bg-accent text-foreground"
-          )}
+          className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
         >
           {filesOpen ? (
             <FolderOpen className="size-[18px]" />
@@ -1008,8 +1071,6 @@ function SandboxStatus({
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
-    setInfo(null)
-    setMissing(false)
     let cancelled = false
 
     async function load() {
@@ -1032,10 +1093,15 @@ function SandboxStatus({
       }
     }
 
-    void load()
+    const firstLoad = window.setTimeout(() => {
+      setInfo(null)
+      setMissing(false)
+      void load()
+    }, 0)
     const id = window.setInterval(load, 15_000)
     return () => {
       cancelled = true
+      window.clearTimeout(firstLoad)
       window.clearInterval(id)
     }
   }, [sandboxId])
@@ -1153,7 +1219,7 @@ function Sidebar({
   }, [chats])
 
   return (
-    <aside className="flex h-full w-64 shrink-0 flex-col border-r border-border/60 bg-sidebar text-sidebar-foreground">
+    <aside className="flex h-full min-h-0 w-64 shrink-0 flex-col overflow-hidden border-r border-border/60 bg-sidebar text-sidebar-foreground">
       <div className="px-[1.125rem] pt-6 pb-5">
         <span
           className={cn(
@@ -1175,7 +1241,7 @@ function Sidebar({
         </button>
       </div>
 
-      <div className="mt-2 flex-1 overflow-y-auto px-2 pb-4">
+      <div className="mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-4">
         {groups.length === 0 ? (
           <div className="px-3 pt-4 text-xs text-muted-foreground/80">
             No chats yet
@@ -1506,72 +1572,8 @@ function Pill<T extends string>({
   )
 }
 
-type DiffFileStat = {
-  path: string
-  additions: number
-  deletions: number
-}
-
-type DiffStats = {
-  files: DiffFileStat[]
-  additions: number
-  deletions: number
-}
-
 function parseDiffStats(diff: string): DiffStats {
-  const files: DiffFileStat[] = []
-  let current: DiffFileStat | null = null
-
-  const lines = diff.split("\n")
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-
-    if (line.startsWith("diff --git ")) {
-      if (current) files.push(current)
-      // Prefer the path from the +++ line later; default to b/<path> from header
-      const match = /^diff --git a\/(.+?) b\/(.+)$/.exec(line)
-      const path = match?.[2] ?? match?.[1] ?? "unknown"
-      current = { path, additions: 0, deletions: 0 }
-      continue
-    }
-
-    if (!current) continue
-
-    if (line.startsWith("+++ ")) {
-      const path = line.slice(4).trim()
-      if (path !== "/dev/null") {
-        current.path = path.startsWith("b/") ? path.slice(2) : path
-      }
-      continue
-    }
-    if (line.startsWith("--- ")) {
-      // Use the "from" path only if the file is being deleted
-      const path = line.slice(4).trim()
-      if (path !== "/dev/null" && current.path === "unknown") {
-        current.path = path.startsWith("a/") ? path.slice(2) : path
-      }
-      continue
-    }
-    if (line.startsWith("+") && !line.startsWith("+++")) {
-      current.additions += 1
-      continue
-    }
-    if (line.startsWith("-") && !line.startsWith("---")) {
-      current.deletions += 1
-      continue
-    }
-  }
-  if (current) files.push(current)
-
-  const totals = files.reduce(
-    (acc, f) => ({
-      additions: acc.additions + f.additions,
-      deletions: acc.deletions + f.deletions,
-    }),
-    { additions: 0, deletions: 0 }
-  )
-
-  return { files, additions: totals.additions, deletions: totals.deletions }
+  return getDiffStats(diff)
 }
 
 type TreeNode =
@@ -2058,7 +2060,7 @@ function CodeBlock({ body, lang }: { body: string; lang?: string }) {
     () => ({
       disableFileHeader: true,
       disableLineNumbers: true,
-      overflow: "scroll",
+      overflow: "wrap",
       theme: PIERRE_CODE_THEMES,
       themeType,
     }),

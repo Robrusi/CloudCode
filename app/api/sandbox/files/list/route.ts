@@ -20,6 +20,28 @@ const MAX_ENTRIES = 5000
 
 type EntryOut = { path: string; type: "file" | "dir" }
 
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+function toEntries(stdout: string) {
+  const entries: EntryOut[] = []
+  const seen = new Set<string>()
+  let total = 0
+
+  for (const raw of stdout.split("\0")) {
+    const path = raw.trim().replace(/^\.\//, "")
+    if (!path || seen.has(path)) continue
+    total += 1
+    seen.add(path)
+    entries.push({ path, type: "file" })
+    if (entries.length >= MAX_ENTRIES) break
+  }
+
+  entries.sort((a, b) => a.path.localeCompare(b.path))
+  return { entries, truncated: total > MAX_ENTRIES }
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const sandboxId = searchParams.get("sandboxId")
@@ -31,48 +53,27 @@ export async function GET(request: Request) {
 
   try {
     const sandbox = await Sandbox.connect(sandboxId)
-
-    const queue: string[] = [root]
-    const out: EntryOut[] = []
-    const seen = new Set<string>()
-
-    while (queue.length > 0 && out.length < MAX_ENTRIES) {
-      const dir = queue.shift()!
-      if (seen.has(dir)) continue
-      seen.add(dir)
-
-      let entries
-      try {
-        entries = await sandbox.files.list(dir, { depth: 1 })
-      } catch {
-        continue
-      }
-
-      for (const entry of entries) {
-        const rel = entry.path.startsWith(root + "/")
-          ? entry.path.slice(root.length + 1)
-          : entry.path === root
-            ? ""
-            : entry.path
-        if (!rel) continue
-        if (entry.type === "dir") {
-          out.push({ path: rel, type: "dir" })
-          if (!SKIP_DESCEND.has(entry.name)) {
-            queue.push(entry.path)
-          }
-        } else {
-          out.push({ path: rel, type: "file" })
-        }
-        if (out.length >= MAX_ENTRIES) break
-      }
-    }
-
-    out.sort((a, b) => a.path.localeCompare(b.path))
+    const skipNames = [...SKIP_DESCEND]
+      .map((name) => `-name ${shellQuote(name)}`)
+      .join(" -o ")
+    const command = [
+      "set -e",
+      `cd ${shellQuote(root)}`,
+      "if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then",
+      `  git ls-files -co --exclude-standard -z | head -z -n ${MAX_ENTRIES + 1}`,
+      "else",
+      `  find . \\( ${skipNames} \\) -prune -o -type f -print0 | head -z -n ${MAX_ENTRIES + 1}`,
+      "fi",
+    ].join("\n")
+    const result = await sandbox.commands.run(`bash -lc ${shellQuote(command)}`, {
+      timeoutMs: 10_000,
+    })
+    const out = toEntries(result.stdout)
 
     return NextResponse.json({
       root,
-      entries: out,
-      truncated: out.length >= MAX_ENTRIES,
+      entries: out.entries,
+      truncated: out.truncated,
     })
   } catch (error) {
     return NextResponse.json(
