@@ -29,6 +29,7 @@ import {
   Square,
   Terminal,
   Trash2,
+  X,
 } from "lucide-react"
 import { useTheme } from "next-themes"
 import {
@@ -41,6 +42,8 @@ import {
   useRef,
   useState,
 } from "react"
+import type { FitAddon } from "@xterm/addon-fit"
+import type { Terminal as XTermTerminal } from "@xterm/xterm"
 
 import { GeistPixelSquare } from "geist/font/pixel"
 
@@ -267,6 +270,223 @@ function buildResumeHandoff({
 const SPEED_KEY = "cloudcode:speed"
 const THINKING_KEY = "cloudcode:thinking"
 const ACTIVE_KEY = "cloudcode:activeChatId"
+const TERMINAL_BUFFER_LIMIT = 2_000
+
+type TerminalAssetModules = {
+  FitAddon: typeof import("@xterm/addon-fit").FitAddon
+  Terminal: typeof import("@xterm/xterm").Terminal
+}
+
+type BrowserTerminalStatus = "connecting" | "ready" | "closed"
+
+type BrowserTerminalEvent =
+  | { kind: "chunk"; data: string | Uint8Array }
+  | { error?: string; kind: "status"; status: BrowserTerminalStatus }
+
+type BrowserTerminalSession = {
+  buffered: Array<string | Uint8Array>
+  error?: string
+  listeners: Set<(event: BrowserTerminalEvent) => void>
+  queuedInput: Uint8Array[]
+  size: { cols: number; rows: number }
+  socket: WebSocket | null
+  status: BrowserTerminalStatus
+  url?: string
+  urlPromise?: Promise<string>
+}
+
+let terminalAssetPromise: Promise<TerminalAssetModules> | null = null
+const browserTerminalSessions = new Map<string, BrowserTerminalSession>()
+const terminalUrlCache = new Map<string, string>()
+const terminalUrlPromises = new Map<string, Promise<string>>()
+
+function preloadTerminalAssets() {
+  terminalAssetPromise ??= Promise.all([
+    import("@xterm/xterm"),
+    import("@xterm/addon-fit"),
+  ]).then(([xterm, fit]) => ({
+    FitAddon: fit.FitAddon,
+    Terminal: xterm.Terminal,
+  }))
+  return terminalAssetPromise
+}
+
+function getTerminalUrl(sandboxId: string) {
+  const cached = terminalUrlCache.get(sandboxId)
+  if (cached) return Promise.resolve(cached)
+
+  const existing = terminalUrlPromises.get(sandboxId)
+  if (existing) return existing
+
+  const promise = fetch(
+    `/api/sandbox/terminal/url?sandboxId=${encodeURIComponent(sandboxId)}`,
+    { cache: "no-store" }
+  )
+    .then(async (res) => {
+      const data = (await res.json()) as { error?: string; url?: string }
+      if (!res.ok || !data.url) {
+        throw new Error(data.error ?? "Failed to start terminal.")
+      }
+      terminalUrlCache.set(sandboxId, data.url)
+      return data.url
+    })
+    .finally(() => {
+      terminalUrlPromises.delete(sandboxId)
+    })
+
+  terminalUrlPromises.set(sandboxId, promise)
+  return promise
+}
+
+function createBrowserTerminalSession(): BrowserTerminalSession {
+  return {
+    buffered: [],
+    listeners: new Set(),
+    queuedInput: [],
+    size: { cols: 100, rows: 24 },
+    socket: null,
+    status: "connecting",
+  }
+}
+
+function emitBrowserTerminalEvent(
+  session: BrowserTerminalSession,
+  event: BrowserTerminalEvent
+) {
+  for (const listener of session.listeners) listener(event)
+}
+
+function setBrowserTerminalStatus(
+  session: BrowserTerminalSession,
+  status: BrowserTerminalStatus,
+  error?: string
+) {
+  session.status = status
+  session.error = error
+  emitBrowserTerminalEvent(session, { error, kind: "status", status })
+}
+
+function bufferBrowserTerminalChunk(
+  session: BrowserTerminalSession,
+  data: string | Uint8Array
+) {
+  session.buffered.push(data)
+  if (session.buffered.length > TERMINAL_BUFFER_LIMIT) {
+    session.buffered.splice(0, session.buffered.length - TERMINAL_BUFFER_LIMIT)
+  }
+  emitBrowserTerminalEvent(session, { data, kind: "chunk" })
+}
+
+function ensureBrowserTerminalSession(sandboxId: string) {
+  let session = browserTerminalSessions.get(sandboxId)
+  if (!session) {
+    session = createBrowserTerminalSession()
+    browserTerminalSessions.set(sandboxId, session)
+  }
+
+  if (
+    session.socket?.readyState === WebSocket.OPEN ||
+    session.socket?.readyState === WebSocket.CONNECTING
+  ) {
+    return session
+  }
+  if (session.status === "connecting" && session.urlPromise) {
+    return session
+  }
+
+  session.socket = null
+  session.status = "connecting"
+  session.error = undefined
+
+  session.urlPromise = getTerminalUrl(sandboxId)
+    .then((url) => {
+      session.url = url
+      const socket = new WebSocket(url)
+      socket.binaryType = "arraybuffer"
+      session.socket = socket
+
+      socket.onopen = () => {
+        setBrowserTerminalStatus(session, "ready")
+        socket.send(JSON.stringify({ type: "resize", ...session.size }))
+        for (const input of session.queuedInput) socket.send(input)
+        session.queuedInput = []
+      }
+
+      socket.onmessage = (event) => {
+        if (typeof event.data === "string") {
+          bufferBrowserTerminalChunk(session, event.data)
+          return
+        }
+        bufferBrowserTerminalChunk(
+          session,
+          new Uint8Array(event.data as ArrayBuffer)
+        )
+      }
+
+      socket.onerror = () => {
+        setBrowserTerminalStatus(
+          session,
+          "closed",
+          "Terminal connection failed."
+        )
+      }
+
+      socket.onclose = () => {
+        if (session.socket === socket) session.socket = null
+        setBrowserTerminalStatus(session, "closed", session.error)
+      }
+
+      return url
+    })
+    .catch((error) => {
+      setBrowserTerminalStatus(
+        session,
+        "closed",
+        error instanceof Error ? error.message : "Failed to open terminal."
+      )
+      throw error
+    })
+
+  emitBrowserTerminalEvent(session, { kind: "status", status: "connecting" })
+  return session
+}
+
+function warmBrowserTerminal(sandboxId: string | null | undefined) {
+  if (!sandboxId) return
+  void preloadTerminalAssets()
+  ensureBrowserTerminalSession(sandboxId)
+}
+
+function sendBrowserTerminalInput(sandboxId: string, data: Uint8Array) {
+  const session = ensureBrowserTerminalSession(sandboxId)
+  const socket = session.socket
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.send(data)
+  } else {
+    session.queuedInput.push(data)
+  }
+}
+
+function resizeBrowserTerminal(
+  sandboxId: string,
+  size: { cols: number; rows: number }
+) {
+  const session = ensureBrowserTerminalSession(sandboxId)
+  session.size = size
+  const socket = session.socket
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: "resize", ...size }))
+  }
+}
+
+function closeBrowserTerminalSession(sandboxId: string | null | undefined) {
+  if (!sandboxId) return
+  const session = browserTerminalSessions.get(sandboxId)
+  session?.socket?.close()
+  browserTerminalSessions.delete(sandboxId)
+  terminalUrlCache.delete(sandboxId)
+  terminalUrlPromises.delete(sandboxId)
+}
 
 const MODEL_LABEL: Record<Model, string> = {
   "gpt-5.5": "GPT 5.5",
@@ -423,6 +643,7 @@ function ChatInner() {
   const [speedOpen, setSpeedOpen] = useState(false)
   const [thinkingOpen, setThinkingOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
+  const [terminalOpen, setTerminalOpen] = useState(false)
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null)
   const [activeFileMode, setActiveFileMode] =
     useState<FileBrowserOpenMode>("file")
@@ -440,6 +661,7 @@ function ChatInner() {
     () => chats.find((c) => c.id === activeId) ?? null,
     [chats, activeId]
   )
+  const terminalVisible = terminalOpen && Boolean(active?.sandboxId)
 
   const repoUrl = active ? active.repoUrl : draftRepo
   const model = active ? active.model : draftModel
@@ -450,8 +672,8 @@ function ChatInner() {
   const activeDiff = useMemo(
     () =>
       active
-        ? (active.messages.toReversed().find((m) => m.meta?.diff)?.meta
-            ?.diff ?? null)
+        ? (active.messages.toReversed().find((m) => m.meta?.diff)?.meta?.diff ??
+          null)
         : null,
     [active]
   )
@@ -500,6 +722,10 @@ function ChatInner() {
     if (!el) return
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
   }, [messages.length, activeId, runLogs])
+
+  useEffect(() => {
+    warmBrowserTerminal(active?.sandboxId)
+  }, [active?.sandboxId])
 
   function appendRunLog(
     messageId: Id<"messages">,
@@ -552,6 +778,7 @@ function ChatInner() {
     setInput("")
     setEditingRepo(false)
     setActiveFilePath(null)
+    setTerminalOpen(false)
   }
 
   function selectChat(id: Id<"threads">) {
@@ -559,6 +786,7 @@ function ChatInner() {
     setInput("")
     setEditingRepo(false)
     setActiveFilePath(null)
+    setTerminalOpen(false)
   }
 
   function deleteChat(id: Id<"threads">) {
@@ -722,6 +950,8 @@ function ChatInner() {
       threadRunStateRef.current[active.id as string]?.sandboxId ??
       active.sandboxId
     if (!sandboxId) return
+    setTerminalOpen(false)
+    closeBrowserTerminalSession(sandboxId)
 
     try {
       await fetch("/api/sandbox/kill", {
@@ -780,6 +1010,8 @@ function ChatInner() {
           onKillSandbox={killActiveSandbox}
           filesOpen={filesOpen}
           onToggleFiles={() => setFilesOpen((v) => !v)}
+          terminalOpen={terminalVisible}
+          onToggleTerminal={() => setTerminalOpen((v) => !v)}
           sidebarOpen={sidebarOpen}
           onToggleSidebar={() => setSidebarOpen((v) => !v)}
         />
@@ -819,9 +1051,16 @@ function ChatInner() {
           </div>
         )}
 
+        <SandboxTerminalPanel
+          open={terminalVisible}
+          sandboxId={active?.sandboxId ?? null}
+          onClose={() => setTerminalOpen(false)}
+        />
+
         <div
           className={cn(
             "pointer-events-none absolute inset-x-0 bottom-0 flex justify-center px-4 pb-6",
+            terminalVisible && "bottom-72",
             activeFilePath && "hidden"
           )}
         >
@@ -962,6 +1201,8 @@ function TopBar({
   onKillSandbox,
   filesOpen,
   onToggleFiles,
+  terminalOpen,
+  onToggleTerminal,
   sidebarOpen,
   onToggleSidebar,
 }: {
@@ -972,6 +1213,8 @@ function TopBar({
   onKillSandbox: () => void | Promise<void>
   filesOpen: boolean
   onToggleFiles: () => void
+  terminalOpen: boolean
+  onToggleTerminal: () => void
   sidebarOpen: boolean
   onToggleSidebar: () => void
 }) {
@@ -1009,6 +1252,21 @@ function TopBar({
         ) : null}
         <button
           type="button"
+          onClick={onToggleTerminal}
+          onPointerEnter={() => warmBrowserTerminal(sandboxId)}
+          aria-label={
+            terminalOpen ? "Hide sandbox terminal" : "Show sandbox terminal"
+          }
+          title={
+            terminalOpen ? "Hide sandbox terminal" : "Show sandbox terminal"
+          }
+          disabled={!sandboxId}
+          className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+        >
+          <Terminal className="size-[18px]" />
+        </button>
+        <button
+          type="button"
           onClick={onToggleFiles}
           aria-label={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
           title={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
@@ -1023,6 +1281,264 @@ function TopBar({
         </button>
       </div>
     </header>
+  )
+}
+
+function SandboxTerminalPanel({
+  onClose,
+  open,
+  sandboxId,
+}: {
+  onClose: () => void
+  open: boolean
+  sandboxId: string | null
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const terminalRef = useRef<XTermTerminal | null>(null)
+  const fitRef = useRef<FitAddon | null>(null)
+  const [status, setStatus] = useState<"connecting" | "ready" | "closed">(
+    "connecting"
+  )
+  const [error, setError] = useState("")
+
+  useEffect(() => {
+    if (!open || !sandboxId) return
+
+    const activeSandboxId = sandboxId
+    let cancelled = false
+    let resizeObserver: ResizeObserver | undefined
+    let inputDisposable: { dispose: () => void } | undefined
+    let unsubscribe: (() => void) | undefined
+    let resizeTimer: number | undefined
+    let directMode = false
+    let localLine = ""
+    let suppressRemoteEcho = ""
+    const encoder = new TextEncoder()
+    const decoder = new TextDecoder()
+
+    function writeTerminalChunk(data: string | Uint8Array) {
+      terminalRef.current?.write(data)
+    }
+
+    function stripSuppressedEcho(data: string | Uint8Array) {
+      if (!suppressRemoteEcho) return data
+
+      const text = typeof data === "string" ? data : decoder.decode(data)
+      let next = text
+
+      while (suppressRemoteEcho && next) {
+        if (next.startsWith(suppressRemoteEcho)) {
+          next = next.slice(suppressRemoteEcho.length)
+          suppressRemoteEcho = ""
+          break
+        }
+        if (suppressRemoteEcho.startsWith(next)) {
+          suppressRemoteEcho = suppressRemoteEcho.slice(next.length)
+          return ""
+        }
+        if (next[0] !== suppressRemoteEcho[0]) {
+          suppressRemoteEcho = ""
+          break
+        }
+        next = next.slice(1)
+        suppressRemoteEcho = suppressRemoteEcho.slice(1)
+      }
+
+      return next
+    }
+
+    function updateTerminalMode(data: string | Uint8Array) {
+      const text = typeof data === "string" ? data : decoder.decode(data)
+      if (text.includes("\x1b[?1049h")) directMode = true
+      if (text.includes("\x1b[?1049l")) directMode = false
+    }
+
+    function sendResize() {
+      const terminal = terminalRef.current
+      const fit = fitRef.current
+      if (!terminal || !fit) return
+      try {
+        fit.fit()
+      } catch {
+        return
+      }
+      resizeBrowserTerminal(activeSandboxId, {
+        cols: terminal.cols,
+        rows: terminal.rows,
+      })
+    }
+
+    function scheduleResize() {
+      if (resizeTimer) window.clearTimeout(resizeTimer)
+      resizeTimer = window.setTimeout(sendResize, 30)
+    }
+
+    function sendInput(data: string) {
+      if (directMode) {
+        sendBrowserTerminalInput(activeSandboxId, encoder.encode(data))
+        return
+      }
+
+      for (const char of Array.from(data)) {
+        if (char === "\r") {
+          terminalRef.current?.write("\r\n")
+          suppressRemoteEcho += `${localLine}\r\n`
+          sendBrowserTerminalInput(
+            activeSandboxId,
+            encoder.encode(`${localLine}\r`)
+          )
+          localLine = ""
+          continue
+        }
+
+        if (char === "\u007f" || char === "\b") {
+          if (!localLine) continue
+          localLine = Array.from(localLine).slice(0, -1).join("")
+          terminalRef.current?.write("\b \b")
+          continue
+        }
+
+        if (char === "\x03") {
+          terminalRef.current?.write("^C\r\n")
+          suppressRemoteEcho += "^C\r\n"
+          localLine = ""
+          sendBrowserTerminalInput(activeSandboxId, encoder.encode(char))
+          continue
+        }
+
+        if (/[\u0000-\u001f\u007f]/.test(char)) {
+          if (!localLine) {
+            sendBrowserTerminalInput(activeSandboxId, encoder.encode(char))
+          }
+          continue
+        }
+
+        localLine += char
+        terminalRef.current?.write(char)
+      }
+    }
+
+    async function boot() {
+      const session = ensureBrowserTerminalSession(activeSandboxId)
+      const { FitAddon: BrowserFitAddon, Terminal: BrowserTerminal } =
+        await preloadTerminalAssets()
+      if (cancelled || !containerRef.current) return
+
+      setStatus(session.status)
+      setError(session.error ?? "")
+
+      const terminal = new BrowserTerminal({
+        allowProposedApi: false,
+        cursorBlink: true,
+        cursorStyle: "bar",
+        fontFamily:
+          'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace',
+        fontSize: 13,
+        letterSpacing: 0,
+        lineHeight: 1.35,
+        rightClickSelectsWord: true,
+        scrollback: 10000,
+        theme: {
+          background: "#09090b",
+          cursor: "#fafafa",
+          cursorAccent: "#09090b",
+          foreground: "#e4e4e7",
+          selectionBackground: "#27272a",
+        },
+      })
+      const fit = new BrowserFitAddon()
+      terminal.loadAddon(fit)
+      terminal.open(containerRef.current)
+
+      // Two ticks: open paints the canvas, then we measure once layout settles.
+      requestAnimationFrame(() => {
+        try {
+          fit.fit()
+        } catch {
+          // ignore
+        }
+      })
+
+      terminalRef.current = terminal
+      fitRef.current = fit
+      terminal.focus()
+
+      for (const chunk of session.buffered) writeTerminalChunk(chunk)
+      unsubscribe = () => session.listeners.delete(handleTerminalEvent)
+      session.listeners.add(handleTerminalEvent)
+
+      function handleTerminalEvent(event: BrowserTerminalEvent) {
+        if (cancelled) return
+        if (event.kind === "chunk") {
+          updateTerminalMode(event.data)
+          const output = stripSuppressedEcho(event.data)
+          if (output) writeTerminalChunk(output)
+          return
+        }
+        setStatus(event.status)
+        setError(event.error ?? "")
+      }
+
+      inputDisposable = terminal.onData(sendInput)
+      resizeObserver = new ResizeObserver(scheduleResize)
+      resizeObserver.observe(containerRef.current)
+      sendResize()
+    }
+
+    boot().catch((err) => {
+      if (cancelled) return
+      setStatus("closed")
+      setError(err instanceof Error ? err.message : "Failed to open terminal.")
+    })
+
+    return () => {
+      cancelled = true
+      if (resizeTimer) window.clearTimeout(resizeTimer)
+      resizeObserver?.disconnect()
+      inputDisposable?.dispose()
+      unsubscribe?.()
+      terminalRef.current?.dispose()
+      terminalRef.current = null
+      fitRef.current = null
+    }
+  }, [open, sandboxId])
+
+  if (!open) return null
+
+  const dotColor =
+    status === "ready"
+      ? "bg-emerald-400"
+      : status === "connecting"
+        ? "bg-amber-400 animate-pulse"
+        : "bg-zinc-600"
+
+  return (
+    <section className="flex h-80 shrink-0 flex-col border-t border-border/60 bg-[#09090b] text-zinc-200">
+      <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-[11px] tracking-wide text-zinc-500">
+        <span
+          className={`size-1.5 rounded-full ${dotColor}`}
+          aria-hidden="true"
+        />
+        <span>terminal</span>
+        {error ? (
+          <span className="truncate text-rose-400/80">— {error}</span>
+        ) : null}
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close terminal"
+          title="Close terminal"
+          className="ml-auto inline-flex size-6 items-center justify-center rounded text-zinc-500 transition-colors hover:bg-white/5 hover:text-zinc-200"
+        >
+          <X className="size-3.5" />
+        </button>
+      </div>
+      <div
+        ref={containerRef}
+        onClick={() => terminalRef.current?.focus()}
+        className="min-h-0 flex-1 cursor-text px-3 pb-2"
+      />
+    </section>
   )
 }
 
