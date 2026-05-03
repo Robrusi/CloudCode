@@ -57,6 +57,8 @@ type Message = {
   pending?: boolean
   error?: boolean
   meta?: { branch?: string; status?: string; diff?: string }
+  speed?: Speed
+  thinking?: Thinking
 }
 
 type RunLogKind =
@@ -125,8 +127,6 @@ type ChatRecord = {
   title: string
   messages: Message[]
   model: Model
-  speed?: Speed
-  thinking?: Thinking
   createdAt: number
   updatedAt: number
 }
@@ -426,8 +426,8 @@ function ChatInner() {
 
   const repoUrl = active ? active.repoUrl : draftRepo
   const model = active ? active.model : draftModel
-  const speed = active ? (active.speed ?? "standard") : draftSpeed
-  const thinking = active ? (active.thinking ?? "medium") : draftThinking
+  const speed = draftSpeed
+  const thinking = draftThinking
   const messages = active?.messages ?? []
   const empty = messages.length === 0
 
@@ -513,20 +513,12 @@ function ChatInner() {
   }
 
   function persistSpeed(next: Speed) {
-    if (active) {
-      void updateThread({ speed: next, threadId: active.id })
-    } else {
-      setDraftSpeed(next)
-    }
+    setDraftSpeed(next)
     localStorage.setItem(SPEED_KEY, next)
   }
 
   function persistThinking(next: Thinking) {
-    if (active) {
-      void updateThread({ thinking: next, threadId: active.id })
-    } else {
-      setDraftThinking(next)
-    }
+    setDraftThinking(next)
     localStorage.setItem(THINKING_KEY, next)
   }
 
@@ -584,6 +576,8 @@ function ChatInner() {
       } else {
         const appended = await appendRunMessages({
           prompt: trimmed,
+          speed,
+          thinking,
           threadId: chatId,
         })
         assistantMessageId = appended.assistantMessageId
