@@ -1,6 +1,6 @@
 "use client"
 
-import { Show, SignInButton, UserButton } from "@clerk/nextjs"
+import { Show, SignInButton, useClerk } from "@clerk/nextjs"
 import {
   File as PierreFile,
   type FileContents,
@@ -27,11 +27,13 @@ import {
   Plus,
   ScrollText,
   Save,
+  Settings,
   SquarePen,
   SquareTerminal,
   Square,
   Terminal,
   Trash2,
+  User,
   X,
 } from "lucide-react"
 import { useTheme } from "next-themes"
@@ -627,6 +629,8 @@ function ChatInner() {
       ? null
       : (localStorage.getItem(ACTIVE_KEY) as Id<"threads"> | null)
   )
+  const [pendingDeleteId, setPendingDeleteId] =
+    useState<Id<"threads"> | null>(null)
   const [input, setInput] = useState("")
   const [draftRepo, setDraftRepo] = useState(() =>
     typeof window === "undefined" ? "" : (localStorage.getItem(REPO_KEY) ?? "")
@@ -663,6 +667,7 @@ function ChatInner() {
   const [activeFileMode, setActiveFileMode] =
     useState<FileBrowserOpenMode>("file")
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [view, setView] = useState<"chat" | "settings">("chat")
   const [busy, setBusy] = useState(false)
   const [runLogs, setRunLogs] = useState<Record<string, RunLog[]>>({})
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
@@ -796,6 +801,7 @@ function ChatInner() {
     setEditingRepo(false)
     setActiveFilePath(null)
     setTerminalOpen(false)
+    setView("chat")
   }
 
   function selectChat(id: Id<"threads">) {
@@ -804,11 +810,31 @@ function ChatInner() {
     setEditingRepo(false)
     setActiveFilePath(null)
     setTerminalOpen(false)
+    setView("chat")
+  }
+
+  function showSettings() {
+    setView("settings")
+    setActiveFilePath(null)
+    setTerminalOpen(false)
   }
 
   function deleteChat(id: Id<"threads">) {
+    setPendingDeleteId(id)
+  }
+
+  function confirmDeleteChat() {
+    const id = pendingDeleteId
+    if (!id) return
     void deleteThreadMutation({ threadId: id })
     if (activeId === id) setActiveId(null)
+    setPendingDeleteId(null)
+  }
+
+  function renameChat(id: Id<"threads">, title: string) {
+    const trimmed = title.trim()
+    if (!trimmed) return
+    void updateThread({ threadId: id, title: trimmed })
   }
 
   async function send(prompt: string) {
@@ -1114,17 +1140,42 @@ function ChatInner() {
     <div className="fixed inset-0 flex min-w-0 overflow-hidden bg-background text-foreground">
       {sidebarOpen ? (
         <Sidebar
-          authError={authError}
-          authStatus={authStatus}
           chats={chats}
           activeId={activeId}
+          currentView={view}
           onNewChat={startNewChat}
           onSelect={selectChat}
           onDelete={deleteChat}
+          onRename={renameChat}
+          onShowSettings={showSettings}
+        />
+      ) : null}
+
+      {pendingDeleteId ? (
+        <ConfirmDialog
+          title="Delete chat?"
+          description={
+            chats.find((c) => c.id === pendingDeleteId)?.title
+              ? `“${chats.find((c) => c.id === pendingDeleteId)?.title}” will be permanently deleted. This action cannot be undone.`
+              : "This chat will be permanently deleted. This action cannot be undone."
+          }
+          confirmLabel="Delete"
+          destructive
+          onCancel={() => setPendingDeleteId(null)}
+          onConfirm={confirmDeleteChat}
         />
       ) : null}
 
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        {view === "settings" ? (
+          <SettingsScreen
+            authStatus={authStatus}
+            authError={authError}
+            sidebarOpen={sidebarOpen}
+            onToggleSidebar={() => setSidebarOpen((v) => !v)}
+          />
+        ) : (
+          <>
         <TopBar
           title={active?.title ?? null}
           repoUrl={repoUrl}
@@ -1281,6 +1332,8 @@ function ChatInner() {
             </div>
           </form>
         </div>
+          </>
+        )}
       </div>
 
       <FileBrowser
@@ -1315,6 +1368,87 @@ function SignedOutScreen() {
               Sign in
             </button>
           </SignInButton>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SettingsScreen({
+  authStatus,
+  authError,
+  sidebarOpen,
+  onToggleSidebar,
+}: {
+  authStatus: AuthStatus | null
+  authError: string
+  sidebarOpen: boolean
+  onToggleSidebar: () => void
+}) {
+  const connected = Boolean(authStatus?.exists)
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="flex h-12 shrink-0 items-center gap-1.5 px-3">
+        <IconButton
+          onClick={onToggleSidebar}
+          aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+          title={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+        >
+          <PanelLeft className="size-[18px]" />
+        </IconButton>
+        <span className="text-sm text-foreground/80">Settings</span>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-2xl px-6 pt-10 pb-20">
+          <h1 className="text-3xl font-medium tracking-tight text-foreground/90">
+            Settings
+          </h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Manage connected accounts and integrations.
+          </p>
+
+          <div className="mt-10">
+            <h2 className="text-sm font-medium text-foreground/80">
+              Connections
+            </h2>
+            <div className="mt-3 rounded-2xl border border-border/70 bg-background">
+              <div className="flex items-center gap-3 px-4 py-4">
+                <div className="grid size-9 shrink-0 place-items-center rounded-full bg-muted text-foreground/80">
+                  {connected ? (
+                    <CheckCircle2 className="size-4 text-emerald-600" />
+                  ) : authError ? (
+                    <AlertCircle className="size-4 text-destructive" />
+                  ) : (
+                    <LogIn className="size-4" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-foreground/90">ChatGPT</div>
+                  <div className="text-xs text-muted-foreground">
+                    {connected
+                      ? "Connected. Codex runs are authorized with your ChatGPT account."
+                      : "Sign in with your ChatGPT account to authorize Codex runs."}
+                  </div>
+                  {authError ? (
+                    <div className="mt-1 text-[11px] leading-4 text-destructive">
+                      {authError}
+                    </div>
+                  ) : null}
+                </div>
+                <a
+                  href="/api/codex-auth/login"
+                  className={cn(
+                    "inline-flex h-8 shrink-0 items-center justify-center rounded-full px-3.5 text-xs font-medium transition-colors",
+                    connected
+                      ? "border border-border/70 text-foreground/80 hover:bg-muted"
+                      : "bg-foreground text-background hover:opacity-85"
+                  )}
+                >
+                  {connected ? "Reconnect" : "Connect"}
+                </a>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -2139,22 +2273,25 @@ function Stat({
 }
 
 function Sidebar({
-  authError,
-  authStatus,
   chats,
   activeId,
+  currentView,
   onNewChat,
   onSelect,
   onDelete,
+  onRename,
+  onShowSettings,
 }: {
-  authError: string
-  authStatus: AuthStatus | null
   chats: ChatRecord[]
   activeId: Id<"threads"> | null
+  currentView: "chat" | "settings"
   onNewChat: () => void
   onSelect: (id: Id<"threads">) => void
   onDelete: (id: Id<"threads">) => void
+  onRename: (id: Id<"threads">, title: string) => void
+  onShowSettings: () => void
 }) {
+  const clerk = useClerk()
   const groups = useMemo(() => {
     const map = new Map<string, ChatRecord[]>()
     for (const c of chats) {
@@ -2210,6 +2347,7 @@ function Sidebar({
                 activeId={activeId}
                 onSelect={onSelect}
                 onDelete={onDelete}
+                onRename={onRename}
               />
             ))}
           </div>
@@ -2217,30 +2355,27 @@ function Sidebar({
       </div>
 
       <div className="border-t border-border/60 p-3">
-        <div className="mb-2 flex items-center justify-between px-2.5">
-          <span className="text-xs text-muted-foreground">Signed in</span>
-          <UserButton />
-        </div>
-        <a
-          href="/api/codex-auth/login"
-          className="flex items-center gap-2 rounded-xl px-2.5 py-2 text-sm text-foreground/80 transition-colors hover:bg-muted"
-        >
-          {authStatus?.exists ? (
-            <CheckCircle2 className="size-4 text-emerald-600" />
-          ) : authError ? (
-            <AlertCircle className="size-4 text-destructive" />
-          ) : (
-            <LogIn className="size-4" />
+        <button
+          type="button"
+          onClick={onShowSettings}
+          className={cn(
+            "flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-sm transition-colors",
+            currentView === "settings"
+              ? "bg-muted text-foreground"
+              : "text-foreground/80 hover:bg-muted"
           )}
-          <span className="truncate">
-            {authStatus?.exists ? "ChatGPT connected" : "Sign in with ChatGPT"}
-          </span>
-        </a>
-        {authError ? (
-          <div className="mt-1 px-2.5 text-[11px] leading-4 text-destructive">
-            {authError}
-          </div>
-        ) : null}
+        >
+          <Settings className="size-4" />
+          <span className="truncate">Settings</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => clerk.openUserProfile()}
+          className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-sm text-foreground/80 transition-colors hover:bg-muted"
+        >
+          <User className="size-4" />
+          <span className="truncate">User</span>
+        </button>
       </div>
     </aside>
   )
@@ -2252,12 +2387,14 @@ function FolderGroup({
   activeId,
   onSelect,
   onDelete,
+  onRename,
 }: {
   label: string
   items: ChatRecord[]
   activeId: Id<"threads"> | null
   onSelect: (id: Id<"threads">) => void
   onDelete: (id: Id<"threads">) => void
+  onRename: (id: Id<"threads">, title: string) => void
 }) {
   const [open, setOpen] = useState(true)
 
@@ -2286,6 +2423,7 @@ function FolderGroup({
               active={c.id === activeId}
               onSelect={() => onSelect(c.id)}
               onDelete={() => onDelete(c.id)}
+              onRename={(title) => onRename(c.id, title)}
             />
           ))}
         </div>
@@ -2299,44 +2437,195 @@ function SidebarItem({
   active,
   onSelect,
   onDelete,
+  onRename,
 }: {
   chat: ChatRecord
   active: boolean
   onSelect: () => void
   onDelete: () => void
+  onRename: (title: string) => void
 }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(chat.title || "")
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+
+  function startRename() {
+    setDraft(chat.title || "")
+    setEditing(true)
+    setMenu(null)
+  }
+
+  function commit(value: string) {
+    const next = value.trim()
+    if (next && next !== chat.title) onRename(next)
+    setEditing(false)
+  }
+
   return (
     <div
+      onContextMenu={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        setMenu({ x: e.clientX, y: e.clientY })
+      }}
       className={cn(
-        "group/item flex items-center rounded-lg pr-1 transition-colors",
+        "group/item relative flex items-center rounded-lg pr-1 transition-colors",
         active ? "bg-muted" : "hover:bg-muted/60"
       )}
     >
-      <button
-        type="button"
-        onClick={onSelect}
-        className="min-w-0 flex-1 truncate px-2.5 py-1.5 text-left text-sm text-foreground/85"
-      >
-        {chat.title || "Untitled"}
-      </button>
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation()
-          onDelete()
+      {editing ? (
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={(e) => commit(e.target.value)}
+          onFocus={(e) => e.currentTarget.select()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault()
+              commit(e.currentTarget.value)
+            } else if (e.key === "Escape") {
+              e.preventDefault()
+              setEditing(false)
+            }
+          }}
+          onClick={(e) => e.stopPropagation()}
+          className="min-w-0 flex-1 truncate rounded-md bg-background px-2 py-1 text-sm text-foreground outline-none ring-1 ring-border focus:ring-foreground/40"
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={onSelect}
+          className="min-w-0 flex-1 truncate px-2.5 py-1.5 text-left text-sm text-foreground/85"
+        >
+          {chat.title || "Untitled"}
+        </button>
+      )}
+
+      {menu ? (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          items={[
+            { label: "Rename", onSelect: startRename },
+            { label: "Delete", onSelect: onDelete, destructive: true },
+          ]}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function ContextMenu({
+  x,
+  y,
+  items,
+  onClose,
+}: {
+  x: number
+  y: number
+  items: { label: string; onSelect: () => void; destructive?: boolean }[]
+  onClose: () => void
+}) {
+  return (
+    <>
+      <div
+        className="fixed inset-0 z-40"
+        onClick={onClose}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          onClose()
         }}
-        className="hidden size-6 shrink-0 place-items-center rounded-md text-muted-foreground group-hover/item:grid hover:bg-background hover:text-foreground"
-        aria-label="Delete chat"
+      />
+      <div
+        role="menu"
+        style={{ top: y, left: x }}
+        className="fixed z-50 min-w-44 overflow-hidden rounded-2xl border border-black/[0.06] bg-popover p-1.5 text-popover-foreground shadow-[0_10px_30px_-12px_rgba(0,0,0,0.18)] dark:border-white/10"
+        onClick={(e) => e.stopPropagation()}
       >
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-          <path
-            d="M3 3L9 9M9 3L3 9"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-          />
-        </svg>
-      </button>
+        {items.map((item) => (
+          <button
+            key={item.label}
+            type="button"
+            onClick={() => {
+              item.onSelect()
+              onClose()
+            }}
+            className={cn(
+              "flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-muted",
+              item.destructive &&
+                "text-destructive hover:bg-destructive/10 hover:text-destructive"
+            )}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+    </>
+  )
+}
+
+function ConfirmDialog({
+  title,
+  description,
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+  destructive,
+  onConfirm,
+  onCancel,
+}: {
+  title: string
+  description?: string
+  confirmLabel?: string
+  cancelLabel?: string
+  destructive?: boolean
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+      onClick={onCancel}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onCancel()
+        if (e.key === "Enter") onConfirm()
+      }}
+      role="dialog"
+      aria-modal="true"
+      tabIndex={-1}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-sm overflow-hidden rounded-2xl border border-black/[0.06] bg-popover p-5 text-popover-foreground shadow-[0_10px_30px_-12px_rgba(0,0,0,0.18)] dark:border-white/10"
+      >
+        <div className="text-base font-medium text-foreground">{title}</div>
+        {description ? (
+          <p className="mt-1.5 text-sm text-muted-foreground">{description}</p>
+        ) : null}
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-xl border border-border/70 px-3 py-1.5 text-sm text-foreground/80 transition-colors hover:bg-muted"
+          >
+            {cancelLabel}
+          </button>
+          <button
+            type="button"
+            autoFocus
+            onClick={onConfirm}
+            className={cn(
+              "rounded-xl px-3 py-1.5 text-sm transition-colors",
+              destructive
+                ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                : "bg-foreground text-background hover:bg-foreground/90"
+            )}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

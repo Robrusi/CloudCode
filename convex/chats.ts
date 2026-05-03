@@ -258,14 +258,18 @@ export const updateThread = mutation({
     model: v.optional(model),
     repoUrl: v.optional(v.string()),
     threadId: v.id("threads"),
+    title: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
     await requireOwnedThread(ctx, args.threadId, userId)
 
+    const trimmedTitle = args.title?.trim()
+
     await ctx.db.patch(args.threadId, {
       ...(args.model ? { model: args.model } : {}),
       ...(args.repoUrl ? { repoUrl: args.repoUrl } : {}),
+      ...(trimmedTitle ? { title: trimmedTitle } : {}),
       updatedAt: Date.now(),
     })
   },
