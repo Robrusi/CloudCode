@@ -1293,8 +1293,6 @@ function ChatInner() {
         onOpenFile={(p, mode) => {
           setActiveFilePath(p)
           setActiveFileMode(mode)
-          // Collapse the chat-list sidebar to give the editor more width.
-          setSidebarOpen(false)
         }}
       />
     </div>
@@ -2031,7 +2029,12 @@ function SandboxStatus({
     )
   }
 
-  const elapsed = info ? Math.max(0, now - info.startedAt) : 0
+  const elapsed = info
+    ? Math.max(
+        0,
+        (info.state === "paused" ? info.endAt : now) - info.startedAt
+      )
+    : 0
   const remaining = info ? Math.max(0, info.endAt - now) : 0
 
   const timeoutLabel = info?.state === "paused" ? "Paused" : "Idle timeout"
@@ -2052,11 +2055,13 @@ function SandboxStatus({
         value={timeoutValue}
         title={tooltip}
       />
-      <Stat
-        label="Running for"
-        value={info ? formatElapsed(elapsed) : "—"}
-        title={tooltip}
-      />
+      {info?.state === "paused" ? null : (
+        <Stat
+          label="Running for"
+          value={info ? formatElapsed(elapsed) : "—"}
+          title={tooltip}
+        />
+      )}
       <button
         type="button"
         onClick={handleSave}
