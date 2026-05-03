@@ -50,6 +50,7 @@ export async function POST(request: Request) {
       githubToken?: unknown
       model?: unknown
       previousDiff?: unknown
+      previousSandboxSnapshotId?: unknown
       profile?: unknown
       prompt?: unknown
       reasoningEffort?: unknown
@@ -112,6 +113,10 @@ export async function POST(request: Request) {
               previousDiff:
                 typeof body.previousDiff === "string"
                   ? body.previousDiff
+                  : undefined,
+              previousSandboxSnapshotId:
+                typeof body.previousSandboxSnapshotId === "string"
+                  ? body.previousSandboxSnapshotId
                   : undefined,
               prompt,
               reasoningEffort: parseReasoningEffort(body.reasoningEffort),

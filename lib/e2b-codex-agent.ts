@@ -4,8 +4,10 @@ const CODEX_HOME = "/home/user/.codex"
 const REPO_PATH = "/home/user/repo"
 const PROMPT_PATH = "/tmp/cloudcode-prompt.txt"
 const PREVIOUS_DIFF_PATH = "/tmp/cloudcode-previous.diff"
+const BASE_REF_PATH = "/tmp/cloudcode-base-ref.txt"
 const LAST_MESSAGE_PATH = "/tmp/cloudcode-last-message.txt"
 const CODEX_LAUNCHER_PATH = "/tmp/cloudcode-codex-latest"
+const SANDBOX_TEMPLATE = "codex"
 const EXIT_MARKER = "__CLOUDCODE_CODEX_EXIT__"
 const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60 * 1000
 const DEFAULT_SANDBOX_LIFETIME_MS = 60 * 60 * 1000
@@ -201,6 +203,7 @@ export type RunCodexInSandboxInput = {
   onLog?: (log: RunCodexLog) => void | Promise<void>
   model?: string
   previousDiff?: string
+  previousSandboxSnapshotId?: string
   prompt: string
   reasoningEffort?: ReasoningEffort
   resumeContext?: string
@@ -218,6 +221,7 @@ export type RunCodexInSandboxResult = {
   lastMessage: string
   repoUrl: string
   sandboxId: string
+  sandboxSnapshotId?: string
   stderr: string
   status: string
   stdout: string
@@ -314,6 +318,20 @@ function parseGitRef(value: string | undefined, label: string) {
   return normalized
 }
 
+function parseOpaqueId(value: string | undefined, label: string) {
+  const normalized = value?.trim()
+
+  if (!normalized) {
+    return undefined
+  }
+
+  if (!/^[a-zA-Z0-9._:-]{1,160}$/.test(normalized)) {
+    throw new Error(`${label} contains unsupported characters.`)
+  }
+
+  return normalized
+}
+
 function defaultBranchName() {
   const city = BRANCH_CITIES[Math.floor(Math.random() * BRANCH_CITIES.length)]
 
@@ -345,9 +363,42 @@ function defaultBranchNameWithSuffix() {
 }
 
 async function createSandbox(timeoutMs: number) {
-  return await Sandbox.create("codex", {
+  return await Sandbox.create(SANDBOX_TEMPLATE, {
     timeoutMs: Math.max(timeoutMs, DEFAULT_SANDBOX_LIFETIME_MS),
   })
+}
+
+async function createSandboxFromSnapshot(
+  snapshotId: string,
+  timeoutMs: number
+) {
+  return await Sandbox.create(snapshotId, {
+    timeoutMs: Math.max(timeoutMs, DEFAULT_SANDBOX_LIFETIME_MS),
+  })
+}
+
+async function createRestoredOrFreshSandbox(
+  snapshotId: string | undefined,
+  timeoutMs: number
+) {
+  if (snapshotId) {
+    try {
+      return {
+        restoredFromSnapshot: true,
+        sandbox: await createSandboxFromSnapshot(snapshotId, timeoutMs),
+      }
+    } catch {
+      return {
+        restoredFromSnapshot: false,
+        sandbox: await createSandbox(timeoutMs),
+      }
+    }
+  }
+
+  return {
+    restoredFromSnapshot: false,
+    sandbox: await createSandbox(timeoutMs),
+  }
 }
 
 async function createBranch(
@@ -396,19 +447,39 @@ async function createDefaultBranch(
 
 async function connectOrCreateSandbox(
   sandboxId: string | undefined,
+  snapshotId: string | undefined,
   timeoutMs: number
 ) {
   if (!sandboxId) {
-    return { recoveredSandbox: false, sandbox: await createSandbox(timeoutMs) }
+    const { restoredFromSnapshot, sandbox } = await createRestoredOrFreshSandbox(
+      snapshotId,
+      timeoutMs
+    )
+
+    return {
+      recoveredSandbox: false,
+      restoredFromSnapshot,
+      sandbox,
+    }
   }
 
   try {
     return {
       recoveredSandbox: false,
+      restoredFromSnapshot: false,
       sandbox: await Sandbox.connect(sandboxId),
     }
   } catch {
-    return { recoveredSandbox: true, sandbox: await createSandbox(timeoutMs) }
+    const { restoredFromSnapshot, sandbox } = await createRestoredOrFreshSandbox(
+      snapshotId,
+      timeoutMs
+    )
+
+    return {
+      recoveredSandbox: true,
+      restoredFromSnapshot,
+      sandbox,
+    }
   }
 }
 
@@ -699,11 +770,57 @@ function redactAuthPathOutput(result: CommandResult) {
 
 function restoredConversationPrompt(context: string, prompt: string) {
   return [
-    "The previous sandbox expired, so this is a fresh sandbox. The saved git diff has already been applied. Use this handoff as the current task state and continue from it.",
+    "The previous sandbox expired, so this is a fresh sandbox. Previous sandbox state has been restored when available. Use this handoff as the current task state and continue from it.",
     context.trim(),
     "Current user request:",
     prompt,
   ].join("\n\n")
+}
+
+async function writeBaseRef(sandbox: Sandbox) {
+  const result = await sandbox.commands.run(
+    `git -C ${REPO_PATH} rev-parse HEAD`,
+    {
+      timeoutMs: 10_000,
+    }
+  )
+  await sandbox.files.write(BASE_REF_PATH, result.stdout.trim())
+}
+
+async function cleanupRunFiles(sandbox: Sandbox) {
+  await sandbox.commands
+    .run(
+      `rm -f ${CODEX_HOME}/auth.json ${PROMPT_PATH} ${PREVIOUS_DIFF_PATH} ${LAST_MESSAGE_PATH}`,
+      {
+        timeoutMs: 10_000,
+      }
+    )
+    .catch(() => undefined)
+}
+
+async function createSandboxSnapshot(
+  sandbox: Sandbox,
+  input: RunCodexInSandboxInput
+) {
+  await emitLog(input, {
+    kind: "command",
+    message: "snapshot sandbox",
+  })
+
+  try {
+    const snapshot = await sandbox.createSnapshot()
+    return snapshot.snapshotId
+  } catch (error) {
+    await emitLog(input, {
+      kind: "stderr",
+      message:
+        error instanceof Error
+          ? compactLine(error.message)
+          : "Unable to snapshot sandbox.",
+    })
+  }
+
+  return undefined
 }
 
 export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
@@ -720,19 +837,31 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     input.codexThreadId,
     "codexThreadId"
   )
-  await emitLog(input, {
-    kind: "setup",
-    message: input.sandboxId ? "Connecting to sandbox" : "Creating sandbox",
-  })
-  const { recoveredSandbox, sandbox } = await connectOrCreateSandbox(
-    input.sandboxId,
-    timeoutMs
+  const previousSandboxSnapshotId = parseOpaqueId(
+    input.previousSandboxSnapshotId,
+    "previousSandboxSnapshotId"
   )
   await emitLog(input, {
     kind: "setup",
-    message: recoveredSandbox
-      ? "Recovered with a fresh sandbox"
-      : "Sandbox ready",
+    message: input.sandboxId
+      ? "Connecting to sandbox"
+      : previousSandboxSnapshotId
+        ? "Creating sandbox from snapshot"
+        : "Creating sandbox",
+  })
+  const { recoveredSandbox, restoredFromSnapshot, sandbox } =
+    await connectOrCreateSandbox(
+      input.sandboxId,
+      previousSandboxSnapshotId,
+      timeoutMs
+    )
+  await emitLog(input, {
+    kind: "setup",
+    message: restoredFromSnapshot
+      ? "Sandbox restored from previous snapshot"
+      : recoveredSandbox
+        ? "Recovered with a fresh sandbox"
+        : "Sandbox ready",
     detail: sandbox.sandboxId,
   })
   await sandbox.setTimeout(
@@ -767,7 +896,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       `chmod 600 ${CODEX_HOME}/auth.json ${PROMPT_PATH}`
     )
 
-    if (!input.sandboxId || recoveredSandbox) {
+    if ((!input.sandboxId || recoveredSandbox) && !restoredFromSnapshot) {
       await emitLog(input, {
         kind: "command",
         message: `git clone ${repoUrl}`,
@@ -785,6 +914,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       } else {
         branchName = await createDefaultBranch(sandbox, input, branchName)
       }
+      await writeBaseRef(sandbox)
       if (input.previousDiff?.trim()) {
         await emitLog(input, {
           kind: "command",
@@ -955,10 +1085,13 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     )
     stdoutLogger.flush()
 
-    await emitLog(input, { kind: "command", message: "git diff --binary HEAD" })
+    await emitLog(input, {
+      kind: "command",
+      message: "git diff --binary base",
+    })
     const diff = (
       await sandbox.commands.run(
-        `git -C ${REPO_PATH} add -N . >/dev/null 2>&1 || true; git -C ${REPO_PATH} diff --binary HEAD`,
+        `base_ref=$(cat ${BASE_REF_PATH} 2>/dev/null || git -C ${REPO_PATH} rev-parse HEAD); git -C ${REPO_PATH} add -N . >/dev/null 2>&1 || true; git -C ${REPO_PATH} diff --binary "$base_ref"`,
         {
           timeoutMs: 60_000,
         }
@@ -983,29 +1116,27 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
           ? "Codex run completed"
           : `Codex exited with code ${result.exitCode}`,
     })
+    const lastMessage = await readLastMessage(sandbox)
+    const updatedAuthJson = await sandbox.files.read(`${CODEX_HOME}/auth.json`)
+    await cleanupRunFiles(sandbox)
+    const sandboxSnapshotId = await createSandboxSnapshot(sandbox, input)
 
     return {
       branchName,
       codexThreadId,
       diff,
       exitCode: result.exitCode,
-      lastMessage: await readLastMessage(sandbox),
+      lastMessage,
       repoUrl,
       sandboxId: sandbox.sandboxId,
+      sandboxSnapshotId,
       stderr: result.stderr,
       status,
       stdout: result.stdout,
-      updatedAuthJson: await sandbox.files.read(`${CODEX_HOME}/auth.json`),
+      updatedAuthJson,
       recoveredSandbox,
     } satisfies RunCodexInSandboxResult
   } finally {
-    await sandbox.commands
-      .run(
-        `rm -f ${CODEX_HOME}/auth.json ${PROMPT_PATH} ${PREVIOUS_DIFF_PATH} ${LAST_MESSAGE_PATH}`,
-        {
-          timeoutMs: 10_000,
-        }
-      )
-      .catch(() => undefined)
+    await cleanupRunFiles(sandbox)
   }
 }

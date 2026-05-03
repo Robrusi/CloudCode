@@ -31,27 +31,17 @@ export async function POST(request: Request) {
       )
       .catch(() => undefined)
     const snapshot = await sandbox.createSnapshot()
-    const killed = await Sandbox.kill(sandboxId)
+
     return NextResponse.json({
-      killed,
       sandboxSnapshotId: snapshot.snapshotId,
     })
   } catch (error) {
-    try {
-      const killed = await Sandbox.kill(sandboxId)
-      return NextResponse.json({
-        killed,
-        snapshotError:
+    return NextResponse.json(
+      {
+        error:
           error instanceof Error ? error.message : "Failed to snapshot sandbox",
-      })
-    } catch {
-      return NextResponse.json(
-        {
-          error:
-            error instanceof Error ? error.message : "Failed to kill sandbox",
-        },
-        { status: 500 }
-      )
-    }
+      },
+      { status: 500 }
+    )
   }
 }
