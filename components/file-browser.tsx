@@ -109,6 +109,7 @@ const TREE_SCROLLBAR_CSS = `
 
 export function FileBrowser({
   sandboxId,
+  sandboxSnapshotId,
   open,
   diff,
   activePath,
@@ -116,6 +117,7 @@ export function FileBrowser({
   onOpenFile,
 }: {
   sandboxId: string | null
+  sandboxSnapshotId: string | null
   open: boolean
   diff?: string
   /**
@@ -305,8 +307,13 @@ export function FileBrowser({
   }, [activePath, model])
 
   const fetchList = useCallback(async () => {
-    if (!sandboxId) return
-    const cached = fileListCache.get(sandboxId)
+    const sourceKey = sandboxId
+      ? `sandbox:${sandboxId}`
+      : sandboxSnapshotId
+        ? `snapshot:${sandboxSnapshotId}`
+        : null
+    if (!sourceKey) return
+    const cached = fileListCache.get(sourceKey)
     if (cached) {
       setEntries(cached.entries)
       setTruncated(cached.truncated)
@@ -315,7 +322,10 @@ export function FileBrowser({
     setError(null)
     try {
       const res = await fetch(
-        `/api/sandbox/files/list?sandboxId=${encodeURIComponent(sandboxId)}`,
+        `/api/sandbox/files/list?${new URLSearchParams({
+          ...(sandboxId ? { sandboxId } : {}),
+          ...(sandboxSnapshotId ? { snapshotId: sandboxSnapshotId } : {}),
+        })}`,
         { cache: "no-store" }
       )
       const data: ListResponse = await res.json()
@@ -324,7 +334,7 @@ export function FileBrowser({
       }
       const nextEntries = data.entries ?? []
       const nextTruncated = Boolean(data.truncated)
-      fileListCache.set(sandboxId, {
+      fileListCache.set(sourceKey, {
         entries: nextEntries,
         truncated: nextTruncated,
       })
@@ -338,13 +348,13 @@ export function FileBrowser({
     } finally {
       setLoading(false)
     }
-  }, [sandboxId])
+  }, [sandboxId, sandboxSnapshotId])
 
   useEffect(() => {
-    if (!open || !sandboxId) return
+    if (!open || (!sandboxId && !sandboxSnapshotId)) return
     const id = window.setTimeout(() => void fetchList(), 0)
     return () => window.clearTimeout(id)
-  }, [open, sandboxId, fetchList])
+  }, [open, sandboxId, sandboxSnapshotId, fetchList])
 
   if (!open) return null
 
@@ -385,8 +395,8 @@ export function FileBrowser({
       </div>
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        {!sandboxId ? (
-          <EmptyState message="No active sandbox." />
+        {!sandboxId && !sandboxSnapshotId ? (
+          <EmptyState message="No sandbox snapshot." />
         ) : error ? (
           <EmptyState
             message={error}

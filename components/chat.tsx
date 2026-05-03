@@ -23,6 +23,7 @@ import {
   LogIn,
   Loader2,
   PanelLeft,
+  Pause,
   Plus,
   ScrollText,
   Save,
@@ -675,7 +676,9 @@ function ChatInner() {
     () => chats.find((c) => c.id === activeId) ?? null,
     [chats, activeId]
   )
-  const terminalVisible = terminalOpen && Boolean(active?.sandboxId)
+  const activeSandboxId = active?.sandboxId ?? null
+  const activeSandboxSnapshotId = active?.sandboxSnapshotId ?? null
+  const terminalVisible = terminalOpen && Boolean(activeSandboxId)
 
   const repoUrl = active ? active.repoUrl : draftRepo
   const model = active ? active.model : draftModel
@@ -738,8 +741,8 @@ function ChatInner() {
   }, [messages.length, activeId, runLogs])
 
   useEffect(() => {
-    warmBrowserTerminal(active?.sandboxId)
-  }, [active?.sandboxId])
+    warmBrowserTerminal(activeSandboxId)
+  }, [activeSandboxId])
 
   function appendRunLog(
     messageId: Id<"messages">,
@@ -1057,6 +1060,44 @@ function ChatInner() {
     })
   }
 
+  async function pauseActiveSandbox() {
+    if (!active) return
+    const sandboxId =
+      threadRunStateRef.current[active.id as string]?.sandboxId ??
+      active.sandboxId
+    if (!sandboxId) return
+    setTerminalOpen(false)
+    closeBrowserTerminalSession(sandboxId)
+
+    const response = await fetch("/api/sandbox/pause", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sandboxId }),
+    })
+    const data = (await response.json().catch(() => undefined)) as
+      | { error?: unknown; sandboxSnapshotId?: unknown }
+      | undefined
+
+    if (!response.ok) {
+      throw new Error(
+        typeof data?.error === "string"
+          ? data.error
+          : "Failed to pause sandbox."
+      )
+    }
+
+    if (typeof data?.sandboxSnapshotId === "string") {
+      threadRunStateRef.current[active.id as string] = {
+        ...threadRunStateRef.current[active.id as string],
+        sandboxSnapshotId: data.sandboxSnapshotId,
+      }
+      await saveRunState({
+        sandboxSnapshotId: data.sandboxSnapshotId,
+        threadId: active.id,
+      })
+    }
+  }
+
   function onSubmit(e: FormEvent) {
     e.preventDefault()
     send(input)
@@ -1088,8 +1129,10 @@ function ChatInner() {
           title={active?.title ?? null}
           repoUrl={repoUrl}
           isNew={!active}
-          sandboxId={active?.sandboxId ?? null}
+          sandboxId={activeSandboxId}
+          sandboxSnapshotId={activeSandboxSnapshotId}
           onKillSandbox={killActiveSandbox}
+          onPauseSandbox={pauseActiveSandbox}
           onSaveSandbox={saveActiveSandbox}
           filesOpen={filesOpen}
           onToggleFiles={() => setFilesOpen((v) => !v)}
@@ -1100,7 +1143,8 @@ function ChatInner() {
         />
         {activeFilePath ? (
           <FileEditorPanel
-            sandboxId={active?.sandboxId ?? null}
+            sandboxId={activeSandboxId}
+            sandboxSnapshotId={activeSandboxSnapshotId}
             activePath={activeFilePath}
             diff={activeDiff ?? undefined}
             mode={activeFileMode}
@@ -1136,7 +1180,7 @@ function ChatInner() {
 
         <SandboxTerminalPanel
           open={terminalVisible}
-          sandboxId={active?.sandboxId ?? null}
+          sandboxId={activeSandboxId}
           onClose={() => setTerminalOpen(false)}
           height={terminalHeight}
           onHeightChange={setTerminalHeight}
@@ -1240,8 +1284,9 @@ function ChatInner() {
       </div>
 
       <FileBrowser
-        open={filesOpen && Boolean(active?.sandboxId)}
-        sandboxId={active?.sandboxId ?? null}
+        open={filesOpen && Boolean(activeSandboxId || activeSandboxSnapshotId)}
+        sandboxId={activeSandboxId}
+        sandboxSnapshotId={activeSandboxSnapshotId}
         diff={activeDiff ?? undefined}
         activePath={activeFilePath}
         onClose={() => setFilesOpen(false)}
@@ -1283,7 +1328,9 @@ function TopBar({
   repoUrl,
   isNew,
   sandboxId,
+  sandboxSnapshotId,
   onKillSandbox,
+  onPauseSandbox,
   onSaveSandbox,
   filesOpen,
   onToggleFiles,
@@ -1296,7 +1343,9 @@ function TopBar({
   repoUrl: string
   isNew: boolean
   sandboxId: string | null
+  sandboxSnapshotId: string | null
   onKillSandbox: () => void | Promise<void>
+  onPauseSandbox: () => void | Promise<void>
   onSaveSandbox: () => void | Promise<void>
   filesOpen: boolean
   onToggleFiles: () => void
@@ -1338,6 +1387,7 @@ function TopBar({
           <SandboxStatus
             sandboxId={sandboxId}
             onKill={onKillSandbox}
+            onPause={onPauseSandbox}
             onSave={onSaveSandbox}
             hideActions={filesOpen}
           />
@@ -1362,7 +1412,7 @@ function TopBar({
           onClick={onToggleFiles}
           aria-label={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
           title={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
-          disabled={!sandboxId}
+          disabled={!sandboxId && !sandboxSnapshotId}
           className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
         >
           {filesOpen ? (
@@ -1837,6 +1887,7 @@ function SandboxTerminalPanel({
 type SandboxInfo = {
   startedAt: number
   endAt: number
+  state: "running" | "paused"
 }
 
 function formatCountdown(ms: number) {
@@ -1869,17 +1920,20 @@ function formatElapsed(ms: number) {
 function SandboxStatus({
   sandboxId,
   onKill,
+  onPause,
   onSave,
   hideActions = false,
 }: {
   sandboxId: string
   onKill: () => void | Promise<void>
+  onPause: () => void | Promise<void>
   onSave: () => void | Promise<void>
   hideActions?: boolean
 }) {
   const [info, setInfo] = useState<SandboxInfo | null>(null)
   const [missing, setMissing] = useState(false)
   const [killing, setKilling] = useState(false)
+  const [pausing, setPausing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [now, setNow] = useState(() => Date.now())
@@ -1901,7 +1955,11 @@ function SandboxStatus({
           return
         }
         setMissing(false)
-        setInfo({ startedAt: data.startedAt, endAt: data.endAt })
+        setInfo({
+          startedAt: data.startedAt,
+          endAt: data.endAt,
+          state: data.state === "paused" ? "paused" : "running",
+        })
       } catch {
         if (!cancelled) setMissing(true)
       }
@@ -1926,7 +1984,7 @@ function SandboxStatus({
   }, [])
 
   async function handleKill() {
-    if (killing || saving) return
+    if (killing || pausing || saving) return
     setKilling(true)
     try {
       await onKill()
@@ -1935,8 +1993,27 @@ function SandboxStatus({
     }
   }
 
+  async function handlePause() {
+    if (killing || pausing || saving || info?.state === "paused") return
+    setPausing(true)
+    try {
+      await onPause()
+      setInfo((current) =>
+        current
+          ? {
+              ...current,
+              state: "paused",
+              endAt: Date.now(),
+            }
+          : current
+      )
+    } finally {
+      setPausing(false)
+    }
+  }
+
   async function handleSave() {
-    if (saving || killing) return
+    if (saving || killing || pausing) return
     setSaving(true)
     setSaved(false)
     try {
@@ -1957,15 +2034,22 @@ function SandboxStatus({
   const elapsed = info ? Math.max(0, now - info.startedAt) : 0
   const remaining = info ? Math.max(0, info.endAt - now) : 0
 
+  const timeoutLabel = info?.state === "paused" ? "Paused" : "Idle timeout"
+  const timeoutValue =
+    info?.state === "paused"
+      ? "Sleeping"
+      : info
+        ? formatCountdown(remaining)
+        : "—"
   const tooltip = info
-    ? `Sandbox ${sandboxId}\nStarted ${new Date(info.startedAt).toLocaleString()}\nExpires ${new Date(info.endAt).toLocaleString()}`
+    ? `Sandbox ${sandboxId}\nState ${info.state}\nStarted ${new Date(info.startedAt).toLocaleString()}\nIdles out ${new Date(info.endAt).toLocaleString()}`
     : `Sandbox ${sandboxId}`
 
   return (
     <div className="flex items-center gap-6">
       <Stat
-        label="Timeout in"
-        value={info ? formatCountdown(remaining) : "—"}
+        label={timeoutLabel}
+        value={timeoutValue}
         title={tooltip}
       />
       <Stat
@@ -1976,7 +2060,7 @@ function SandboxStatus({
       <button
         type="button"
         onClick={handleSave}
-        disabled={saving || killing}
+        disabled={saving || killing || pausing}
         aria-label="Save sandbox"
         title="Save sandbox"
         className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
@@ -1994,8 +2078,25 @@ function SandboxStatus({
       </button>
       <button
         type="button"
+        onClick={handlePause}
+        disabled={pausing || saving || killing || info?.state === "paused"}
+        aria-label="Pause sandbox"
+        title="Pause sandbox"
+        className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+      >
+        {pausing ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <Pause className="size-3.5" />
+        )}
+        {hideActions ? null : (
+          <span>{pausing ? "Pausing" : "Pause sandbox"}</span>
+        )}
+      </button>
+      <button
+        type="button"
         onClick={handleKill}
-        disabled={killing || saving}
+        disabled={killing || saving || pausing}
         aria-label="Kill sandbox"
         title="Kill sandbox"
         className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-destructive disabled:opacity-50"

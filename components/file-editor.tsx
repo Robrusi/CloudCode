@@ -141,6 +141,7 @@ const DEFAULT_PANEL_WIDTH = 640
 
 export function FileEditorPanel({
   sandboxId,
+  sandboxSnapshotId,
   activePath,
   diff,
   mode = "file",
@@ -148,6 +149,7 @@ export function FileEditorPanel({
   placement = "side",
 }: {
   sandboxId: string | null
+  sandboxSnapshotId: string | null
   activePath: string | null
   diff?: string
   mode?: "diff" | "file"
@@ -243,10 +245,13 @@ export function FileEditorPanel({
         >
           {basename(activePath)}
         </span>
-        {sandboxId && mode === "file" && isImagePath(activePath) ? (
+        {(sandboxId || sandboxSnapshotId) &&
+        mode === "file" &&
+        isImagePath(activePath) ? (
           <ImageDimensionsLabel
-            key={`${sandboxId}:${activePath}`}
+            key={`${sandboxId ?? sandboxSnapshotId}:${activePath}`}
             sandboxId={sandboxId}
+            sandboxSnapshotId={sandboxSnapshotId}
             path={activePath}
           />
         ) : null}
@@ -279,10 +284,11 @@ export function FileEditorPanel({
         <FileViewer
           // Remount per (sandbox, file) so each viewer starts crisp without
           // effect-driven state resets.
-          key={`${mode}:${sandboxId ?? ""}:${activePath}`}
+          key={`${mode}:${sandboxId ?? ""}:${sandboxSnapshotId ?? ""}:${activePath}`}
           fileDiff={fileDiff}
           mode={mode}
           sandboxId={sandboxId}
+          sandboxSnapshotId={sandboxSnapshotId}
           path={activePath}
         />
       </div>
@@ -294,11 +300,13 @@ function FileViewer({
   fileDiff,
   mode,
   sandboxId,
+  sandboxSnapshotId,
   path,
 }: {
   fileDiff?: FileDiffMetadata
   mode: "diff" | "file"
   sandboxId: string | null
+  sandboxSnapshotId: string | null
   path: string
 }) {
   const imagePreview = useMemo(() => isImagePath(path), [path])
@@ -310,14 +318,19 @@ function FileViewer({
   const themeType: ThemeTypes = resolvedTheme === "dark" ? "dark" : "light"
 
   useEffect(() => {
-    if (mode === "diff" || !sandboxId || imagePreview) return
+    if (mode === "diff" || (!sandboxId && !sandboxSnapshotId) || imagePreview) {
+      return
+    }
     let cancelled = false
     void (async () => {
       try {
+        const params = new URLSearchParams({
+          path,
+          ...(sandboxId ? { sandboxId } : {}),
+          ...(sandboxSnapshotId ? { snapshotId: sandboxSnapshotId } : {}),
+        })
         const res = await fetch(
-          `/api/sandbox/files/read?sandboxId=${encodeURIComponent(
-            sandboxId
-          )}&path=${encodeURIComponent(path)}`,
+          `/api/sandbox/files/read?${params}`,
           { cache: "no-store" }
         )
         const data: ReadResponse = await res.json()
@@ -336,7 +349,7 @@ function FileViewer({
     return () => {
       cancelled = true
     }
-  }, [imagePreview, mode, sandboxId, path])
+  }, [imagePreview, mode, sandboxId, sandboxSnapshotId, path])
 
   const language = useMemo(() => getPierreLanguageFromPath(path), [path])
 
@@ -414,15 +427,21 @@ function FileViewer({
   )
 
   if (imagePreview) {
-    if (!sandboxId) {
+    if (!sandboxId && !sandboxSnapshotId) {
       return (
         <div className="flex h-full flex-col items-center justify-center gap-2 bg-background px-6 text-center">
-          <p className="text-xs text-destructive">No active sandbox.</p>
+          <p className="text-xs text-destructive">No sandbox snapshot.</p>
         </div>
       )
     }
 
-    return <ImageViewer sandboxId={sandboxId} path={path} />
+    return (
+      <ImageViewer
+        sandboxId={sandboxId}
+        sandboxSnapshotId={sandboxSnapshotId}
+        path={path}
+      />
+    )
   }
 
   if (mode === "diff") {
@@ -448,10 +467,10 @@ function FileViewer({
     )
   }
 
-  if (!sandboxId) {
+  if (!sandboxId && !sandboxSnapshotId) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 bg-background px-6 text-center">
-        <p className="text-xs text-destructive">No active sandbox.</p>
+        <p className="text-xs text-destructive">No sandbox snapshot.</p>
       </div>
     )
   }
@@ -504,9 +523,11 @@ function FileViewer({
 
 function ImageDimensionsLabel({
   sandboxId,
+  sandboxSnapshotId,
   path,
 }: {
-  sandboxId: string
+  sandboxId: string | null
+  sandboxSnapshotId: string | null
   path: string
 }) {
   const [dimensions, setDimensions] = useState<{
@@ -527,16 +548,20 @@ function ImageDimensionsLabel({
     image.onerror = () => {
       if (!cancelled) setDimensions(null)
     }
-    image.src = `/api/sandbox/files/read?sandboxId=${encodeURIComponent(
-      sandboxId
-    )}&path=${encodeURIComponent(path)}&format=raw`
+    const params = new URLSearchParams({
+      path,
+      format: "raw",
+      ...(sandboxId ? { sandboxId } : {}),
+      ...(sandboxSnapshotId ? { snapshotId: sandboxSnapshotId } : {}),
+    })
+    image.src = `/api/sandbox/files/read?${params}`
 
     return () => {
       cancelled = true
       image.onload = null
       image.onerror = null
     }
-  }, [path, sandboxId])
+  }, [path, sandboxId, sandboxSnapshotId])
 
   if (!dimensions) return null
 
@@ -549,20 +574,27 @@ function ImageDimensionsLabel({
 
 function ImageViewer({
   sandboxId,
+  sandboxSnapshotId,
   path,
 }: {
-  sandboxId: string
+  sandboxId: string | null
+  sandboxSnapshotId: string | null
   path: string
 }) {
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState(false)
 
   const src = useMemo(
-    () =>
-      `/api/sandbox/files/read?sandboxId=${encodeURIComponent(
-        sandboxId
-      )}&path=${encodeURIComponent(path)}&format=raw`,
-    [path, sandboxId]
+    () => {
+      const params = new URLSearchParams({
+        path,
+        format: "raw",
+        ...(sandboxId ? { sandboxId } : {}),
+        ...(sandboxSnapshotId ? { snapshotId: sandboxSnapshotId } : {}),
+      })
+      return `/api/sandbox/files/read?${params}`
+    },
+    [path, sandboxId, sandboxSnapshotId]
   )
 
   if (error) {

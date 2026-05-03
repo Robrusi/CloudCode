@@ -15,6 +15,7 @@ export async function GET(request: Request) {
     const info = await Sandbox.getInfo(sandboxId)
     return NextResponse.json({
       sandboxId,
+      state: info.state,
       startedAt: info.startedAt instanceof Date
         ? info.startedAt.getTime()
         : new Date(info.startedAt).getTime(),

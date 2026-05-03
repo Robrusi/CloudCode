@@ -1,10 +1,8 @@
 import { Sandbox } from "e2b"
 import { NextResponse } from "next/server"
 
-import { refreshSandboxInactivityTimeout } from "@/lib/e2b-sandbox-timeout"
-
 export const runtime = "nodejs"
-export const maxDuration = 300
+export const maxDuration = 60
 
 const CODEX_HOME = "/home/user/.codex"
 const PROMPT_PATH = "/tmp/cloudcode-prompt.txt"
@@ -26,7 +24,6 @@ export async function POST(request: Request) {
 
   try {
     const sandbox = await Sandbox.connect(sandboxId)
-    await refreshSandboxInactivityTimeout(sandbox)
     await sandbox.commands
       .run(
         `rm -f ${CODEX_HOME}/auth.json ${PROMPT_PATH} ${PREVIOUS_DIFF_PATH} ${LAST_MESSAGE_PATH}`,
@@ -34,15 +31,17 @@ export async function POST(request: Request) {
       )
       .catch(() => undefined)
     const snapshot = await sandbox.createSnapshot()
-
+    const paused = await sandbox.pause()
     return NextResponse.json({
+      paused,
+      sandboxId,
       sandboxSnapshotId: snapshot.snapshotId,
     })
   } catch (error) {
     return NextResponse.json(
       {
         error:
-          error instanceof Error ? error.message : "Failed to snapshot sandbox",
+          error instanceof Error ? error.message : "Failed to pause sandbox",
       },
       { status: 500 }
     )

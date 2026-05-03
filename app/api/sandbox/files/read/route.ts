@@ -1,5 +1,7 @@
-import { Sandbox } from "e2b"
 import { NextResponse } from "next/server"
+
+import { withReadableSandbox } from "@/lib/e2b-sandbox-files"
+import { refreshSandboxInactivityTimeout } from "@/lib/e2b-sandbox-timeout"
 
 export const runtime = "nodejs"
 
@@ -27,12 +29,13 @@ function getImageContentType(path: string) {
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const sandboxId = searchParams.get("sandboxId")
+  const snapshotId = searchParams.get("snapshotId")
   const relPath = searchParams.get("path")
   const format = searchParams.get("format")
 
-  if (!sandboxId || !relPath) {
+  if ((!sandboxId && !snapshotId) || !relPath) {
     return NextResponse.json(
-      { error: "sandboxId and path required" },
+      { error: "sandboxId or snapshotId, and path required" },
       { status: 400 }
     )
   }
@@ -46,59 +49,68 @@ export async function GET(request: Request) {
   const fullPath = `${REPO_PATH}/${cleaned}`
 
   try {
-    const sandbox = await Sandbox.connect(sandboxId)
-    const info = await sandbox.files.getInfo(fullPath)
-    if (format === "raw") {
-      const contentType = getImageContentType(cleaned)
-      if (!contentType) {
-        return NextResponse.json(
-          { error: "raw preview is only supported for images" },
-          { status: 415 }
-        )
-      }
-      if (info.size > MAX_RAW_BYTES) {
+    return await withReadableSandbox(
+      { sandboxId, snapshotId },
+      async (sandbox, source) => {
+        if (source === "sandbox") {
+          await refreshSandboxInactivityTimeout(sandbox)
+        }
+        const info = await sandbox.files.getInfo(fullPath)
+        if (format === "raw") {
+          const contentType = getImageContentType(cleaned)
+          if (!contentType) {
+            return NextResponse.json(
+              { error: "raw preview is only supported for images" },
+              { status: 415 }
+            )
+          }
+          if (info.size > MAX_RAW_BYTES) {
+            return NextResponse.json(
+              {
+                error: `Image too large (${info.size} bytes). Max ${MAX_RAW_BYTES} bytes.`,
+                tooLarge: true,
+                size: info.size,
+              },
+              { status: 413 }
+            )
+          }
+
+          const bytes = await sandbox.files.read(fullPath, { format: "bytes" })
+          const body = new ArrayBuffer(bytes.byteLength)
+          new Uint8Array(body).set(bytes)
+          return new NextResponse(new Blob([body], { type: contentType }), {
+            headers: {
+              "Cache-Control": "no-store",
+              "Content-Length": String(info.size),
+              "Content-Type": contentType,
+            },
+          })
+        }
+
+        if (info.size > MAX_BYTES) {
+          return NextResponse.json(
+            {
+              error: `File too large (${info.size} bytes). Max ${MAX_BYTES} bytes.`,
+              tooLarge: true,
+              size: info.size,
+            },
+            { status: 413 }
+          )
+        }
+        const content = await sandbox.files.read(fullPath, { format: "text" })
         return NextResponse.json(
           {
-            error: `Image too large (${info.size} bytes). Max ${MAX_RAW_BYTES} bytes.`,
-            tooLarge: true,
+            path: cleaned,
+            content,
             size: info.size,
-          },
-          { status: 413 }
+            modifiedTime:
+              info.modifiedTime instanceof Date
+                ? info.modifiedTime.toISOString()
+                : info.modifiedTime ?? null,
+          }
         )
       }
-
-      const bytes = await sandbox.files.read(fullPath, { format: "bytes" })
-      const body = new ArrayBuffer(bytes.byteLength)
-      new Uint8Array(body).set(bytes)
-      return new NextResponse(new Blob([body], { type: contentType }), {
-        headers: {
-          "Cache-Control": "no-store",
-          "Content-Length": String(info.size),
-          "Content-Type": contentType,
-        },
-      })
-    }
-
-    if (info.size > MAX_BYTES) {
-      return NextResponse.json(
-        {
-          error: `File too large (${info.size} bytes). Max ${MAX_BYTES} bytes.`,
-          tooLarge: true,
-          size: info.size,
-        },
-        { status: 413 }
-      )
-    }
-    const content = await sandbox.files.read(fullPath, { format: "text" })
-    return NextResponse.json({
-      path: cleaned,
-      content,
-      size: info.size,
-      modifiedTime:
-        info.modifiedTime instanceof Date
-          ? info.modifiedTime.toISOString()
-          : info.modifiedTime ?? null,
-    })
+    )
   } catch (error) {
     return NextResponse.json(
       {

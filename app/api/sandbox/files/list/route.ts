@@ -1,5 +1,7 @@
-import { Sandbox } from "e2b"
 import { NextResponse } from "next/server"
+
+import { withReadableSandbox } from "@/lib/e2b-sandbox-files"
+import { refreshSandboxInactivityTimeout } from "@/lib/e2b-sandbox-timeout"
 
 export const runtime = "nodejs"
 
@@ -45,30 +47,44 @@ function toEntries(stdout: string) {
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const sandboxId = searchParams.get("sandboxId")
+  const snapshotId = searchParams.get("snapshotId")
   const root = searchParams.get("root") || REPO_PATH
 
-  if (!sandboxId) {
-    return NextResponse.json({ error: "sandboxId required" }, { status: 400 })
+  if (!sandboxId && !snapshotId) {
+    return NextResponse.json(
+      { error: "sandboxId or snapshotId required" },
+      { status: 400 }
+    )
   }
 
   try {
-    const sandbox = await Sandbox.connect(sandboxId)
-    const skipNames = [...SKIP_DESCEND]
-      .map((name) => `-name ${shellQuote(name)}`)
-      .join(" -o ")
-    const command = [
-      "set -e",
-      `cd ${shellQuote(root)}`,
-      "if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then",
-      `  git ls-files -co --exclude-standard -z | head -z -n ${MAX_ENTRIES + 1}`,
-      "else",
-      `  find . \\( ${skipNames} \\) -prune -o -type f -print0 | head -z -n ${MAX_ENTRIES + 1}`,
-      "fi",
-    ].join("\n")
-    const result = await sandbox.commands.run(`bash -lc ${shellQuote(command)}`, {
-      timeoutMs: 10_000,
-    })
-    const out = toEntries(result.stdout)
+    const out = await withReadableSandbox(
+      { sandboxId, snapshotId },
+      async (sandbox, source) => {
+        if (source === "sandbox") {
+          await refreshSandboxInactivityTimeout(sandbox)
+        }
+        const skipNames = [...SKIP_DESCEND]
+          .map((name) => `-name ${shellQuote(name)}`)
+          .join(" -o ")
+        const command = [
+          "set -e",
+          `cd ${shellQuote(root)}`,
+          "if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then",
+          `  git ls-files -co --exclude-standard -z | head -z -n ${MAX_ENTRIES + 1}`,
+          "else",
+          `  find . \\( ${skipNames} \\) -prune -o -type f -print0 | head -z -n ${MAX_ENTRIES + 1}`,
+          "fi",
+        ].join("\n")
+        const result = await sandbox.commands.run(
+          `bash -lc ${shellQuote(command)}`,
+          {
+            timeoutMs: 10_000,
+          }
+        )
+        return toEntries(result.stdout)
+      }
+    )
 
     return NextResponse.json({
       root,

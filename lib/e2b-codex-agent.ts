@@ -1,4 +1,9 @@
 import { Sandbox } from "e2b"
+import {
+  activeSandboxTimeoutMs,
+  refreshSandboxInactivityTimeout,
+  SANDBOX_LIFECYCLE,
+} from "./e2b-sandbox-timeout"
 
 const CODEX_HOME = "/home/user/.codex"
 const REPO_PATH = "/home/user/repo"
@@ -10,7 +15,6 @@ const CODEX_LAUNCHER_PATH = "/tmp/cloudcode-codex-latest"
 const SANDBOX_TEMPLATE = "codex"
 const EXIT_MARKER = "__CLOUDCODE_CODEX_EXIT__"
 const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60 * 1000
-const DEFAULT_SANDBOX_LIFETIME_MS = 60 * 60 * 1000
 const CODEX_UPDATE_TIMEOUT_MS = 3 * 60 * 1000
 const BRANCH_CITIES = [
   "abu-dhabi",
@@ -364,7 +368,8 @@ function defaultBranchNameWithSuffix() {
 
 async function createSandbox(timeoutMs: number) {
   return await Sandbox.create(SANDBOX_TEMPLATE, {
-    timeoutMs: Math.max(timeoutMs, DEFAULT_SANDBOX_LIFETIME_MS),
+    lifecycle: SANDBOX_LIFECYCLE,
+    timeoutMs,
   })
 }
 
@@ -373,7 +378,8 @@ async function createSandboxFromSnapshot(
   timeoutMs: number
 ) {
   return await Sandbox.create(snapshotId, {
-    timeoutMs: Math.max(timeoutMs, DEFAULT_SANDBOX_LIFETIME_MS),
+    lifecycle: SANDBOX_LIFECYCLE,
+    timeoutMs,
   })
 }
 
@@ -833,6 +839,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
   const githubToken = input.githubToken?.trim() || process.env.GITHUB_TOKEN
   const speed = parseSpeed(input.speed)
   const timeoutMs = input.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS
+  const sandboxTimeoutMs = activeSandboxTimeoutMs(timeoutMs)
   const existingCodexThreadId = parseGitRef(
     input.codexThreadId,
     "codexThreadId"
@@ -853,7 +860,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     await connectOrCreateSandbox(
       input.sandboxId,
       previousSandboxSnapshotId,
-      timeoutMs
+      sandboxTimeoutMs
     )
   await emitLog(input, {
     kind: "setup",
@@ -864,9 +871,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         : "Sandbox ready",
     detail: sandbox.sandboxId,
   })
-  await sandbox.setTimeout(
-    Math.max(timeoutMs + 60_000, DEFAULT_SANDBOX_LIFETIME_MS)
-  )
+  await sandbox.setTimeout(sandboxTimeoutMs)
 
   try {
     const codexThreadIdToResume =
@@ -1137,6 +1142,10 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       recoveredSandbox,
     } satisfies RunCodexInSandboxResult
   } finally {
-    await cleanupRunFiles(sandbox)
+    try {
+      await cleanupRunFiles(sandbox)
+    } finally {
+      await refreshSandboxInactivityTimeout(sandbox).catch(() => {})
+    }
   }
 }

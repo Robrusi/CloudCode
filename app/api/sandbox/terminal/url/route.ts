@@ -1,6 +1,8 @@
 import { Sandbox } from "e2b"
 import { NextResponse } from "next/server"
 
+import { refreshSandboxInactivityTimeout } from "@/lib/e2b-sandbox-timeout"
+
 export const runtime = "nodejs"
 
 const TERMINAL_PORT = 8766
@@ -226,7 +228,15 @@ export async function GET(request: Request) {
   }
 
   try {
+    const info = await Sandbox.getInfo(sandboxId)
+    if (info.state !== "running") {
+      return NextResponse.json(
+        { error: "Sandbox is paused. Resume it before opening a terminal." },
+        { status: 409 }
+      )
+    }
     const sandbox = await Sandbox.connect(sandboxId)
+    await refreshSandboxInactivityTimeout(sandbox)
     const encodedScript = Buffer.from(SERVER_SCRIPT, "utf8").toString("base64")
     const command = [
       `if python3 - <<'PY' >/dev/null 2>&1`,
