@@ -18,6 +18,7 @@ import {
   ChevronRight,
   File as FileIcon,
   Folder,
+  FolderOpen,
   GitBranch,
   LogIn,
   Loader2,
@@ -43,6 +44,7 @@ import {
 import { GeistPixelSquare } from "geist/font/pixel"
 
 import { Button } from "@/components/ui/button"
+import { FileBrowser } from "@/components/file-browser"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { useStoreUserEffect } from "@/hooks/use-store-user-effect"
@@ -410,6 +412,7 @@ function ChatInner() {
   const [modelOpen, setModelOpen] = useState(false)
   const [speedOpen, setSpeedOpen] = useState(false)
   const [thinkingOpen, setThinkingOpen] = useState(false)
+  const [filesOpen, setFilesOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [runLogs, setRunLogs] = useState<Record<string, RunLog[]>>({})
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
@@ -749,6 +752,8 @@ function ChatInner() {
           isNew={!active}
           sandboxId={active?.sandboxId ?? null}
           onKillSandbox={killActiveSandbox}
+          filesOpen={filesOpen}
+          onToggleFiles={() => setFilesOpen((v) => !v)}
         />
         <div ref={threadRef} className="flex-1 overflow-y-auto">
           <div className="mx-auto flex min-h-full max-w-2xl flex-col px-6 pt-16 pb-40">
@@ -865,6 +870,12 @@ function ChatInner() {
           </form>
         </div>
       </div>
+
+      <FileBrowser
+        open={filesOpen && Boolean(active?.sandboxId)}
+        sandboxId={active?.sandboxId ?? null}
+        onClose={() => setFilesOpen(false)}
+      />
     </div>
   )
 }
@@ -895,12 +906,16 @@ function TopBar({
   isNew,
   sandboxId,
   onKillSandbox,
+  filesOpen,
+  onToggleFiles,
 }: {
   title: string | null
   repoUrl: string
   isNew: boolean
   sandboxId: string | null
   onKillSandbox: () => void | Promise<void>
+  filesOpen: boolean
+  onToggleFiles: () => void
 }) {
   const displayTitle = title?.trim() || (isNew ? "New chat" : "Untitled")
   const repo = repoUrl ? repoLabel(repoUrl) : ""
@@ -921,10 +936,28 @@ function TopBar({
           </div>
         </>
       ) : null}
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex items-center gap-3">
         {sandboxId ? (
           <SandboxStatus sandboxId={sandboxId} onKill={onKillSandbox} />
         ) : null}
+        <button
+          type="button"
+          onClick={onToggleFiles}
+          aria-label={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
+          aria-pressed={filesOpen}
+          title={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
+          disabled={!sandboxId}
+          className={cn(
+            "inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
+            filesOpen && "bg-accent text-foreground"
+          )}
+        >
+          {filesOpen ? (
+            <FolderOpen className="size-[18px]" />
+          ) : (
+            <Folder className="size-[18px]" />
+          )}
+        </button>
       </div>
     </header>
   )
