@@ -66,12 +66,12 @@ export const list = query({
             meta: message.meta,
             pending: message.pending,
             role: message.role,
+            speed: message.speed,
+            thinking: message.thinking,
           })),
           model: thread.model,
           repoUrl: thread.repoUrl,
           sandboxId: thread.sandboxId,
-          speed: thread.speed,
-          thinking: thread.thinking,
           title: thread.title,
           updatedAt: thread.updatedAt,
         }
@@ -96,8 +96,6 @@ export const createThread = mutation({
       createdAt: now,
       model: args.model,
       repoUrl: args.repoUrl,
-      speed: args.speed,
-      thinking: args.thinking,
       title: args.title,
       updatedAt: now,
       userId,
@@ -114,6 +112,8 @@ export const createThread = mutation({
       content: "",
       pending: true,
       role: "assistant",
+      speed: args.speed,
+      thinking: args.thinking,
       threadId,
       userId,
     })
@@ -125,6 +125,8 @@ export const createThread = mutation({
 export const appendRunMessages = mutation({
   args: {
     prompt: v.string(),
+    speed,
+    thinking,
     threadId: v.id("threads"),
   },
   handler: async (ctx, args) => {
@@ -143,6 +145,8 @@ export const appendRunMessages = mutation({
       content: "",
       pending: true,
       role: "assistant",
+      speed: args.speed,
+      thinking: args.thinking,
       threadId: args.threadId,
       userId,
     })
@@ -225,8 +229,6 @@ export const updateThread = mutation({
   args: {
     model: v.optional(model),
     repoUrl: v.optional(v.string()),
-    speed: v.optional(speed),
-    thinking: v.optional(thinking),
     threadId: v.id("threads"),
   },
   handler: async (ctx, args) => {
@@ -236,8 +238,6 @@ export const updateThread = mutation({
     await ctx.db.patch(args.threadId, {
       ...(args.model ? { model: args.model } : {}),
       ...(args.repoUrl ? { repoUrl: args.repoUrl } : {}),
-      ...(args.speed ? { speed: args.speed } : {}),
-      ...(args.thinking ? { thinking: args.thinking } : {}),
       updatedAt: Date.now(),
     })
   },
