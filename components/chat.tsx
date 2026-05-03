@@ -25,7 +25,9 @@ import {
   PanelLeft,
   Plus,
   ScrollText,
+  Save,
   SquarePen,
+  SquareTerminal,
   Square,
   Terminal,
   Trash2,
@@ -72,7 +74,13 @@ type Message = {
   content: string
   pending?: boolean
   error?: boolean
-  meta?: { branch?: string; status?: string; diff?: string }
+  meta?: {
+    branch?: string
+    diff?: string
+    logs?: RunLog[]
+    sandboxSnapshotId?: string
+    status?: string
+  }
   speed?: Speed
   thinking?: Thinking
 }
@@ -100,6 +108,7 @@ type CodexRunResult = {
   error?: unknown
   lastMessage?: unknown
   sandboxId?: unknown
+  sandboxSnapshotId?: unknown
   status?: unknown
   stderr?: unknown
   stdout?: unknown
@@ -110,6 +119,7 @@ type CachedRunState = {
   codexThreadId?: string
   diff?: string
   sandboxId?: string
+  sandboxSnapshotId?: string
 }
 
 type CodexRunStreamEvent =
@@ -140,6 +150,7 @@ type ChatRecord = {
   id: Id<"threads">
   repoUrl: string
   sandboxId?: string
+  sandboxSnapshotId?: string
   title: string
   messages: Message[]
   model: Model
@@ -147,7 +158,7 @@ type ChatRecord = {
   updatedAt: number
 }
 
-const MODELS = ["gpt-5.5", "gpt-5.4"] as const
+const MODELS = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"] as const
 type Model = (typeof MODELS)[number]
 
 const SPEEDS = ["standard", "fast"] as const
@@ -493,6 +504,7 @@ function closeBrowserTerminalSession(sandboxId: string | null | undefined) {
 const MODEL_LABEL: Record<Model, string> = {
   "gpt-5.5": "GPT 5.5",
   "gpt-5.4": "GPT 5.4",
+  "gpt-5.4-mini": "GPT 5.4-mini",
 }
 
 const SPEED_LABEL: Record<Speed, string> = {
@@ -846,11 +858,19 @@ function ChatInner() {
 
       const previousAssistant = active?.messages
         .toReversed()
-        .find((m) => m.role === "assistant" && m.meta?.branch)
+        .find(
+          (m) =>
+            m.role === "assistant" &&
+            (m.meta?.branch || m.meta?.diff || m.meta?.sandboxSnapshotId)
+        )
       const cachedRunState = threadRunStateRef.current[chatId as string]
       const branchName =
         cachedRunState?.branch ?? previousAssistant?.meta?.branch
       const previousDiff = cachedRunState?.diff ?? previousAssistant?.meta?.diff
+      const previousSandboxSnapshotId =
+        cachedRunState?.sandboxSnapshotId ??
+        active?.sandboxSnapshotId ??
+        previousAssistant?.meta?.sandboxSnapshotId
       const resumeContext = buildResumeHandoff({
         branchName,
         messages: active?.messages ?? [],
@@ -866,6 +886,7 @@ function ChatInner() {
           branchName,
           codexThreadId: cachedRunState?.codexThreadId ?? active?.codexThreadId,
           previousDiff,
+          previousSandboxSnapshotId,
           prompt: trimmed,
           reasoningEffort: thinking,
           repoUrl: repoUrl.trim(),
@@ -898,6 +919,9 @@ function ChatInner() {
         ...(typeof data.sandboxId === "string"
           ? { sandboxId: data.sandboxId }
           : {}),
+        ...(typeof data.sandboxSnapshotId === "string"
+          ? { sandboxSnapshotId: data.sandboxSnapshotId }
+          : {}),
       }
       threadRunStateRef.current[chatId as string] = {
         ...threadRunStateRef.current[chatId as string],
@@ -909,16 +933,23 @@ function ChatInner() {
         meta: {
           branch: nextRunState.branch,
           diff: nextRunState.diff,
+          sandboxSnapshotId: nextRunState.sandboxSnapshotId,
           status: typeof data.status === "string" ? data.status : undefined,
         },
         sandboxId: nextRunState.sandboxId,
+        sandboxSnapshotId: nextRunState.sandboxSnapshotId,
         threadId: chatId,
       })
-      if (nextRunState.codexThreadId || nextRunState.sandboxId) {
+      if (
+        nextRunState.codexThreadId ||
+        nextRunState.sandboxId ||
+        nextRunState.sandboxSnapshotId
+      ) {
         try {
           await saveRunState({
             codexThreadId: nextRunState.codexThreadId,
             sandboxId: nextRunState.sandboxId,
+            sandboxSnapshotId: nextRunState.sandboxSnapshotId,
             threadId: chatId,
           })
         } catch (error) {
@@ -955,12 +986,19 @@ function ChatInner() {
     setTerminalOpen(false)
     closeBrowserTerminalSession(sandboxId)
 
+    let sandboxSnapshotId: string | undefined
     try {
-      await fetch("/api/sandbox/kill", {
+      const response = await fetch("/api/sandbox/kill", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sandboxId }),
       })
+      const data = (await response.json().catch(() => undefined)) as
+        | { sandboxSnapshotId?: unknown }
+        | undefined
+      if (typeof data?.sandboxSnapshotId === "string") {
+        sandboxSnapshotId = data.sandboxSnapshotId
+      }
     } catch (error) {
       console.warn("Failed to kill sandbox.", error)
     }
@@ -968,13 +1006,55 @@ function ChatInner() {
     threadRunStateRef.current[active.id as string] = {
       ...threadRunStateRef.current[active.id as string],
       sandboxId: undefined,
+      ...(sandboxSnapshotId ? { sandboxSnapshotId } : {}),
     }
 
     try {
+      if (sandboxSnapshotId) {
+        await saveRunState({
+          sandboxSnapshotId,
+          threadId: active.id,
+        })
+      }
       await clearSandbox({ threadId: active.id })
     } catch (error) {
       console.warn("Failed to clear sandbox state.", error)
     }
+  }
+
+  async function saveActiveSandbox() {
+    if (!active) return
+    const sandboxId =
+      threadRunStateRef.current[active.id as string]?.sandboxId ??
+      active.sandboxId
+    if (!sandboxId) return
+
+    const response = await fetch("/api/sandbox/snapshot", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sandboxId }),
+    })
+    const data = (await response.json().catch(() => undefined)) as
+      | { error?: unknown; sandboxSnapshotId?: unknown }
+      | undefined
+
+    if (!response.ok || typeof data?.sandboxSnapshotId !== "string") {
+      throw new Error(
+        typeof data?.error === "string"
+          ? data.error
+          : "Failed to save sandbox."
+      )
+    }
+
+    threadRunStateRef.current[active.id as string] = {
+      ...threadRunStateRef.current[active.id as string],
+      sandboxSnapshotId: data.sandboxSnapshotId,
+    }
+
+    await saveRunState({
+      sandboxSnapshotId: data.sandboxSnapshotId,
+      threadId: active.id,
+    })
   }
 
   function onSubmit(e: FormEvent) {
@@ -1010,6 +1090,7 @@ function ChatInner() {
           isNew={!active}
           sandboxId={active?.sandboxId ?? null}
           onKillSandbox={killActiveSandbox}
+          onSaveSandbox={saveActiveSandbox}
           filesOpen={filesOpen}
           onToggleFiles={() => setFilesOpen((v) => !v)}
           terminalOpen={terminalVisible}
@@ -1203,6 +1284,7 @@ function TopBar({
   isNew,
   sandboxId,
   onKillSandbox,
+  onSaveSandbox,
   filesOpen,
   onToggleFiles,
   terminalOpen,
@@ -1215,6 +1297,7 @@ function TopBar({
   isNew: boolean
   sandboxId: string | null
   onKillSandbox: () => void | Promise<void>
+  onSaveSandbox: () => void | Promise<void>
   filesOpen: boolean
   onToggleFiles: () => void
   terminalOpen: boolean
@@ -1250,9 +1333,14 @@ function TopBar({
           </div>
         </>
       ) : null}
-      <div className="ml-auto flex items-center gap-3">
+      <div className="ml-auto flex items-center gap-6">
         {sandboxId ? (
-          <SandboxStatus sandboxId={sandboxId} onKill={onKillSandbox} />
+          <SandboxStatus
+            sandboxId={sandboxId}
+            onKill={onKillSandbox}
+            onSave={onSaveSandbox}
+            hideActions={filesOpen}
+          />
         ) : null}
         <button
           type="button"
@@ -1265,9 +1353,9 @@ function TopBar({
             terminalOpen ? "Hide sandbox terminal" : "Show sandbox terminal"
           }
           disabled={!sandboxId}
-          className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
         >
-          <Terminal className="size-[18px]" />
+          <SquareTerminal className="size-3.5" />
         </button>
         <button
           type="button"
@@ -1275,12 +1363,12 @@ function TopBar({
           aria-label={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
           title={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
           disabled={!sandboxId}
-          className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
         >
           {filesOpen ? (
-            <FolderOpen className="size-[18px]" />
+            <FolderOpen className="size-3.5" />
           ) : (
-            <Folder className="size-[18px]" />
+            <Folder className="size-3.5" />
           )}
         </button>
       </div>
@@ -1781,13 +1869,19 @@ function formatElapsed(ms: number) {
 function SandboxStatus({
   sandboxId,
   onKill,
+  onSave,
+  hideActions = false,
 }: {
   sandboxId: string
   onKill: () => void | Promise<void>
+  onSave: () => void | Promise<void>
+  hideActions?: boolean
 }) {
   const [info, setInfo] = useState<SandboxInfo | null>(null)
   const [missing, setMissing] = useState(false)
   const [killing, setKilling] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
@@ -1832,12 +1926,25 @@ function SandboxStatus({
   }, [])
 
   async function handleKill() {
-    if (killing) return
+    if (killing || saving) return
     setKilling(true)
     try {
       await onKill()
     } finally {
       setKilling(false)
+    }
+  }
+
+  async function handleSave() {
+    if (saving || killing) return
+    setSaving(true)
+    setSaved(false)
+    try {
+      await onSave()
+      setSaved(true)
+      window.setTimeout(() => setSaved(false), 2500)
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -1868,8 +1975,27 @@ function SandboxStatus({
       />
       <button
         type="button"
+        onClick={handleSave}
+        disabled={saving || killing}
+        aria-label="Save sandbox"
+        title="Save sandbox"
+        className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+      >
+        {saving ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : saved ? (
+          <Check className="size-3.5" />
+        ) : (
+          <Save className="size-3.5" />
+        )}
+        {hideActions ? null : (
+          <span>{saving ? "Saving" : saved ? "Saved" : "Save sandbox"}</span>
+        )}
+      </button>
+      <button
+        type="button"
         onClick={handleKill}
-        disabled={killing}
+        disabled={killing || saving}
         aria-label="Kill sandbox"
         title="Kill sandbox"
         className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-destructive disabled:opacity-50"
@@ -1879,7 +2005,9 @@ function SandboxStatus({
         ) : (
           <Trash2 className="size-3.5" />
         )}
-        <span>{killing ? "Killing" : "Kill sandbox"}</span>
+        {hideActions ? null : (
+          <span>{killing ? "Killing" : "Kill sandbox"}</span>
+        )}
       </button>
     </div>
   )

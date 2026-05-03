@@ -5,7 +5,11 @@ import type { MutationCtx } from "./_generated/server"
 import type { Id } from "./_generated/dataModel"
 import { ensureCurrentUser, getCurrentUser } from "./lib/users"
 
-const model = v.union(v.literal("gpt-5.5"), v.literal("gpt-5.4"))
+const model = v.union(
+  v.literal("gpt-5.5"),
+  v.literal("gpt-5.4"),
+  v.literal("gpt-5.4-mini")
+)
 const speed = v.union(v.literal("standard"), v.literal("fast"))
 const thinking = v.union(
   v.literal("none"),
@@ -15,9 +19,25 @@ const thinking = v.union(
   v.literal("xhigh")
 )
 
+const runLog = v.object({
+  detail: v.optional(v.string()),
+  kind: v.union(
+    v.literal("setup"),
+    v.literal("command"),
+    v.literal("reasoning"),
+    v.literal("stdout"),
+    v.literal("stderr"),
+    v.literal("result")
+  ),
+  message: v.string(),
+  time: v.number(),
+})
+
 const messageMeta = v.object({
   branch: v.optional(v.string()),
   diff: v.optional(v.string()),
+  logs: v.optional(v.array(runLog)),
+  sandboxSnapshotId: v.optional(v.string()),
   status: v.optional(v.string()),
 })
 
@@ -71,6 +91,7 @@ export const list = query({
           model: thread.model,
           repoUrl: thread.repoUrl,
           sandboxId: thread.sandboxId,
+          sandboxSnapshotId: thread.sandboxSnapshotId,
           title: thread.title,
           updatedAt: thread.updatedAt,
         }
@@ -163,6 +184,7 @@ export const completeAssistantMessage = mutation({
     messageId: v.id("messages"),
     meta: v.optional(messageMeta),
     sandboxId: v.optional(v.string()),
+    sandboxSnapshotId: v.optional(v.string()),
     threadId: v.id("threads"),
   },
   handler: async (ctx, args) => {
@@ -186,6 +208,9 @@ export const completeAssistantMessage = mutation({
     })
     await ctx.db.patch(args.threadId, {
       ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
+      ...(args.sandboxSnapshotId
+        ? { sandboxSnapshotId: args.sandboxSnapshotId }
+        : {}),
       updatedAt: Date.now(),
     })
   },
@@ -195,6 +220,7 @@ export const saveRunState = mutation({
   args: {
     codexThreadId: v.optional(v.string()),
     sandboxId: v.optional(v.string()),
+    sandboxSnapshotId: v.optional(v.string()),
     threadId: v.id("threads"),
   },
   handler: async (ctx, args) => {
@@ -204,6 +230,9 @@ export const saveRunState = mutation({
     await ctx.db.patch(args.threadId, {
       ...(args.codexThreadId ? { codexThreadId: args.codexThreadId } : {}),
       ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
+      ...(args.sandboxSnapshotId
+        ? { sandboxSnapshotId: args.sandboxSnapshotId }
+        : {}),
       updatedAt: Date.now(),
     })
   },
