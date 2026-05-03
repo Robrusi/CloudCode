@@ -12,7 +12,7 @@ import {
   type FileDiffMetadata,
   type FileDiffOptions,
 } from "@pierre/diffs"
-import { Loader2, X } from "lucide-react"
+import { ImageIcon, Loader2, X } from "lucide-react"
 import { useTheme } from "next-themes"
 import {
   type CSSProperties,
@@ -34,6 +34,18 @@ type ReadResponse = {
   error?: string
   tooLarge?: boolean
 }
+
+const IMAGE_EXTENSIONS = new Set([
+  "avif",
+  "bmp",
+  "gif",
+  "ico",
+  "jpeg",
+  "jpg",
+  "png",
+  "svg",
+  "webp",
+])
 
 const PIERRE_CODE_THEMES = {
   dark: "pierre-dark",
@@ -70,6 +82,11 @@ function getPierreLanguageFromPath(path: string): string {
 
 function basename(path: string): string {
   return path.split("/").pop() ?? path
+}
+
+function isImagePath(path: string): boolean {
+  const ext = path.split(".").pop()?.toLowerCase()
+  return ext ? IMAGE_EXTENSIONS.has(ext) : false
 }
 
 /**
@@ -226,6 +243,13 @@ export function FileEditorPanel({
         >
           {basename(activePath)}
         </span>
+        {sandboxId && mode === "file" && isImagePath(activePath) ? (
+          <ImageDimensionsLabel
+            key={`${sandboxId}:${activePath}`}
+            sandboxId={sandboxId}
+            path={activePath}
+          />
+        ) : null}
         <span className="shrink-0 text-[11px] tracking-wide text-muted-foreground uppercase">
           {mode === "diff" ? "Diff" : "File"}
         </span>
@@ -277,15 +301,16 @@ function FileViewer({
   sandboxId: string | null
   path: string
 }) {
+  const imagePreview = useMemo(() => isImagePath(path), [path])
   const [content, setContent] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(!imagePreview)
   const [error, setError] = useState<string | null>(null)
 
   const { resolvedTheme } = useTheme()
   const themeType: ThemeTypes = resolvedTheme === "dark" ? "dark" : "light"
 
   useEffect(() => {
-    if (mode === "diff" || !sandboxId) return
+    if (mode === "diff" || !sandboxId || imagePreview) return
     let cancelled = false
     void (async () => {
       try {
@@ -311,7 +336,7 @@ function FileViewer({
     return () => {
       cancelled = true
     }
-  }, [mode, sandboxId, path])
+  }, [imagePreview, mode, sandboxId, path])
 
   const language = useMemo(() => getPierreLanguageFromPath(path), [path])
 
@@ -387,6 +412,18 @@ function FileViewer({
     }),
     [diffOptions]
   )
+
+  if (imagePreview) {
+    if (!sandboxId) {
+      return (
+        <div className="flex h-full flex-col items-center justify-center gap-2 bg-background px-6 text-center">
+          <p className="text-xs text-destructive">No active sandbox.</p>
+        </div>
+      )
+    }
+
+    return <ImageViewer sandboxId={sandboxId} path={path} />
+  }
 
   if (mode === "diff") {
     if (!fileDiff) {
@@ -465,3 +502,96 @@ function FileViewer({
   )
 }
 
+function ImageDimensionsLabel({
+  sandboxId,
+  path,
+}: {
+  sandboxId: string
+  path: string
+}) {
+  const [dimensions, setDimensions] = useState<{
+    width: number
+    height: number
+  } | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const image = new Image()
+    image.onload = () => {
+      if (cancelled) return
+      setDimensions({
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+      })
+    }
+    image.onerror = () => {
+      if (!cancelled) setDimensions(null)
+    }
+    image.src = `/api/sandbox/files/read?sandboxId=${encodeURIComponent(
+      sandboxId
+    )}&path=${encodeURIComponent(path)}&format=raw`
+
+    return () => {
+      cancelled = true
+      image.onload = null
+      image.onerror = null
+    }
+  }, [path, sandboxId])
+
+  if (!dimensions) return null
+
+  return (
+    <span className="shrink-0 font-sans text-[11px] tabular-nums text-muted-foreground">
+      {dimensions.width} x {dimensions.height}
+    </span>
+  )
+}
+
+function ImageViewer({
+  sandboxId,
+  path,
+}: {
+  sandboxId: string
+  path: string
+}) {
+  const [loaded, setLoaded] = useState(false)
+  const [error, setError] = useState(false)
+
+  const src = useMemo(
+    () =>
+      `/api/sandbox/files/read?sandboxId=${encodeURIComponent(
+        sandboxId
+      )}&path=${encodeURIComponent(path)}&format=raw`,
+    [path, sandboxId]
+  )
+
+  if (error) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 bg-background px-6 text-center">
+        <ImageIcon className="size-5 text-muted-foreground" />
+        <p className="text-xs text-destructive">Failed to load image.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="relative h-full min-h-0 overflow-auto bg-background">
+      {!loaded ? (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <Loader2 className="size-4 animate-spin text-muted-foreground" />
+        </div>
+      ) : null}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src}
+        alt={basename(path)}
+        onError={() => setError(true)}
+        onLoad={() => setLoaded(true)}
+        className={cn(
+          "mx-auto block max-h-none max-w-none p-6",
+          loaded ? "opacity-100" : "opacity-0"
+        )}
+      />
+    </div>
+  )
+}
