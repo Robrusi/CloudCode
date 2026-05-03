@@ -1344,6 +1344,9 @@ function SandboxTerminalPanel({
     let resizeTimer: number | undefined
     let directMode = false
     let localLine = ""
+    let localCursor = 0
+    let inputHistory: string[] = []
+    let historyIndex: number | null = null
     let suppressRemoteEcho = ""
     const encoder = new TextEncoder()
     const decoder = new TextDecoder()
@@ -1405,28 +1408,142 @@ function SandboxTerminalPanel({
       resizeTimer = window.setTimeout(sendResize, 30)
     }
 
+    function localChars() {
+      return Array.from(localLine)
+    }
+
+    function setLocalLine(next: string, cursor = Array.from(next).length) {
+      const oldCursor = localCursor
+      localLine = next
+      localCursor = Math.max(0, Math.min(cursor, Array.from(next).length))
+
+      let repaint = "\x1b[?25l"
+      if (oldCursor > 0) repaint += `\x1b[${oldCursor}D`
+      repaint += `\x1b[0K${localLine}`
+      const distanceFromEnd = Array.from(localLine).length - localCursor
+      if (distanceFromEnd > 0) {
+        repaint += `\x1b[${distanceFromEnd}D`
+      }
+      terminalRef.current?.write(`${repaint}\x1b[?25h`)
+    }
+
+    function insertLocalText(text: string) {
+      if (!text) return
+      const chars = localChars()
+      const next = [
+        ...chars.slice(0, localCursor),
+        ...Array.from(text),
+        ...chars.slice(localCursor),
+      ].join("")
+      setLocalLine(next, localCursor + Array.from(text).length)
+    }
+
+    function moveLocalCursor(delta: number) {
+      const next = Math.max(0, Math.min(localCursor + delta, localChars().length))
+      const distance = next - localCursor
+      if (distance > 0) terminalRef.current?.write(`\x1b[${distance}C`)
+      if (distance < 0) terminalRef.current?.write(`\x1b[${Math.abs(distance)}D`)
+      localCursor = next
+    }
+
+    function replaceFromHistory(direction: -1 | 1) {
+      if (inputHistory.length === 0) return
+      const nextIndex =
+        historyIndex === null
+          ? direction < 0
+            ? inputHistory.length - 1
+            : null
+          : historyIndex + direction
+
+      if (nextIndex === null || nextIndex >= inputHistory.length) {
+        historyIndex = null
+        setLocalLine("")
+        return
+      }
+      if (nextIndex < 0) return
+
+      historyIndex = nextIndex
+      setLocalLine(inputHistory[nextIndex])
+    }
+
+    function handleEscapeSequence(sequence: string) {
+      const final = sequence.at(-1)
+      if (final === "D") {
+        moveLocalCursor(-1)
+        return true
+      }
+      if (final === "C") {
+        moveLocalCursor(1)
+        return true
+      }
+      if (final === "A") {
+        replaceFromHistory(-1)
+        return true
+      }
+      if (final === "B") {
+        replaceFromHistory(1)
+        return true
+      }
+      if (final === "H") {
+        moveLocalCursor(-localCursor)
+        return true
+      }
+      if (final === "F") {
+        moveLocalCursor(localChars().length - localCursor)
+        return true
+      }
+      if (sequence === "\x1b[3~" && localCursor < localChars().length) {
+        const chars = localChars()
+        chars.splice(localCursor, 1)
+        setLocalLine(chars.join(""), localCursor)
+        return true
+      }
+      return false
+    }
+
     function sendInput(data: string) {
       if (directMode) {
         sendBrowserTerminalInput(activeSandboxId, encoder.encode(data))
         return
       }
 
-      for (const char of Array.from(data)) {
-        if (char === "\r") {
+      const input = data.replace(/\x1b\[200~([\s\S]*?)\x1b\[201~/g, "$1")
+      let offset = 0
+      while (offset < input.length) {
+        if (input[offset] === "\x1b") {
+          const sequence =
+            input.slice(offset).match(/^\x1b(?:O[A-DHF]|\[[0-9;]*[~A-DHF])/)
+              ?.[0] ?? "\x1b"
+          handleEscapeSequence(sequence)
+          offset += sequence.length
+          continue
+        }
+
+        const char = Array.from(input.slice(offset))[0]
+        offset += char.length
+
+        if (char === "\r" || char === "\n") {
           terminalRef.current?.write("\r\n")
           suppressRemoteEcho += `${localLine}\r\n`
+          const command = localLine.trim()
+          if (command && inputHistory[inputHistory.length - 1] !== localLine) {
+            inputHistory = [...inputHistory.slice(-99), localLine]
+          }
+          historyIndex = null
           sendBrowserTerminalInput(
             activeSandboxId,
             encoder.encode(`${localLine}\r`)
           )
           localLine = ""
+          localCursor = 0
           continue
         }
 
         if (char === "\u007f" || char === "\b") {
-          if (!localLine) continue
-          localLine = Array.from(localLine).slice(0, -1).join("")
-          terminalRef.current?.write("\b \b")
+          if (!localLine || localCursor === 0) continue
+          const chars = localChars()
+          chars.splice(localCursor - 1, 1)
+          setLocalLine(chars.join(""), localCursor - 1)
           continue
         }
 
@@ -1434,6 +1551,8 @@ function SandboxTerminalPanel({
           terminalRef.current?.write("^C\r\n")
           suppressRemoteEcho += "^C\r\n"
           localLine = ""
+          localCursor = 0
+          historyIndex = null
           sendBrowserTerminalInput(activeSandboxId, encoder.encode(char))
           continue
         }
@@ -1445,8 +1564,8 @@ function SandboxTerminalPanel({
           continue
         }
 
-        localLine += char
-        terminalRef.current?.write(char)
+        historyIndex = null
+        insertLocalText(char)
       }
     }
 
