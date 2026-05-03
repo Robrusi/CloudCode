@@ -37,6 +37,7 @@ import {
   type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   useEffect,
   useMemo,
   useRef,
@@ -444,7 +445,8 @@ function ensureBrowserTerminalSession(sandboxId: string) {
         "closed",
         error instanceof Error ? error.message : "Failed to open terminal."
       )
-      throw error
+      session.urlPromise = undefined
+      return ""
     })
 
   emitBrowserTerminalEvent(session, { kind: "status", status: "connecting" })
@@ -644,6 +646,7 @@ function ChatInner() {
   const [thinkingOpen, setThinkingOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
   const [terminalOpen, setTerminalOpen] = useState(false)
+  const [terminalHeight, setTerminalHeight] = useState(320)
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null)
   const [activeFileMode, setActiveFileMode] =
     useState<FileBrowserOpenMode>("file")
@@ -1055,14 +1058,16 @@ function ChatInner() {
           open={terminalVisible}
           sandboxId={active?.sandboxId ?? null}
           onClose={() => setTerminalOpen(false)}
+          height={terminalHeight}
+          onHeightChange={setTerminalHeight}
         />
 
         <div
           className={cn(
-            "pointer-events-none absolute inset-x-0 bottom-0 flex justify-center px-4 pb-6",
-            terminalVisible && "bottom-72",
+            "pointer-events-none absolute inset-x-0 flex justify-center px-4 pb-6",
             activeFilePath && "hidden"
           )}
+          style={{ bottom: terminalVisible ? terminalHeight : 0 }}
         >
           <form
             onSubmit={onSubmit}
@@ -1284,12 +1289,36 @@ function TopBar({
   )
 }
 
+const TERMINAL_MIN_HEIGHT = 140
+const TERMINAL_MAX_HEIGHT_RATIO = 0.85
+
+const TERMINAL_THEMES = {
+  dark: {
+    background: "#09090b",
+    cursor: "#fafafa",
+    cursorAccent: "#09090b",
+    foreground: "#e4e4e7",
+    selectionBackground: "#27272a",
+  },
+  light: {
+    background: "#fafafa",
+    cursor: "#18181b",
+    cursorAccent: "#fafafa",
+    foreground: "#27272a",
+    selectionBackground: "#e4e4e7",
+  },
+} as const
+
 function SandboxTerminalPanel({
+  height,
   onClose,
+  onHeightChange,
   open,
   sandboxId,
 }: {
+  height: number
   onClose: () => void
+  onHeightChange: (next: number) => void
   open: boolean
   sandboxId: string | null
 }) {
@@ -1300,6 +1329,10 @@ function SandboxTerminalPanel({
     "connecting"
   )
   const [error, setError] = useState("")
+  const [resizing, setResizing] = useState(false)
+  const { resolvedTheme } = useTheme()
+  const themeKey: "light" | "dark" =
+    resolvedTheme === "light" ? "light" : "dark"
 
   useEffect(() => {
     if (!open || !sandboxId) return
@@ -1438,13 +1471,7 @@ function SandboxTerminalPanel({
         lineHeight: 1.35,
         rightClickSelectsWord: true,
         scrollback: 10000,
-        theme: {
-          background: "#09090b",
-          cursor: "#fafafa",
-          cursorAccent: "#09090b",
-          foreground: "#e4e4e7",
-          selectionBackground: "#27272a",
-        },
+        theme: TERMINAL_THEMES[themeKey],
       })
       const fit = new BrowserFitAddon()
       terminal.loadAddon(fit)
@@ -1501,7 +1528,48 @@ function SandboxTerminalPanel({
       terminalRef.current = null
       fitRef.current = null
     }
+    // themeKey intentionally excluded — theme changes are applied to the
+    // live terminal in the effect below without re-initialising.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, sandboxId])
+
+  // Reactively update the live terminal's theme when the app theme changes.
+  useEffect(() => {
+    const terminal = terminalRef.current
+    if (!terminal) return
+    terminal.options.theme = TERMINAL_THEMES[themeKey]
+  }, [themeKey])
+
+  function startResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return
+    event.preventDefault()
+    const startY = event.clientY
+    const startHeight = height
+    setResizing(true)
+
+    function handleMove(moveEvent: PointerEvent) {
+      const max = Math.max(
+        TERMINAL_MIN_HEIGHT,
+        Math.floor(window.innerHeight * TERMINAL_MAX_HEIGHT_RATIO)
+      )
+      const next = Math.min(
+        max,
+        Math.max(TERMINAL_MIN_HEIGHT, startHeight + (startY - moveEvent.clientY))
+      )
+      onHeightChange(next)
+    }
+
+    function handleUp() {
+      setResizing(false)
+      window.removeEventListener("pointermove", handleMove)
+      window.removeEventListener("pointerup", handleUp)
+      window.removeEventListener("pointercancel", handleUp)
+    }
+
+    window.addEventListener("pointermove", handleMove)
+    window.addEventListener("pointerup", handleUp)
+    window.addEventListener("pointercancel", handleUp)
+  }
 
   if (!open) return null
 
@@ -1510,25 +1578,43 @@ function SandboxTerminalPanel({
       ? "bg-emerald-400"
       : status === "connecting"
         ? "bg-amber-400 animate-pulse"
-        : "bg-zinc-600"
+        : "bg-zinc-500"
 
   return (
-    <section className="flex h-80 shrink-0 flex-col border-t border-border/60 bg-[#09090b] text-zinc-200">
-      <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-[11px] tracking-wide text-zinc-500">
+    <section
+      className="flex shrink-0 flex-col border-t border-border/60 bg-zinc-50 text-zinc-700 dark:bg-[#09090b] dark:text-zinc-200"
+      style={{ height }}
+    >
+      <div
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize terminal"
+        onPointerDown={startResize}
+        className={cn(
+          "group relative -mt-px h-1.5 shrink-0 cursor-row-resize select-none",
+          "before:absolute before:inset-x-0 before:-top-1 before:h-3 before:content-['']",
+          "after:absolute after:inset-x-0 after:top-1/2 after:h-px after:-translate-y-1/2 after:bg-border/60 after:transition-colors",
+          "hover:after:bg-foreground/40",
+          resizing && "after:bg-foreground/60"
+        )}
+      />
+      <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-[11px] tracking-wide text-muted-foreground">
         <span
           className={`size-1.5 rounded-full ${dotColor}`}
           aria-hidden="true"
         />
         <span>terminal</span>
         {error ? (
-          <span className="truncate text-rose-400/80">— {error}</span>
+          <span className="truncate text-rose-500 dark:text-rose-400/80">
+            — {error}
+          </span>
         ) : null}
         <button
           type="button"
           onClick={onClose}
           aria-label="Close terminal"
           title="Close terminal"
-          className="ml-auto inline-flex size-6 items-center justify-center rounded text-zinc-500 transition-colors hover:bg-white/5 hover:text-zinc-200"
+          className="ml-auto inline-flex size-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
         >
           <X className="size-3.5" />
         </button>
