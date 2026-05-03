@@ -39,6 +39,50 @@ const fileListCache = new Map<
   { entries: FileEntry[]; truncated: boolean }
 >()
 
+const TREE_SCROLLBAR_CSS = `
+[data-file-tree-virtualized-scroll='true'],
+[data-file-tree-scrollbar-measure='true'] {
+  scrollbar-color: var(--trees-scrollbar-thumb) transparent;
+  scrollbar-width: thin;
+}
+
+[data-file-tree-virtualized-scroll='true']::-webkit-scrollbar,
+[data-file-tree-scrollbar-measure='true']::-webkit-scrollbar {
+  width: var(--trees-scrollbar-gutter);
+  height: var(--trees-scrollbar-gutter);
+}
+
+[data-file-tree-virtualized-scroll='true']::-webkit-scrollbar-track,
+[data-file-tree-scrollbar-measure='true']::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+[data-file-tree-virtualized-scroll='true']::-webkit-scrollbar-thumb,
+[data-file-tree-scrollbar-measure='true']::-webkit-scrollbar-thumb {
+  background-color: var(--trees-scrollbar-thumb);
+  background-clip: content-box;
+  border: 0.5px solid transparent;
+  border-radius: 999px;
+}
+
+[data-file-tree-virtualized-scroll='true']::-webkit-scrollbar-thumb:vertical,
+[data-file-tree-scrollbar-measure='true']::-webkit-scrollbar-thumb:vertical {
+  border-block: 14px solid transparent;
+  border-inline: 0.5px solid transparent;
+}
+
+[data-file-tree-virtualized-scroll='true']::-webkit-scrollbar-thumb:horizontal,
+[data-file-tree-scrollbar-measure='true']::-webkit-scrollbar-thumb:horizontal {
+  border-block: 0.5px solid transparent;
+  border-inline: 14px solid transparent;
+}
+
+[data-file-tree-virtualized-scroll='true']::-webkit-scrollbar-corner,
+[data-file-tree-scrollbar-measure='true']::-webkit-scrollbar-corner {
+  background: transparent;
+}
+`
+
 export function FileBrowser({
   sandboxId,
   open,
@@ -179,6 +223,7 @@ export function FileBrowser({
     initialExpansion: "closed",
     renderRowDecoration,
     search: true,
+    unsafeCSS: TREE_SCROLLBAR_CSS,
     onSelectionChange: handleSelectionChange,
   })
 
@@ -353,7 +398,8 @@ function FileTreeWrapper({
           "var(--sidebar-border)",
         "--trees-border-color-override": "var(--sidebar-border)",
         "--trees-indent-guide-bg-override": "var(--sidebar-border)",
-        "--trees-scrollbar-thumb-override": "var(--border)",
+        "--trees-scrollbar-thumb-override": "var(--scrollbar-thumb)",
+        "--trees-scrollbar-gutter-override": "2px",
         "--trees-focus-ring-color-override": "var(--ring)",
         "--trees-font-family-override": "var(--font-sans)",
         "--trees-font-size-override": "12.5px",

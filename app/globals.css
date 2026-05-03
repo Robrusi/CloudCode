@@ -50,6 +50,8 @@
 :root {
     --background: oklch(1 0 0);
     --foreground: oklch(0.145 0 0);
+    --scrollbar-thumb: rgb(128 128 128 / 42%);
+    --scrollbar-track: transparent;
     --card: oklch(1 0 0);
     --card-foreground: oklch(0.145 0 0);
     --popover: oklch(1 0 0);
@@ -85,6 +87,8 @@
 .dark {
     --background: oklch(0.145 0 0);
     --foreground: oklch(0.985 0 0);
+    --scrollbar-thumb: rgb(128 128 128 / 42%);
+    --scrollbar-track: transparent;
     --card: oklch(0.205 0 0);
     --card-foreground: oklch(0.985 0 0);
     --popover: oklch(0.205 0 0);
@@ -119,6 +123,8 @@
 @layer base {
   * {
     @apply border-border outline-ring/50;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+    scrollbar-width: thin;
     }
   html,
   body {
@@ -132,5 +138,29 @@
     }
   html {
     @apply font-sans;
+    }
+  *::-webkit-scrollbar {
+    width: 2px;
+    height: 2px;
+    }
+  *::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+    }
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+    background-clip: content-box;
+    border: 0.5px solid transparent;
+    border-radius: 999px;
+    }
+  *::-webkit-scrollbar-thumb:vertical {
+    border-block: 14px solid transparent;
+    border-inline: 0.5px solid transparent;
+    }
+  *::-webkit-scrollbar-thumb:horizontal {
+    border-block: 0.5px solid transparent;
+    border-inline: 14px solid transparent;
+    }
+  *::-webkit-scrollbar-corner {
+    background: transparent;
     }
 }
