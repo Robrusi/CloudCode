@@ -18,6 +18,11 @@ const thinking = v.union(
   v.literal("high"),
   v.literal("xhigh")
 )
+const sandboxState = v.union(
+  v.literal("running"),
+  v.literal("paused"),
+  v.literal("killed")
+)
 
 const runLog = v.object({
   detail: v.optional(v.string()),
@@ -111,6 +116,7 @@ export const list = query({
             ? (await ctx.db.get(thread.sandboxPresetId))?.name
             : undefined,
           sandboxId: thread.sandboxId,
+          sandboxState: thread.sandboxState,
           sandboxSnapshotId: thread.sandboxSnapshotId,
           sandboxSnapshotIdsToDelete: thread.sandboxSnapshotIdsToDelete,
           title: thread.title,
@@ -215,6 +221,7 @@ export const completeAssistantMessage = mutation({
     messageId: v.id("messages"),
     meta: v.optional(messageMeta),
     sandboxId: v.optional(v.string()),
+    sandboxState: v.optional(sandboxState),
     sandboxSnapshotId: v.optional(v.string()),
     sandboxSnapshotIdsToDelete: v.optional(v.array(v.string())),
     threadId: v.id("threads"),
@@ -240,6 +247,11 @@ export const completeAssistantMessage = mutation({
     })
     await ctx.db.patch(args.threadId, {
       ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
+      ...(args.sandboxState
+        ? { sandboxState: args.sandboxState }
+        : args.sandboxId
+          ? { sandboxState: "running" as const }
+          : {}),
       ...(args.sandboxSnapshotId
         ? { sandboxSnapshotId: args.sandboxSnapshotId }
         : {}),
@@ -259,6 +271,7 @@ export const saveRunState = mutation({
   args: {
     codexThreadId: v.optional(v.string()),
     sandboxId: v.optional(v.string()),
+    sandboxState: v.optional(sandboxState),
     sandboxSnapshotId: v.optional(v.string()),
     sandboxSnapshotIdsToDelete: v.optional(v.array(v.string())),
     threadId: v.id("threads"),
@@ -270,6 +283,11 @@ export const saveRunState = mutation({
     await ctx.db.patch(args.threadId, {
       ...(args.codexThreadId ? { codexThreadId: args.codexThreadId } : {}),
       ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
+      ...(args.sandboxState
+        ? { sandboxState: args.sandboxState }
+        : args.sandboxId
+          ? { sandboxState: "running" as const }
+          : {}),
       ...(args.sandboxSnapshotId
         ? { sandboxSnapshotId: args.sandboxSnapshotId }
         : {}),
@@ -295,6 +313,7 @@ export const clearSandbox = mutation({
 
     await ctx.db.patch(args.threadId, {
       sandboxId: undefined,
+      sandboxState: "killed",
       updatedAt: Date.now(),
     })
   },
