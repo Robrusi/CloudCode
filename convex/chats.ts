@@ -92,6 +92,7 @@ export const list = query({
           repoUrl: thread.repoUrl,
           sandboxId: thread.sandboxId,
           sandboxSnapshotId: thread.sandboxSnapshotId,
+          sandboxSnapshotIdsToDelete: thread.sandboxSnapshotIdsToDelete,
           title: thread.title,
           updatedAt: thread.updatedAt,
         }
@@ -185,6 +186,7 @@ export const completeAssistantMessage = mutation({
     meta: v.optional(messageMeta),
     sandboxId: v.optional(v.string()),
     sandboxSnapshotId: v.optional(v.string()),
+    sandboxSnapshotIdsToDelete: v.optional(v.array(v.string())),
     threadId: v.id("threads"),
   },
   handler: async (ctx, args) => {
@@ -211,6 +213,13 @@ export const completeAssistantMessage = mutation({
       ...(args.sandboxSnapshotId
         ? { sandboxSnapshotId: args.sandboxSnapshotId }
         : {}),
+      ...(args.sandboxSnapshotIdsToDelete
+        ? {
+            sandboxSnapshotIdsToDelete: [
+              ...new Set(args.sandboxSnapshotIdsToDelete),
+            ],
+          }
+        : {}),
       updatedAt: Date.now(),
     })
   },
@@ -221,6 +230,7 @@ export const saveRunState = mutation({
     codexThreadId: v.optional(v.string()),
     sandboxId: v.optional(v.string()),
     sandboxSnapshotId: v.optional(v.string()),
+    sandboxSnapshotIdsToDelete: v.optional(v.array(v.string())),
     threadId: v.id("threads"),
   },
   handler: async (ctx, args) => {
@@ -232,6 +242,13 @@ export const saveRunState = mutation({
       ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
       ...(args.sandboxSnapshotId
         ? { sandboxSnapshotId: args.sandboxSnapshotId }
+        : {}),
+      ...(args.sandboxSnapshotIdsToDelete
+        ? {
+            sandboxSnapshotIdsToDelete: [
+              ...new Set(args.sandboxSnapshotIdsToDelete),
+            ],
+          }
         : {}),
       updatedAt: Date.now(),
     })
@@ -248,6 +265,26 @@ export const clearSandbox = mutation({
 
     await ctx.db.patch(args.threadId, {
       sandboxId: undefined,
+      updatedAt: Date.now(),
+    })
+  },
+})
+
+export const clearSandboxSnapshot = mutation({
+  args: {
+    sandboxSnapshotIdsToDelete: v.optional(v.array(v.string())),
+    threadId: v.id("threads"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await ensureCurrentUser(ctx)
+    await requireOwnedThread(ctx, args.threadId, userId)
+
+    await ctx.db.patch(args.threadId, {
+      sandboxSnapshotId: undefined,
+      sandboxSnapshotIdsToDelete:
+        args.sandboxSnapshotIdsToDelete === undefined
+          ? undefined
+          : [...new Set(args.sandboxSnapshotIdsToDelete)],
       updatedAt: Date.now(),
     })
   },

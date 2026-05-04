@@ -4,6 +4,7 @@ import {
   refreshSandboxInactivityTimeout,
   SANDBOX_LIFECYCLE,
 } from "./e2b-sandbox-timeout"
+import { deleteSandboxSnapshots } from "./e2b-snapshots"
 
 const CODEX_HOME = "/home/user/.codex"
 const REPO_PATH = "/home/user/repo"
@@ -226,6 +227,7 @@ export type RunCodexInSandboxResult = {
   repoUrl: string
   sandboxId: string
   sandboxSnapshotId?: string
+  sandboxSnapshotIdsToDelete?: string[]
   stderr: string
   status: string
   stdout: string
@@ -815,7 +817,22 @@ async function createSandboxSnapshot(
 
   try {
     const snapshot = await sandbox.createSnapshot()
-    return snapshot.snapshotId
+    const cleanup = await deleteSandboxSnapshots(
+      [input.previousSandboxSnapshotId],
+      snapshot.snapshotId
+    )
+
+    for (const message of Object.values(cleanup.errors)) {
+      await emitLog(input, {
+        kind: "stderr",
+        message: compactLine(message),
+      })
+    }
+
+    return {
+      sandboxSnapshotId: snapshot.snapshotId,
+      sandboxSnapshotIdsToDelete: cleanup.deferredIds,
+    }
   } catch (error) {
     await emitLog(input, {
       kind: "stderr",
@@ -826,7 +843,10 @@ async function createSandboxSnapshot(
     })
   }
 
-  return undefined
+  return {
+    sandboxSnapshotId: undefined,
+    sandboxSnapshotIdsToDelete: [],
+  }
 }
 
 export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
@@ -1124,7 +1144,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     const lastMessage = await readLastMessage(sandbox)
     const updatedAuthJson = await sandbox.files.read(`${CODEX_HOME}/auth.json`)
     await cleanupRunFiles(sandbox)
-    const sandboxSnapshotId = await createSandboxSnapshot(sandbox, input)
+    const snapshot = await createSandboxSnapshot(sandbox, input)
 
     return {
       branchName,
@@ -1134,7 +1154,8 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       lastMessage,
       repoUrl,
       sandboxId: sandbox.sandboxId,
-      sandboxSnapshotId,
+      sandboxSnapshotId: snapshot.sandboxSnapshotId,
+      sandboxSnapshotIdsToDelete: snapshot.sandboxSnapshotIdsToDelete,
       stderr: result.stderr,
       status,
       stdout: result.stdout,

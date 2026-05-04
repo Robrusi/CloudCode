@@ -113,6 +113,7 @@ type CodexRunResult = {
   lastMessage?: unknown
   sandboxId?: unknown
   sandboxSnapshotId?: unknown
+  sandboxSnapshotIdsToDelete?: unknown
   status?: unknown
   stderr?: unknown
   stdout?: unknown
@@ -124,6 +125,7 @@ type CachedRunState = {
   diff?: string
   sandboxId?: string
   sandboxSnapshotId?: string
+  sandboxSnapshotIdsToDelete?: string[]
 }
 
 type CodexRunStreamEvent =
@@ -155,6 +157,7 @@ type ChatRecord = {
   repoUrl: string
   sandboxId?: string
   sandboxSnapshotId?: string
+  sandboxSnapshotIdsToDelete?: string[]
   title: string
   messages: Message[]
   model: Model
@@ -194,6 +197,22 @@ function latestCompletedMessage(messages: Message[], role: Role) {
   return messages
     .toReversed()
     .find((message) => message.role === role && !message.pending)
+}
+
+function compactIds(ids: Array<string | null | undefined>) {
+  return [
+    ...new Set(
+      ids
+        .map((id) => id?.trim())
+        .filter((id): id is string => Boolean(id))
+    ),
+  ]
+}
+
+function stringArrayValue(value: unknown) {
+  return Array.isArray(value)
+    ? compactIds(value.map((item) => (typeof item === "string" ? item : null)))
+    : []
 }
 
 function buildDiffSummary(diff?: string) {
@@ -623,6 +642,7 @@ function ChatInner() {
   )
   const saveRunState = useMutation(api.chats.saveRunState)
   const clearSandbox = useMutation(api.chats.clearSandbox)
+  const clearSandboxSnapshot = useMutation(api.chats.clearSandboxSnapshot)
   const deleteThreadMutation = useMutation(api.chats.deleteThread)
   const updateThread = useMutation(api.chats.updateThread)
   const [activeId, setActiveId] = useState<Id<"threads"> | null>(() =>
@@ -668,6 +688,10 @@ function ChatInner() {
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null)
   const [activeFileMode, setActiveFileMode] =
     useState<FileBrowserOpenMode>("file")
+  const [deletingSnapshot, setDeletingSnapshot] = useState(false)
+  const [deletedSnapshotIds, setDeletedSnapshotIds] = useState<Set<string>>(
+    () => new Set()
+  )
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [view, setView] = useState<"chat" | "settings">("chat")
   const [busy, setBusy] = useState(false)
@@ -696,7 +720,10 @@ function ChatInner() {
     [chats, activeId]
   )
   const activeSandboxId = active?.sandboxId ?? null
-  const activeSandboxSnapshotId = active?.sandboxSnapshotId ?? null
+  const activeSandboxSnapshotId =
+    active?.sandboxSnapshotId && !deletedSnapshotIds.has(active.sandboxSnapshotId)
+      ? active.sandboxSnapshotId
+      : null
   const terminalVisible = terminalOpen && Boolean(activeSandboxId)
 
   const repoUrl = active ? active.repoUrl : draftRepo
@@ -713,6 +740,10 @@ function ChatInner() {
         : null,
     [active]
   )
+  const activeRepoName = useMemo(() => {
+    const label = repoLabel(repoUrl)
+    return label.split("/").pop() || null
+  }, [repoUrl])
 
   useEffect(() => {
     if (userLoading) return
@@ -853,10 +884,80 @@ function ChatInner() {
     setPendingDeleteId(id)
   }
 
+  async function deleteSnapshots({
+    sandboxId,
+    snapshotIds,
+  }: {
+    sandboxId?: string
+    snapshotIds: string[]
+  }) {
+    if (snapshotIds.length === 0) return []
+
+    const response = await fetch("/api/sandbox/snapshot", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sandboxId, snapshotIds }),
+    })
+    const data = (await response.json().catch(() => undefined)) as
+      | { deferredIds?: unknown; error?: unknown }
+      | undefined
+
+    if (!response.ok) {
+      throw new Error(
+        typeof data?.error === "string"
+          ? data.error
+          : "Failed to delete sandbox snapshot."
+      )
+    }
+
+    return stringArrayValue(data?.deferredIds)
+  }
+
+  function threadSnapshotId(id: Id<"threads">) {
+    const snapshotId =
+      threadRunStateRef.current[id as string]?.sandboxSnapshotId ??
+      chats.find((chat) => chat.id === id)?.sandboxSnapshotId
+    return snapshotId && !deletedSnapshotIds.has(snapshotId)
+      ? snapshotId
+      : undefined
+  }
+
+  function threadPendingSnapshotIds(id: Id<"threads">) {
+    return compactIds([
+      ...(threadRunStateRef.current[id as string]?.sandboxSnapshotIdsToDelete ??
+        []),
+      ...(chats.find((chat) => chat.id === id)?.sandboxSnapshotIdsToDelete ??
+        []),
+    ])
+  }
+
+  function threadSnapshotCleanupIds(id: Id<"threads">) {
+    return compactIds([threadSnapshotId(id), ...threadPendingSnapshotIds(id)])
+  }
+
+  function threadSandboxId(id: Id<"threads">) {
+    return (
+      threadRunStateRef.current[id as string]?.sandboxId ??
+      chats.find((chat) => chat.id === id)?.sandboxId
+    )
+  }
+
   function confirmDeleteChat() {
     const id = pendingDeleteId
     if (!id) return
-    void deleteThreadMutation({ threadId: id })
+    void (async () => {
+      try {
+        await deleteSnapshots({
+          sandboxId: threadSandboxId(id),
+          snapshotIds: threadSnapshotCleanupIds(id),
+        })
+      } catch (error) {
+        console.warn("Failed to delete sandbox snapshot.", error)
+      }
+
+      await deleteThreadMutation({ threadId: id })
+      delete threadRunStateRef.current[id as string]
+    })()
     if (activeId === id) setActiveId(null)
     setPendingDeleteId(null)
   }
@@ -926,10 +1027,18 @@ function ChatInner() {
       const branchName =
         cachedRunState?.branch ?? previousAssistant?.meta?.branch
       const previousDiff = cachedRunState?.diff ?? previousAssistant?.meta?.diff
-      const previousSandboxSnapshotId =
+      const deletedOrPendingSnapshotIds = new Set([
+        ...deletedSnapshotIds,
+        ...threadPendingSnapshotIds(chatId),
+      ])
+      const previousSandboxSnapshotCandidate =
         cachedRunState?.sandboxSnapshotId ??
-        active?.sandboxSnapshotId ??
-        previousAssistant?.meta?.sandboxSnapshotId
+        active?.sandboxSnapshotId
+      const previousSandboxSnapshotId =
+        previousSandboxSnapshotCandidate &&
+        !deletedOrPendingSnapshotIds.has(previousSandboxSnapshotCandidate)
+          ? previousSandboxSnapshotCandidate
+          : undefined
       const resumeContext = buildResumeHandoff({
         branchName,
         messages: active?.messages ?? [],
@@ -981,6 +1090,9 @@ function ChatInner() {
         ...(typeof data.sandboxSnapshotId === "string"
           ? { sandboxSnapshotId: data.sandboxSnapshotId }
           : {}),
+        sandboxSnapshotIdsToDelete: stringArrayValue(
+          data.sandboxSnapshotIdsToDelete
+        ),
       }
       threadRunStateRef.current[chatId as string] = {
         ...threadRunStateRef.current[chatId as string],
@@ -1009,6 +1121,8 @@ function ChatInner() {
             codexThreadId: nextRunState.codexThreadId,
             sandboxId: nextRunState.sandboxId,
             sandboxSnapshotId: nextRunState.sandboxSnapshotId,
+            sandboxSnapshotIdsToDelete:
+              nextRunState.sandboxSnapshotIdsToDelete,
             threadId: chatId,
           })
         } catch (error) {
@@ -1042,6 +1156,7 @@ function ChatInner() {
       threadRunStateRef.current[active.id as string]?.sandboxId ??
       active.sandboxId
     if (!sandboxId) return
+    const previousSnapshotIds = threadSnapshotCleanupIds(active.id)
     setTerminalOpen(false)
     closeBrowserTerminalSession(sandboxId)
 
@@ -1050,13 +1165,20 @@ function ChatInner() {
       const response = await fetch("/api/sandbox/kill", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sandboxId }),
+        body: JSON.stringify({ previousSnapshotIds, sandboxId }),
       })
       const data = (await response.json().catch(() => undefined)) as
-        | { sandboxSnapshotId?: unknown }
+        | { previousSnapshotDeferredIds?: unknown; sandboxSnapshotId?: unknown }
         | undefined
       if (typeof data?.sandboxSnapshotId === "string") {
         sandboxSnapshotId = data.sandboxSnapshotId
+      }
+      const sandboxSnapshotIdsToDelete = stringArrayValue(
+        data?.previousSnapshotDeferredIds
+      )
+      threadRunStateRef.current[active.id as string] = {
+        ...threadRunStateRef.current[active.id as string],
+        sandboxSnapshotIdsToDelete,
       }
     } catch (error) {
       console.warn("Failed to kill sandbox.", error)
@@ -1072,6 +1194,9 @@ function ChatInner() {
       if (sandboxSnapshotId) {
         await saveRunState({
           sandboxSnapshotId,
+          sandboxSnapshotIdsToDelete:
+            threadRunStateRef.current[active.id as string]
+              ?.sandboxSnapshotIdsToDelete ?? [],
           threadId: active.id,
         })
       }
@@ -1081,20 +1206,71 @@ function ChatInner() {
     }
   }
 
+  async function deleteActiveSnapshot() {
+    if (!active || deletingSnapshot) return
+    const snapshotId =
+      threadRunStateRef.current[active.id as string]?.sandboxSnapshotId ??
+      active.sandboxSnapshotId
+    if (!snapshotId) return
+
+    setDeletingSnapshot(true)
+    try {
+      const response = await fetch("/api/sandbox/snapshot", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ snapshotId }),
+      })
+      const data = (await response.json().catch(() => undefined)) as
+        | { deferredIds?: unknown; error?: unknown }
+        | undefined
+
+      if (!response.ok) {
+        throw new Error(
+          typeof data?.error === "string"
+            ? data.error
+            : "Failed to delete sandbox snapshot."
+        )
+      }
+
+      const deferredIds = stringArrayValue(data?.deferredIds)
+
+      threadRunStateRef.current[active.id as string] = {
+        ...threadRunStateRef.current[active.id as string],
+        sandboxSnapshotId: undefined,
+        sandboxSnapshotIdsToDelete: deferredIds,
+      }
+      setDeletedSnapshotIds((current) => new Set(current).add(snapshotId))
+      setActiveFilePath(null)
+      await clearSandboxSnapshot({
+        sandboxSnapshotIdsToDelete: deferredIds,
+        threadId: active.id,
+      })
+    } catch (error) {
+      console.warn("Failed to delete sandbox snapshot.", error)
+    } finally {
+      setDeletingSnapshot(false)
+    }
+  }
+
   async function saveActiveSandbox() {
     if (!active) return
     const sandboxId =
       threadRunStateRef.current[active.id as string]?.sandboxId ??
       active.sandboxId
     if (!sandboxId) return
+    const previousSnapshotIds = threadSnapshotCleanupIds(active.id)
 
     const response = await fetch("/api/sandbox/snapshot", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sandboxId }),
+      body: JSON.stringify({ previousSnapshotIds, sandboxId }),
     })
     const data = (await response.json().catch(() => undefined)) as
-      | { error?: unknown; sandboxSnapshotId?: unknown }
+      | {
+          error?: unknown
+          previousSnapshotDeferredIds?: unknown
+          sandboxSnapshotId?: unknown
+        }
       | undefined
 
     if (!response.ok || typeof data?.sandboxSnapshotId !== "string") {
@@ -1106,10 +1282,16 @@ function ChatInner() {
     threadRunStateRef.current[active.id as string] = {
       ...threadRunStateRef.current[active.id as string],
       sandboxSnapshotId: data.sandboxSnapshotId,
+      sandboxSnapshotIdsToDelete: stringArrayValue(
+        data.previousSnapshotDeferredIds
+      ),
     }
 
     await saveRunState({
       sandboxSnapshotId: data.sandboxSnapshotId,
+      sandboxSnapshotIdsToDelete:
+        threadRunStateRef.current[active.id as string]
+          ?.sandboxSnapshotIdsToDelete ?? [],
       threadId: active.id,
     })
   }
@@ -1120,16 +1302,21 @@ function ChatInner() {
       threadRunStateRef.current[active.id as string]?.sandboxId ??
       active.sandboxId
     if (!sandboxId) return
+    const previousSnapshotIds = threadSnapshotCleanupIds(active.id)
     setTerminalOpen(false)
     closeBrowserTerminalSession(sandboxId)
 
     const response = await fetch("/api/sandbox/pause", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sandboxId }),
+      body: JSON.stringify({ previousSnapshotIds, sandboxId }),
     })
     const data = (await response.json().catch(() => undefined)) as
-      | { error?: unknown; sandboxSnapshotId?: unknown }
+      | {
+          error?: unknown
+          previousSnapshotDeferredIds?: unknown
+          sandboxSnapshotId?: unknown
+        }
       | undefined
 
     if (!response.ok) {
@@ -1144,9 +1331,15 @@ function ChatInner() {
       threadRunStateRef.current[active.id as string] = {
         ...threadRunStateRef.current[active.id as string],
         sandboxSnapshotId: data.sandboxSnapshotId,
+        sandboxSnapshotIdsToDelete: stringArrayValue(
+          data.previousSnapshotDeferredIds
+        ),
       }
       await saveRunState({
         sandboxSnapshotId: data.sandboxSnapshotId,
+        sandboxSnapshotIdsToDelete:
+          threadRunStateRef.current[active.id as string]
+            ?.sandboxSnapshotIdsToDelete ?? [],
         threadId: active.id,
       })
     }
@@ -1213,6 +1406,8 @@ function ChatInner() {
               onKillSandbox={killActiveSandbox}
               onPauseSandbox={pauseActiveSandbox}
               onSaveSandbox={saveActiveSandbox}
+              onDeleteSnapshot={deleteActiveSnapshot}
+              deletingSnapshot={deletingSnapshot}
               filesOpen={filesOpen}
               onToggleFiles={() => setFilesOpen((v) => !v)}
               terminalOpen={terminalVisible}
@@ -1250,6 +1445,11 @@ function ChatInner() {
                           key={m.id}
                           message={m}
                           logs={runLogs[m.id as string] ?? []}
+                          repoName={activeRepoName}
+                          onOpenFile={(path) => {
+                            setActiveFilePath(path)
+                            setActiveFileMode("file")
+                          }}
                         />
                       ))}
                     </div>
@@ -1485,11 +1685,13 @@ function SettingsScreen({
 }
 
 function TopBar({
+  deletingSnapshot,
   title,
   repoUrl,
   isNew,
   sandboxId,
   sandboxSnapshotId,
+  onDeleteSnapshot,
   onKillSandbox,
   onPauseSandbox,
   onSaveSandbox,
@@ -1500,11 +1702,13 @@ function TopBar({
   sidebarOpen,
   onToggleSidebar,
 }: {
+  deletingSnapshot: boolean
   title: string | null
   repoUrl: string
   isNew: boolean
   sandboxId: string | null
   sandboxSnapshotId: string | null
+  onDeleteSnapshot: () => void | Promise<void>
   onKillSandbox: () => void | Promise<void>
   onPauseSandbox: () => void | Promise<void>
   onSaveSandbox: () => void | Promise<void>
@@ -1551,6 +1755,11 @@ function TopBar({
             onPause={onPauseSandbox}
             onSave={onSaveSandbox}
             hideActions={filesOpen}
+          />
+        ) : sandboxSnapshotId ? (
+          <SnapshotStatus
+            deleting={deletingSnapshot}
+            onDelete={onDeleteSnapshot}
           />
         ) : null}
         <button
@@ -2057,6 +2266,34 @@ type SandboxInfo = {
   startedAt: number
   endAt: number
   state: "running" | "paused"
+}
+
+function SnapshotStatus({
+  deleting,
+  onDelete,
+}: {
+  deleting: boolean
+  onDelete: () => void | Promise<void>
+}) {
+  return (
+    <div className="flex items-center">
+      <button
+        type="button"
+        onClick={onDelete}
+        disabled={deleting}
+        aria-label="Delete sandbox snapshot"
+        title="Delete sandbox snapshot"
+        className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-destructive disabled:opacity-50"
+      >
+        {deleting ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <Trash2 className="size-3.5" />
+        )}
+        <span>{deleting ? "Deleting" : "Delete snapshot"}</span>
+      </button>
+    </div>
+  )
 }
 
 function formatCountdown(ms: number) {
@@ -3134,7 +3371,17 @@ function ChangedFiles({ diff }: { diff: string }) {
   )
 }
 
-function MessageBlock({ logs, message }: { logs: RunLog[]; message: Message }) {
+function MessageBlock({
+  logs,
+  message,
+  onOpenFile,
+  repoName,
+}: {
+  logs: RunLog[]
+  message: Message
+  onOpenFile: (path: string) => void
+  repoName: string | null
+}) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
@@ -3157,6 +3404,8 @@ function MessageBlock({ logs, message }: { logs: RunLog[]; message: Message }) {
             "text-[15px] leading-7",
             message.error && "text-destructive"
           )}
+          repoName={repoName}
+          onOpenFile={onOpenFile}
         />
       ) : null}
       {!message.pending && message.meta?.diff ? (
@@ -3241,7 +3490,17 @@ function RunLogRow({ log }: { log: RunLog }) {
   )
 }
 
-function Markdown({ text, className }: { text: string; className?: string }) {
+function Markdown({
+  text,
+  className,
+  onOpenFile,
+  repoName,
+}: {
+  text: string
+  className?: string
+  onOpenFile: (path: string) => void
+  repoName: string | null
+}) {
   const blocks: Array<{ kind: "code" | "text"; lang?: string; body: string }> =
     []
   const fence = /```([^\n`]*)\n([\s\S]*?)```/g
@@ -3261,7 +3520,12 @@ function Markdown({ text, className }: { text: string; className?: string }) {
         b.kind === "code" ? (
           <CodeBlock key={i} body={b.body} lang={b.lang} />
         ) : (
-          <InlineProse key={i} text={b.body} />
+          <InlineProse
+            key={i}
+            text={b.body}
+            repoName={repoName}
+            onOpenFile={onOpenFile}
+          />
         )
       )}
     </div>
@@ -3368,7 +3632,15 @@ function getPierreLanguage(lang: string) {
   return PIERRE_LANGUAGE_ALIASES[lang] ?? lang
 }
 
-function InlineProse({ text }: { text: string }) {
+function InlineProse({
+  text,
+  onOpenFile,
+  repoName,
+}: {
+  text: string
+  onOpenFile: (path: string) => void
+  repoName: string | null
+}) {
   const lines = text.split("\n")
   const out: React.ReactNode[] = []
   let buf: string[] = []
@@ -3381,7 +3653,7 @@ function InlineProse({ text }: { text: string }) {
     if (!body) return
     out.push(
       <p key={out.length} className="whitespace-pre-wrap">
-        {renderInline(body)}
+        {renderInline(body, { onOpenFile, repoName })}
       </p>
     )
   }
@@ -3392,7 +3664,7 @@ function InlineProse({ text }: { text: string }) {
     out.push(
       <ul key={out.length} className="list-disc space-y-1.5 pl-5">
         {items.map((it, i) => (
-          <li key={i}>{renderInline(it)}</li>
+          <li key={i}>{renderInline(it, { onOpenFile, repoName })}</li>
         ))}
       </ul>
     )
@@ -3414,7 +3686,7 @@ function InlineProse({ text }: { text: string }) {
             : "text-base font-semibold"
       out.push(
         <div key={out.length} className={cls}>
-          {renderInline(content)}
+          {renderInline(content, { onOpenFile, repoName })}
         </div>
       )
     } else if (bullet) {
@@ -3434,7 +3706,12 @@ function InlineProse({ text }: { text: string }) {
   return <>{out}</>
 }
 
-function renderInline(text: string): React.ReactNode {
+type FileLinkContext = {
+  onOpenFile: (path: string) => void
+  repoName: string | null
+}
+
+function renderInline(text: string, context: FileLinkContext): React.ReactNode {
   const parts: React.ReactNode[] = []
   const re =
     /(\[([^\]]+)\]\(([^)\s]+)\)|\bhttps?:\/\/[^\s<>()]+[^\s<>().,!?;:]|\*\*([^*]+)\*\*|`([^`]+)`)/g
@@ -3447,8 +3724,8 @@ function renderInline(text: string): React.ReactNode {
       const href = normalizeLinkHref(m[3])
       parts.push(
         href ? (
-          <MarkdownLink key={key++} href={href}>
-            {renderInline(m[2])}
+          <MarkdownLink key={key++} href={href} fileLinkContext={context}>
+            {renderInline(m[2], context)}
           </MarkdownLink>
         ) : (
           m[0]
@@ -3458,7 +3735,7 @@ function renderInline(text: string): React.ReactNode {
       const href = normalizeLinkHref(m[0])
       parts.push(
         href ? (
-          <MarkdownLink key={key++} href={href}>
+          <MarkdownLink key={key++} href={href} fileLinkContext={context}>
             {m[0]}
           </MarkdownLink>
         ) : (
@@ -3489,16 +3766,27 @@ function renderInline(text: string): React.ReactNode {
 
 function MarkdownLink({
   children,
+  fileLinkContext,
   href,
 }: {
   children: React.ReactNode
+  fileLinkContext: FileLinkContext
   href: string
 }) {
   const external = /^https?:\/\//i.test(href)
+  const filePath = getFilePathFromHref(href, fileLinkContext.repoName)
 
   return (
     <a
       href={href}
+      onClick={
+        filePath
+          ? (event) => {
+              event.preventDefault()
+              fileLinkContext.onOpenFile(filePath)
+            }
+          : undefined
+      }
       target={external ? "_blank" : undefined}
       rel={external ? "noreferrer" : undefined}
       className="font-medium text-primary underline underline-offset-4 hover:text-primary/80"
@@ -3511,5 +3799,60 @@ function MarkdownLink({
 function normalizeLinkHref(href: string) {
   const trimmed = href.trim()
   if (/^(https?:\/\/|mailto:|\/|#)/i.test(trimmed)) return trimmed
+  if (looksLikeFileHref(trimmed)) return trimmed
   return undefined
+}
+
+function looksLikeFileHref(href: string) {
+  if (/^(file:\/\/|\.{1,2}\/|~\/)/.test(href)) return true
+  if (/^[\w@.-]+\.[A-Za-z0-9]+(?::\d+(?::\d+)?)?(?:#L\d+)?$/.test(href)) {
+    return true
+  }
+  if (/^[\w@.-]+(?:\/[\w@.-]+)+(?::\d+(?::\d+)?)?(?:#L\d+)?$/.test(href)) {
+    return true
+  }
+  return false
+}
+
+function getFilePathFromHref(href: string, repoName: string | null) {
+  if (/^(https?:\/\/|mailto:|#)/i.test(href)) return null
+
+  let path = href.trim()
+  try {
+    path = decodeURI(path)
+  } catch {
+    // Keep the raw href if it is not URI-encoded cleanly.
+  }
+
+  path = path.replace(/^file:\/\//i, "")
+  path = path.replace(/#L\d+$/i, "")
+  path = path.replace(/:\d+(?::\d+)?$/, "")
+  path = path.replace(/^\.\/+/, "")
+
+  const repoRoot = "/home/user/repo/"
+  if (path.startsWith(repoRoot)) {
+    return sanitizeRelativeFilePath(path.slice(repoRoot.length))
+  }
+
+  if (repoName) {
+    const repoMarker = `/${repoName}/`
+    const repoIndex = path.lastIndexOf(repoMarker)
+    if (repoIndex >= 0) {
+      return sanitizeRelativeFilePath(path.slice(repoIndex + repoMarker.length))
+    }
+  }
+
+  if (path.startsWith("/")) {
+    if (!looksLikeFileHref(path)) return null
+    return sanitizeRelativeFilePath(path.replace(/^\/+/, ""))
+  }
+
+  if (!looksLikeFileHref(path)) return null
+  return sanitizeRelativeFilePath(path)
+}
+
+function sanitizeRelativeFilePath(path: string) {
+  const cleaned = path.replace(/^\/+/, "")
+  if (!cleaned || cleaned.split("/").includes("..")) return null
+  return cleaned
 }

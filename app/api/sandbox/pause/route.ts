@@ -1,6 +1,8 @@
 import { Sandbox } from "e2b"
 import { NextResponse } from "next/server"
 
+import { compactSnapshotIds, deleteSandboxSnapshots } from "@/lib/e2b-snapshots"
+
 export const runtime = "nodejs"
 export const maxDuration = 60
 
@@ -11,9 +13,24 @@ const LAST_MESSAGE_PATH = "/tmp/cloudcode-last-message.txt"
 
 export async function POST(request: Request) {
   let sandboxId: string | undefined
+  let previousSnapshotIds: string[] = []
   try {
-    const body = (await request.json()) as { sandboxId?: unknown }
+    const body = (await request.json()) as {
+      previousSnapshotId?: unknown
+      previousSnapshotIds?: unknown
+      sandboxId?: unknown
+    }
     if (typeof body.sandboxId === "string") sandboxId = body.sandboxId
+    previousSnapshotIds = compactSnapshotIds([
+      typeof body.previousSnapshotId === "string"
+        ? body.previousSnapshotId
+        : undefined,
+      ...(Array.isArray(body.previousSnapshotIds)
+        ? body.previousSnapshotIds.map((id) =>
+            typeof id === "string" ? id : undefined
+          )
+        : []),
+    ])
   } catch {
     // ignore
   }
@@ -32,8 +49,15 @@ export async function POST(request: Request) {
       .catch(() => undefined)
     const snapshot = await sandbox.createSnapshot()
     const paused = await sandbox.pause()
+    const cleanup = await deleteSandboxSnapshots(
+      previousSnapshotIds,
+      snapshot.snapshotId
+    )
     return NextResponse.json({
       paused,
+      previousSnapshotDeletedIds: cleanup.deletedIds,
+      previousSnapshotDeleteErrors: cleanup.errors,
+      previousSnapshotDeferredIds: cleanup.deferredIds,
       sandboxId,
       sandboxSnapshotId: snapshot.snapshotId,
     })

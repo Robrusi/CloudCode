@@ -73,6 +73,7 @@ export default defineSchema({
     repoUrl: v.string(),
     sandboxId: v.optional(v.string()),
     sandboxSnapshotId: v.optional(v.string()),
+    sandboxSnapshotIdsToDelete: v.optional(v.array(v.string())),
     title: v.string(),
     updatedAt: v.number(),
     userId: v.id("users"),
