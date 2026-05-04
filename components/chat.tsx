@@ -44,6 +44,7 @@ import {
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -629,8 +630,9 @@ function ChatInner() {
       ? null
       : (localStorage.getItem(ACTIVE_KEY) as Id<"threads"> | null)
   )
-  const [pendingDeleteId, setPendingDeleteId] =
-    useState<Id<"threads"> | null>(null)
+  const [pendingDeleteId, setPendingDeleteId] = useState<Id<"threads"> | null>(
+    null
+  )
   const [input, setInput] = useState("")
   const [draftRepo, setDraftRepo] = useState(() =>
     typeof window === "undefined" ? "" : (localStorage.getItem(REPO_KEY) ?? "")
@@ -675,7 +677,19 @@ function ChatInner() {
   const abortRef = useRef<AbortController | null>(null)
   const threadRunStateRef = useRef<Record<string, CachedRunState>>({})
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const threadRef = useRef<HTMLDivElement>(null)
+  const threadRef = useRef<HTMLDivElement | null>(null)
+
+  function scrollThreadToBottom() {
+    const el = threadRef.current
+    if (!el) return
+    el.style.scrollBehavior = "auto"
+    el.scrollTop = el.scrollHeight
+  }
+
+  function setThreadElement(el: HTMLDivElement | null) {
+    threadRef.current = el
+    if (el) scrollThreadToBottom()
+  }
 
   const active = useMemo(
     () => chats.find((c) => c.id === activeId) ?? null,
@@ -739,11 +753,27 @@ function ChatInner() {
     el.style.height = Math.min(el.scrollHeight, 200) + "px"
   }, [input])
 
+  useLayoutEffect(() => {
+    scrollThreadToBottom()
+
+    const firstFrame = requestAnimationFrame(() => {
+      scrollThreadToBottom()
+      requestAnimationFrame(scrollThreadToBottom)
+    })
+
+    return () => cancelAnimationFrame(firstFrame)
+  }, [messages.length, activeId, runLogs, activeFilePath])
+
   useEffect(() => {
     const el = threadRef.current
     if (!el) return
-    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
-  }, [messages.length, activeId, runLogs])
+
+    const observer = new ResizeObserver(scrollThreadToBottom)
+    observer.observe(el)
+    if (el.firstElementChild) observer.observe(el.firstElementChild)
+
+    return () => observer.disconnect()
+  }, [activeId, messages.length, activeFilePath])
 
   useEffect(() => {
     warmBrowserTerminal(activeSandboxId)
@@ -1069,9 +1099,7 @@ function ChatInner() {
 
     if (!response.ok || typeof data?.sandboxSnapshotId !== "string") {
       throw new Error(
-        typeof data?.error === "string"
-          ? data.error
-          : "Failed to save sandbox."
+        typeof data?.error === "string" ? data.error : "Failed to save sandbox."
       )
     }
 
@@ -1176,162 +1204,163 @@ function ChatInner() {
           />
         ) : (
           <>
-        <TopBar
-          title={active?.title ?? null}
-          repoUrl={repoUrl}
-          isNew={!active}
-          sandboxId={activeSandboxId}
-          sandboxSnapshotId={activeSandboxSnapshotId}
-          onKillSandbox={killActiveSandbox}
-          onPauseSandbox={pauseActiveSandbox}
-          onSaveSandbox={saveActiveSandbox}
-          filesOpen={filesOpen}
-          onToggleFiles={() => setFilesOpen((v) => !v)}
-          terminalOpen={terminalVisible}
-          onToggleTerminal={() => setTerminalOpen((v) => !v)}
-          sidebarOpen={sidebarOpen}
-          onToggleSidebar={() => setSidebarOpen((v) => !v)}
-        />
-        {activeFilePath ? (
-          <FileEditorPanel
-            sandboxId={activeSandboxId}
-            sandboxSnapshotId={activeSandboxSnapshotId}
-            activePath={activeFilePath}
-            diff={activeDiff ?? undefined}
-            mode={activeFileMode}
-            onClose={() => setActiveFilePath(null)}
-            placement="main"
-          />
-        ) : (
-          <div ref={threadRef} className="min-h-0 flex-1 overflow-y-auto">
-            <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col px-6 pt-16 pb-40">
-              {empty ? (
-                <div className="flex flex-1 flex-col items-center justify-center text-center">
-                  <h1 className="text-3xl font-medium tracking-tight text-foreground/90">
-                    What should we build?
-                  </h1>
-                  <p className="mt-3 text-sm text-muted-foreground">
-                    Describe a change. It runs in a sandbox against your repo.
-                  </p>
+            <TopBar
+              title={active?.title ?? null}
+              repoUrl={repoUrl}
+              isNew={!active}
+              sandboxId={activeSandboxId}
+              sandboxSnapshotId={activeSandboxSnapshotId}
+              onKillSandbox={killActiveSandbox}
+              onPauseSandbox={pauseActiveSandbox}
+              onSaveSandbox={saveActiveSandbox}
+              filesOpen={filesOpen}
+              onToggleFiles={() => setFilesOpen((v) => !v)}
+              terminalOpen={terminalVisible}
+              onToggleTerminal={() => setTerminalOpen((v) => !v)}
+              sidebarOpen={sidebarOpen}
+              onToggleSidebar={() => setSidebarOpen((v) => !v)}
+            />
+            {activeFilePath ? (
+              <FileEditorPanel
+                sandboxId={activeSandboxId}
+                sandboxSnapshotId={activeSandboxSnapshotId}
+                activePath={activeFilePath}
+                diff={activeDiff ?? undefined}
+                mode={activeFileMode}
+                onClose={() => setActiveFilePath(null)}
+                placement="main"
+              />
+            ) : (
+          <div ref={setThreadElement} className="min-h-0 flex-1 overflow-y-auto">
+                <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col px-6 pt-16 pb-40">
+                  {empty ? (
+                    <div className="flex flex-1 flex-col items-center justify-center text-center">
+                      <h1 className="text-3xl font-medium tracking-tight text-foreground/90">
+                        What should we build?
+                      </h1>
+                      <p className="mt-3 text-sm text-muted-foreground">
+                        Describe a change. It runs in a sandbox against your
+                        repo.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-8">
+                      {messages.map((m) => (
+                        <MessageBlock
+                          key={m.id}
+                          message={m}
+                          logs={runLogs[m.id as string] ?? []}
+                        />
+                      ))}
+                    </div>
+                  )}
                 </div>
-              ) : (
-                <div className="space-y-8">
-                  {messages.map((m) => (
-                    <MessageBlock
-                      key={m.id}
-                      message={m}
-                      logs={runLogs[m.id as string] ?? []}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
+              </div>
+            )}
 
-        <SandboxTerminalPanel
-          open={terminalVisible}
-          sandboxId={activeSandboxId}
-          onClose={() => setTerminalOpen(false)}
-          height={terminalHeight}
-          onHeightChange={setTerminalHeight}
-        />
-
-        <div
-          className={cn(
-            "pointer-events-none absolute inset-x-0 flex justify-center px-4 pb-6",
-            activeFilePath && "hidden"
-          )}
-          style={{ bottom: terminalVisible ? terminalHeight : 0 }}
-        >
-          <form
-            onSubmit={onSubmit}
-            className="pointer-events-auto w-full max-w-2xl rounded-3xl border border-border/70 bg-background/80 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-12px_rgba(0,0,0,0.12)] backdrop-blur-xl transition-colors focus-within:border-border"
-          >
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e: ChangeEvent<HTMLTextAreaElement>) =>
-                setInput(e.target.value)
-              }
-              onKeyDown={onKeyDown}
-              rows={1}
-              placeholder={
-                empty ? "Ask anything…" : "Ask for follow-up changes"
-              }
-              className="block w-full resize-none bg-transparent px-5 pt-4 pb-1 text-[15px] leading-6 outline-none placeholder:text-muted-foreground/70"
+            <SandboxTerminalPanel
+              open={terminalVisible}
+              sandboxId={activeSandboxId}
+              onClose={() => setTerminalOpen(false)}
+              height={terminalHeight}
+              onHeightChange={setTerminalHeight}
             />
 
-            <div className="flex items-center gap-1.5 px-2.5 pt-1 pb-2.5">
-              <IconButton aria-label="Attach" disabled>
-                <Plus className="size-[18px]" />
-              </IconButton>
-
-              <RepoChip
-                value={repoUrl}
-                editing={editingRepo}
-                setEditing={setEditingRepo}
-                onChange={persistRepo}
-                locked={Boolean(active)}
-              />
-
-              <div className="ml-auto flex items-center gap-1.5">
-                <Pill
-                  header="Model"
-                  value={model}
-                  options={MODELS}
-                  formatTrigger={shortModel}
-                  formatOption={(m) => MODEL_LABEL[m]}
-                  open={modelOpen}
-                  setOpen={setModelOpen}
-                  onSelect={persistModel}
-                />
-                <Pill
-                  header="Thinking"
-                  value={thinking}
-                  options={THINKINGS}
-                  formatTrigger={(t) => THINKING_LABEL[t]}
-                  formatOption={(t) => THINKING_LABEL[t]}
-                  open={thinkingOpen}
-                  setOpen={setThinkingOpen}
-                  onSelect={persistThinking}
-                  triggerClassName="text-muted-foreground"
-                />
-                <Pill
-                  header="Speed"
-                  value={speed}
-                  options={SPEEDS}
-                  formatTrigger={(s) => SPEED_LABEL[s]}
-                  formatOption={(s) => SPEED_LABEL[s]}
-                  open={speedOpen}
-                  setOpen={setSpeedOpen}
-                  onSelect={persistSpeed}
-                  triggerClassName="text-muted-foreground"
+            <div
+              className={cn(
+                "pointer-events-none absolute inset-x-0 flex justify-center px-4 pb-6",
+                activeFilePath && "hidden"
+              )}
+              style={{ bottom: terminalVisible ? terminalHeight : 0 }}
+            >
+              <form
+                onSubmit={onSubmit}
+                className="pointer-events-auto w-full max-w-2xl rounded-3xl border border-border/70 bg-background/80 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-12px_rgba(0,0,0,0.12)] backdrop-blur-xl transition-colors focus-within:border-border"
+              >
+                <textarea
+                  ref={textareaRef}
+                  value={input}
+                  onChange={(e: ChangeEvent<HTMLTextAreaElement>) =>
+                    setInput(e.target.value)
+                  }
+                  onKeyDown={onKeyDown}
+                  rows={1}
+                  placeholder={
+                    empty ? "Ask anything…" : "Ask for follow-up changes"
+                  }
+                  className="block w-full resize-none bg-transparent px-5 pt-4 pb-1 text-[15px] leading-6 outline-none placeholder:text-muted-foreground/70"
                 />
 
-                {busy ? (
-                  <button
-                    type="button"
-                    onClick={() => abortRef.current?.abort()}
-                    className="grid size-8 place-items-center rounded-full bg-foreground text-background transition-opacity hover:opacity-80"
-                    aria-label="Stop"
-                  >
-                    <Square className="size-3.5 fill-current" />
-                  </button>
-                ) : (
-                  <button
-                    type="submit"
-                    disabled={!input.trim()}
-                    className="grid size-8 place-items-center rounded-full bg-foreground text-background transition-opacity hover:opacity-80 disabled:opacity-30"
-                    aria-label="Send"
-                  >
-                    <ArrowUp className="size-4" strokeWidth={2.4} />
-                  </button>
-                )}
-              </div>
+                <div className="flex items-center gap-1.5 px-2.5 pt-1 pb-2.5">
+                  <IconButton aria-label="Attach" disabled>
+                    <Plus className="size-[18px]" />
+                  </IconButton>
+
+                  <RepoChip
+                    value={repoUrl}
+                    editing={editingRepo}
+                    setEditing={setEditingRepo}
+                    onChange={persistRepo}
+                    locked={Boolean(active)}
+                  />
+
+                  <div className="ml-auto flex items-center gap-1.5">
+                    <Pill
+                      header="Model"
+                      value={model}
+                      options={MODELS}
+                      formatTrigger={shortModel}
+                      formatOption={(m) => MODEL_LABEL[m]}
+                      open={modelOpen}
+                      setOpen={setModelOpen}
+                      onSelect={persistModel}
+                    />
+                    <Pill
+                      header="Thinking"
+                      value={thinking}
+                      options={THINKINGS}
+                      formatTrigger={(t) => THINKING_LABEL[t]}
+                      formatOption={(t) => THINKING_LABEL[t]}
+                      open={thinkingOpen}
+                      setOpen={setThinkingOpen}
+                      onSelect={persistThinking}
+                      triggerClassName="text-muted-foreground"
+                    />
+                    <Pill
+                      header="Speed"
+                      value={speed}
+                      options={SPEEDS}
+                      formatTrigger={(s) => SPEED_LABEL[s]}
+                      formatOption={(s) => SPEED_LABEL[s]}
+                      open={speedOpen}
+                      setOpen={setSpeedOpen}
+                      onSelect={persistSpeed}
+                      triggerClassName="text-muted-foreground"
+                    />
+
+                    {busy ? (
+                      <button
+                        type="button"
+                        onClick={() => abortRef.current?.abort()}
+                        className="grid size-8 place-items-center rounded-full bg-foreground text-background transition-opacity hover:opacity-80"
+                        aria-label="Stop"
+                      >
+                        <Square className="size-3.5 fill-current" />
+                      </button>
+                    ) : (
+                      <button
+                        type="submit"
+                        disabled={!input.trim()}
+                        className="grid size-8 place-items-center rounded-full bg-foreground text-background transition-opacity hover:opacity-80 disabled:opacity-30"
+                        aria-label="Send"
+                      >
+                        <ArrowUp className="size-4" strokeWidth={2.4} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </form>
             </div>
-          </form>
-        </div>
           </>
         )}
       </div>
@@ -1709,10 +1738,14 @@ function SandboxTerminalPanel({
     }
 
     function moveLocalCursor(delta: number) {
-      const next = Math.max(0, Math.min(localCursor + delta, localChars().length))
+      const next = Math.max(
+        0,
+        Math.min(localCursor + delta, localChars().length)
+      )
       const distance = next - localCursor
       if (distance > 0) terminalRef.current?.write(`\x1b[${distance}C`)
-      if (distance < 0) terminalRef.current?.write(`\x1b[${Math.abs(distance)}D`)
+      if (distance < 0)
+        terminalRef.current?.write(`\x1b[${Math.abs(distance)}D`)
       localCursor = next
     }
 
@@ -1782,8 +1815,9 @@ function SandboxTerminalPanel({
       while (offset < input.length) {
         if (input[offset] === "\x1b") {
           const sequence =
-            input.slice(offset).match(/^\x1b(?:O[A-DHF]|\[[0-9;]*[~A-DHF])/)
-              ?.[0] ?? "\x1b"
+            input
+              .slice(offset)
+              .match(/^\x1b(?:O[A-DHF]|\[[0-9;]*[~A-DHF])/)?.[0] ?? "\x1b"
           handleEscapeSequence(sequence)
           offset += sequence.length
           continue
@@ -1942,7 +1976,10 @@ function SandboxTerminalPanel({
       )
       const next = Math.min(
         max,
-        Math.max(TERMINAL_MIN_HEIGHT, startHeight + (startY - moveEvent.clientY))
+        Math.max(
+          TERMINAL_MIN_HEIGHT,
+          startHeight + (startY - moveEvent.clientY)
+        )
       )
       onHeightChange(next)
     }
@@ -2164,10 +2201,7 @@ function SandboxStatus({
   }
 
   const elapsed = info
-    ? Math.max(
-        0,
-        (info.state === "paused" ? info.endAt : now) - info.startedAt
-      )
+    ? Math.max(0, (info.state === "paused" ? info.endAt : now) - info.startedAt)
     : 0
   const remaining = info ? Math.max(0, info.endAt - now) : 0
 
@@ -2184,11 +2218,7 @@ function SandboxStatus({
 
   return (
     <div className="flex items-center gap-6">
-      <Stat
-        label={timeoutLabel}
-        value={timeoutValue}
-        title={tooltip}
-      />
+      <Stat label={timeoutLabel} value={timeoutValue} title={tooltip} />
       {info?.state === "paused" ? null : (
         <Stat
           label="Running for"
@@ -2490,7 +2520,7 @@ function SidebarItem({
             }
           }}
           onClick={(e) => e.stopPropagation()}
-          className="min-w-0 flex-1 truncate rounded-md bg-background px-2 py-1 text-sm text-foreground outline-none ring-1 ring-border focus:ring-foreground/40"
+          className="min-w-0 flex-1 truncate rounded-md bg-background px-2 py-1 text-sm text-foreground ring-1 ring-border outline-none focus:ring-foreground/40"
         />
       ) : (
         <button
@@ -2618,7 +2648,7 @@ function ConfirmDialog({
             className={cn(
               "rounded-xl px-3 py-1.5 text-sm transition-colors",
               destructive
-                ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                ? "text-destructive-foreground bg-destructive hover:bg-destructive/90"
                 : "bg-foreground text-background hover:bg-foreground/90"
             )}
           >

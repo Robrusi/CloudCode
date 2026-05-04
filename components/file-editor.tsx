@@ -255,7 +255,7 @@ export function FileEditorPanel({
             path={activePath}
           />
         ) : null}
-        <span className="shrink-0 text-[11px] tracking-wide text-muted-foreground uppercase">
+        <span className="mr-[7px] shrink-0 text-[11px] tracking-wide text-muted-foreground uppercase">
           {mode === "diff" ? "Diff" : "File"}
         </span>
         {diffStat ? (
