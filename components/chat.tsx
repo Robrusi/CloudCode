@@ -1812,7 +1812,7 @@ function SettingsScreen({
           Settings
         </span>
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         <div className="mx-auto w-full max-w-2xl px-6 pt-10 pb-20">
           <h1 className="text-2xl font-medium tracking-tight text-foreground/90">
             Settings
@@ -1888,9 +1888,22 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
   const [secretValue, setSecretValue] = useState("")
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
+  const [creating, setCreating] = useState(false)
 
   function startNewPreset() {
     setSelectedId(null)
+    setCreating(true)
+    setName("")
+    setTools([])
+    setInstallScript("")
+    setSecretName("")
+    setSecretValue("")
+    setError("")
+  }
+
+  function closeEditor() {
+    setSelectedId(null)
+    setCreating(false)
     setName("")
     setTools([])
     setInstallScript("")
@@ -1901,6 +1914,7 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
 
   function selectPreset(preset: SandboxPresetRecord) {
     setSelectedId(preset.id)
+    setCreating(false)
     setName(preset.name)
     setTools(preset.tools)
     setInstallScript(preset.installScript ?? "")
@@ -1935,6 +1949,7 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
           tools,
         })
         setSelectedId(id)
+        setCreating(false)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to save preset.")
@@ -1949,7 +1964,7 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
     setError("")
     try {
       await removePreset({ presetId: selected.id })
-      startNewPreset()
+      closeEditor()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to delete preset.")
     } finally {
@@ -1958,20 +1973,29 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
   }
 
   async function saveSecret() {
-    if (!selected) {
-      setError("Save the preset before adding secrets.")
-      return
-    }
-
     setSaving(true)
     setError("")
     try {
+      let presetId = selected?.id
+      if (!presetId) {
+        if (!name.trim()) {
+          setError("Name the preset before adding secrets.")
+          return
+        }
+        presetId = await createPreset({
+          installScript: installScript.trim() || undefined,
+          name,
+          tools,
+        })
+        setSelectedId(presetId)
+        setCreating(false)
+      }
       const response = await fetch("/api/sandbox/presets/secrets", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           name: secretName,
-          presetId: selected.id,
+          presetId,
           value: secretValue,
         }),
       })
@@ -2007,6 +2031,8 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
     }
   }
 
+  const isEditing = selected !== null || creating
+
   return (
     <div className="mt-8">
       <div className="flex items-center justify-between px-1">
@@ -2016,60 +2042,85 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
         <button
           type="button"
           onClick={startNewPreset}
-          className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border/60 px-2.5 text-xs font-medium text-foreground/80 transition-colors hover:bg-muted"
         >
           <Plus className="size-3.5" />
-          New
+          New preset
         </button>
       </div>
 
-      <div className="mt-2 grid gap-3 md:grid-cols-[15rem_1fr]">
-        <div className="overflow-hidden rounded-xl border border-border/60 bg-background">
-          {presets.length === 0 ? (
-            <div className="px-3.5 py-6 text-center text-xs leading-5 text-muted-foreground">
-              No presets yet.
-            </div>
-          ) : (
-            presets.map((preset) => (
+      <div className="mt-2 overflow-hidden rounded-xl border border-border/60 bg-background">
+        {presets.length === 0 ? (
+          <div className="px-3.5 py-8 text-center text-xs leading-5 text-muted-foreground">
+            No presets yet. Create one to preinstall tools and inject secrets
+            into new sandboxes.
+          </div>
+        ) : (
+          presets.map((preset) => {
+            const active = selected?.id === preset.id
+            const meta = [
+              preset.tools.length
+                ? `${preset.tools.length} tool${preset.tools.length === 1 ? "" : "s"}`
+                : null,
+              preset.installScript ? "install script" : null,
+            ].filter(Boolean) as string[]
+            return (
               <button
                 key={preset.id}
                 type="button"
                 onClick={() => selectPreset(preset)}
                 className={cn(
-                  "flex w-full items-center gap-2 border-b border-border/50 px-3.5 py-3 text-left last:border-0 hover:bg-muted/70",
-                  selected?.id === preset.id && "bg-muted"
+                  "flex w-full items-center gap-3 border-b border-border/50 px-3.5 py-3 text-left transition-colors last:border-0 hover:bg-muted/70",
+                  active && "bg-muted"
                 )}
               >
                 <Package className="size-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium text-foreground/85">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium text-foreground/85">
                     {preset.name}
-                  </span>
-                  <span className="block truncate text-xs text-muted-foreground">
-                    {preset.tools.length || preset.installScript
-                      ? [
-                          preset.tools.length
-                            ? `${preset.tools.length} tool${preset.tools.length === 1 ? "" : "s"}`
-                            : "",
-                          preset.installScript ? "script" : "",
-                        ]
-                          .filter(Boolean)
-                          .join(", ")
-                      : "No setup commands"}
-                  </span>
-                </span>
+                  </div>
+                  <div className="truncate text-xs text-muted-foreground">
+                    {meta.length ? meta.join(" · ") : "No setup commands"}
+                  </div>
+                </div>
                 {preset.secrets.length ? (
-                  <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                  <span
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                    title={`${preset.secrets.length} secret${preset.secrets.length === 1 ? "" : "s"}`}
+                  >
+                    <KeyRound className="size-2.5" />
                     {preset.secrets.length}
                   </span>
                 ) : null}
+                <ChevronRight
+                  className={cn(
+                    "size-3.5 shrink-0 text-muted-foreground/60",
+                    active && "text-foreground/70"
+                  )}
+                />
               </button>
-            ))
-          )}
-        </div>
+            )
+          })
+        )}
+      </div>
 
-        <div className="rounded-xl border border-border/60 bg-background p-4">
-          <div className="grid gap-3">
+      {isEditing ? (
+        <div className="mt-3 overflow-hidden rounded-xl border border-border/60 bg-background">
+          <div className="flex items-center justify-between gap-3 border-b border-border/60 px-3.5 py-2.5">
+            <div className="min-w-0 truncate text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              {selected ? "Edit preset" : "New preset"}
+            </div>
+            <button
+              type="button"
+              onClick={closeEditor}
+              aria-label="Close editor"
+              className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+
+          <div className="grid gap-4 p-4">
             <label className="grid gap-1.5 text-xs font-medium text-foreground/80">
               Name
               <input
@@ -2085,21 +2136,29 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                 Tools
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
-                {PRESET_TOOLS.map((tool) => (
-                  <label
-                    key={tool.id}
-                    title={tool.description}
-                    className="flex min-h-10 cursor-pointer items-center gap-2 rounded-md border border-border/60 px-2.5 py-2 text-xs text-foreground/80 transition-colors hover:bg-muted"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={tools.includes(tool.id)}
-                      onChange={() => toggleTool(tool.id)}
-                      className="size-3.5 accent-foreground"
-                    />
-                    <span>{tool.label}</span>
-                  </label>
-                ))}
+                {PRESET_TOOLS.map((tool) => {
+                  const checked = tools.includes(tool.id)
+                  return (
+                    <label
+                      key={tool.id}
+                      title={tool.description}
+                      className={cn(
+                        "flex min-h-10 cursor-pointer items-center gap-2 rounded-md border px-2.5 py-2 text-xs transition-colors",
+                        checked
+                          ? "border-foreground/25 bg-muted text-foreground"
+                          : "border-border/60 text-foreground/80 hover:bg-muted"
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleTool(tool.id)}
+                        className="size-3.5 accent-foreground"
+                      />
+                      <span>{tool.label}</span>
+                    </label>
+                  )
+                })}
               </div>
             </div>
 
@@ -2115,7 +2174,7 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                 }
                 className="min-h-28 resize-y rounded-md border border-border/70 bg-transparent px-3 py-2 font-mono text-xs leading-5 font-normal transition-colors outline-none focus:border-foreground/30"
               />
-              <span className="text-[11px] leading-4 text-muted-foreground">
+              <span className="text-[11px] leading-4 font-normal text-muted-foreground">
                 Use this for lightweight tool setup. Avoid repo dependency
                 installs like bun install; they can exhaust sandbox resources.
               </span>
@@ -2125,7 +2184,13 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
               <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground/80">
                 <KeyRound className="size-3.5 text-muted-foreground" />
                 Secrets
+                {selected?.secrets.length ? (
+                  <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
+                    {selected.secrets.length}
+                  </span>
+                ) : null}
               </div>
+
               {selected?.secrets.length ? (
                 <div className="mb-3 overflow-hidden rounded-md border border-border/60">
                   {selected.secrets.map((secret) => (
@@ -2152,11 +2217,11 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                     </div>
                   ))}
                 </div>
-              ) : (
+              ) : selected ? (
                 <div className="mb-3 rounded-md border border-dashed border-border/70 px-3 py-4 text-center text-xs text-muted-foreground">
                   No preset secrets.
                 </div>
-              )}
+              ) : null}
 
               <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
                 <input
@@ -2176,7 +2241,7 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                 <button
                   type="button"
                   onClick={saveSecret}
-                  disabled={saving || !selected || !secretName || !secretValue}
+                  disabled={saving || !secretName || !secretValue}
                   className="inline-flex h-9 items-center justify-center rounded-md bg-foreground px-3 text-xs font-medium text-background transition-opacity hover:opacity-85 disabled:opacity-40"
                 >
                   Add
@@ -2189,29 +2254,29 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                 {error}
               </div>
             ) : null}
+          </div>
 
-            <div className="flex items-center justify-between gap-2 pt-1">
-              <button
-                type="button"
-                onClick={deletePreset}
-                disabled={!selected || saving}
-                className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-destructive disabled:opacity-40"
-              >
-                <Trash2 className="size-3.5" />
-                Delete
-              </button>
-              <button
-                type="button"
-                onClick={savePreset}
-                disabled={saving || !name.trim()}
-                className="inline-flex h-8 items-center justify-center rounded-md bg-foreground px-3 text-xs font-medium text-background transition-opacity hover:opacity-85 disabled:opacity-40"
-              >
-                {saving ? "Saving" : selected ? "Save preset" : "Create preset"}
-              </button>
-            </div>
+          <div className="flex items-center justify-between gap-2 border-t border-border/60 px-3.5 py-2.5">
+            <button
+              type="button"
+              onClick={deletePreset}
+              disabled={!selected || saving}
+              className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-destructive disabled:opacity-40"
+            >
+              <Trash2 className="size-3.5" />
+              Delete
+            </button>
+            <button
+              type="button"
+              onClick={savePreset}
+              disabled={saving || !name.trim()}
+              className="inline-flex h-7 items-center justify-center rounded-md bg-foreground px-3 text-xs font-medium text-background transition-opacity hover:opacity-85 disabled:opacity-40"
+            >
+              {saving ? "Saving" : selected ? "Save preset" : "Create preset"}
+            </button>
           </div>
         </div>
-      </div>
+      ) : null}
     </div>
   )
 }
