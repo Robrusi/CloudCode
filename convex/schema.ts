@@ -14,6 +14,11 @@ const thinking = v.union(
   v.literal("high"),
   v.literal("xhigh")
 )
+const sandboxState = v.union(
+  v.literal("running"),
+  v.literal("paused"),
+  v.literal("killed")
+)
 
 const runLog = v.object({
   detail: v.optional(v.string()),
@@ -94,6 +99,7 @@ export default defineSchema({
     repoUrl: v.string(),
     sandboxPresetId: v.optional(v.id("sandboxPresets")),
     sandboxId: v.optional(v.string()),
+    sandboxState: v.optional(sandboxState),
     sandboxSnapshotId: v.optional(v.string()),
     sandboxSnapshotIdsToDelete: v.optional(v.array(v.string())),
     title: v.string(),
