@@ -66,11 +66,32 @@ export default defineSchema({
     userId: v.id("users"),
   }).index("by_thread", ["threadId"]),
 
+  sandboxPresetSecrets: defineTable({
+    createdAt: v.number(),
+    name: v.string(),
+    presetId: v.id("sandboxPresets"),
+    updatedAt: v.number(),
+    userId: v.id("users"),
+    value: v.string(),
+  })
+    .index("by_preset", ["presetId"])
+    .index("by_user_preset_name", ["userId", "presetId", "name"]),
+
+  sandboxPresets: defineTable({
+    createdAt: v.number(),
+    installScript: v.optional(v.string()),
+    name: v.string(),
+    tools: v.array(v.string()),
+    updatedAt: v.number(),
+    userId: v.id("users"),
+  }).index("by_user_updated", ["userId", "updatedAt"]),
+
   threads: defineTable({
     codexThreadId: v.optional(v.string()),
     createdAt: v.number(),
     model,
     repoUrl: v.string(),
+    sandboxPresetId: v.optional(v.id("sandboxPresets")),
     sandboxId: v.optional(v.string()),
     sandboxSnapshotId: v.optional(v.string()),
     sandboxSnapshotIdsToDelete: v.optional(v.array(v.string())),

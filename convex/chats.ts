@@ -55,6 +55,21 @@ async function requireOwnedThread(
   return thread
 }
 
+async function requireOwnedPreset(
+  ctx: MutationCtx,
+  presetId: Id<"sandboxPresets"> | undefined,
+  userId: Id<"users">
+) {
+  if (!presetId) return undefined
+
+  const preset = await ctx.db.get(presetId)
+  if (!preset || preset.userId !== userId) {
+    throw new Error("Preset not found.")
+  }
+
+  return preset._id
+}
+
 export const list = query({
   args: {},
   handler: async (ctx) => {
@@ -90,6 +105,10 @@ export const list = query({
           })),
           model: thread.model,
           repoUrl: thread.repoUrl,
+          sandboxPresetId: thread.sandboxPresetId,
+          sandboxPresetName: thread.sandboxPresetId
+            ? (await ctx.db.get(thread.sandboxPresetId))?.name
+            : undefined,
           sandboxId: thread.sandboxId,
           sandboxSnapshotId: thread.sandboxSnapshotId,
           sandboxSnapshotIdsToDelete: thread.sandboxSnapshotIdsToDelete,
@@ -106,17 +125,24 @@ export const createThread = mutation({
     model,
     prompt: v.string(),
     repoUrl: v.string(),
+    sandboxPresetId: v.optional(v.id("sandboxPresets")),
     speed,
     thinking,
     title: v.string(),
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
+    const sandboxPresetId = await requireOwnedPreset(
+      ctx,
+      args.sandboxPresetId,
+      userId
+    )
     const now = Date.now()
     const threadId = await ctx.db.insert("threads", {
       createdAt: now,
       model: args.model,
       repoUrl: args.repoUrl,
+      ...(sandboxPresetId ? { sandboxPresetId } : {}),
       title: args.title,
       updatedAt: now,
       userId,

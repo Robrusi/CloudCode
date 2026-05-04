@@ -1,16 +1,15 @@
 import { Sandbox } from "e2b"
 import { NextResponse } from "next/server"
 
-import {
-  compactSnapshotIds,
-  deleteSandboxSnapshots,
-} from "@/lib/e2b-snapshots"
+import { compactSnapshotIds, deleteSandboxSnapshots } from "@/lib/e2b-snapshots"
 import { refreshSandboxInactivityTimeout } from "@/lib/e2b-sandbox-timeout"
+import { withoutCloudcodeEnvLocal } from "@/lib/sandbox-env"
 
 export const runtime = "nodejs"
 export const maxDuration = 300
 
 const CODEX_HOME = "/home/user/.codex"
+const REPO_PATH = "/home/user/repo"
 const PROMPT_PATH = "/tmp/cloudcode-prompt.txt"
 const PREVIOUS_DIFF_PATH = "/tmp/cloudcode-previous.diff"
 const LAST_MESSAGE_PATH = "/tmp/cloudcode-last-message.txt"
@@ -65,7 +64,9 @@ export async function POST(request: Request) {
         { timeoutMs: 10_000 }
       )
       .catch(() => undefined)
-    const snapshot = await sandbox.createSnapshot()
+    const snapshot = await withoutCloudcodeEnvLocal(sandbox, REPO_PATH, () =>
+      sandbox.createSnapshot()
+    )
     const cleanup = await deleteSandboxSnapshots(
       previousSnapshotIds,
       snapshot.snapshotId

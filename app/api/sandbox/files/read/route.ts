@@ -42,7 +42,13 @@ export async function GET(request: Request) {
 
   // Disallow path traversal escape outside repo root.
   const cleaned = relPath.replace(/^\/+/, "")
-  if (cleaned.includes("..")) {
+  if (
+    cleaned.includes("..") ||
+    cleaned.startsWith("tmp/cloudcode-") ||
+    cleaned.startsWith("home/user/.codex/cloudcode-") ||
+    cleaned.startsWith(".codex/") ||
+    cleaned.includes("/.env")
+  ) {
     return NextResponse.json({ error: "invalid path" }, { status: 400 })
   }
 
@@ -98,17 +104,15 @@ export async function GET(request: Request) {
           )
         }
         const content = await sandbox.files.read(fullPath, { format: "text" })
-        return NextResponse.json(
-          {
-            path: cleaned,
-            content,
-            size: info.size,
-            modifiedTime:
-              info.modifiedTime instanceof Date
-                ? info.modifiedTime.toISOString()
-                : info.modifiedTime ?? null,
-          }
-        )
+        return NextResponse.json({
+          path: cleaned,
+          content,
+          size: info.size,
+          modifiedTime:
+            info.modifiedTime instanceof Date
+              ? info.modifiedTime.toISOString()
+              : (info.modifiedTime ?? null),
+        })
       }
     )
   } catch (error) {

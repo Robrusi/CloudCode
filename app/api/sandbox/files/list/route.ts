@@ -34,6 +34,14 @@ function toEntries(stdout: string) {
   for (const raw of stdout.split("\0")) {
     const path = raw.trim().replace(/^\.\//, "")
     if (!path || seen.has(path)) continue
+    if (
+      path.startsWith("tmp/cloudcode-") ||
+      path.startsWith("home/user/.codex/cloudcode-") ||
+      path.startsWith(".codex/") ||
+      path.includes("/.env")
+    ) {
+      continue
+    }
     total += 1
     seen.add(path)
     entries.push({ path, type: "file" })
@@ -69,6 +77,7 @@ export async function GET(request: Request) {
           .join(" -o ")
         const command = [
           "set -e",
+          `if [ ! -d ${shellQuote(root)} ]; then exit 0; fi`,
           `cd ${shellQuote(root)}`,
           "if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then",
           `  git ls-files -co --exclude-standard -z | head -z -n ${MAX_ENTRIES + 1}`,
@@ -94,8 +103,7 @@ export async function GET(request: Request) {
   } catch (error) {
     return NextResponse.json(
       {
-        error:
-          error instanceof Error ? error.message : "Failed to list files",
+        error: error instanceof Error ? error.message : "Failed to list files",
       },
       { status: 500 }
     )

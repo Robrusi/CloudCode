@@ -18,7 +18,9 @@ import {
   Folder,
   FolderOpen,
   GitBranch,
+  KeyRound,
   Loader2,
+  Package,
   PanelLeft,
   Pause,
   Plus,
@@ -152,6 +154,8 @@ type ChatRecord = {
   codexThreadId?: string
   id: Id<"threads">
   repoUrl: string
+  sandboxPresetId?: Id<"sandboxPresets">
+  sandboxPresetName?: string
   sandboxId?: string
   sandboxSnapshotId?: string
   sandboxSnapshotIdsToDelete?: string[]
@@ -159,6 +163,23 @@ type ChatRecord = {
   messages: Message[]
   model: Model
   createdAt: number
+  updatedAt: number
+}
+
+type SandboxPresetSecretRecord = {
+  hasValue: boolean
+  id: Id<"sandboxPresetSecrets">
+  name: string
+  updatedAt: number
+}
+
+type SandboxPresetRecord = {
+  createdAt: number
+  id: Id<"sandboxPresets">
+  installScript?: string
+  name: string
+  secrets: SandboxPresetSecretRecord[]
+  tools: string[]
   updatedAt: number
 }
 
@@ -173,6 +194,7 @@ type Thinking = (typeof THINKINGS)[number]
 
 const REPO_KEY = "cloudcode:repoUrl"
 const MODEL_KEY = "cloudcode:model"
+const PRESET_KEY = "cloudcode:sandboxPresetId"
 const HANDOFF_CONTENT_LIMIT = 1_200
 const HANDOFF_RECENT_USER_LIMIT = 4
 const HANDOFF_DIFF_FILE_LIMIT = 12
@@ -199,9 +221,7 @@ function latestCompletedMessage(messages: Message[], role: Role) {
 function compactIds(ids: Array<string | null | undefined>) {
   return [
     ...new Set(
-      ids
-        .map((id) => id?.trim())
-        .filter((id): id is string => Boolean(id))
+      ids.map((id) => id?.trim()).filter((id): id is string => Boolean(id))
     ),
   ]
 }
@@ -540,6 +560,84 @@ const THINKING_LABEL: Record<Thinking, string> = {
   xhigh: "Extra High",
 }
 
+const PRESET_TOOLS = [
+  {
+    description: "Installs Bun into the sandbox user profile.",
+    id: "bun",
+    label: "Bun",
+  },
+  {
+    description: "Clones Flutter stable into the sandbox user profile.",
+    id: "flutter",
+    label: "Flutter",
+  },
+  {
+    description: "Enables pnpm through Corepack or npm.",
+    id: "node-pnpm",
+    label: "Node + pnpm",
+  },
+  {
+    description: "Verifies Python and pip availability.",
+    id: "python",
+    label: "Python",
+  },
+  {
+    description: "Verifies Go availability in the base image.",
+    id: "go",
+    label: "Go",
+  },
+  {
+    description: "Installs Rust through rustup when needed.",
+    id: "rust",
+    label: "Rust",
+  },
+  {
+    description: "Installs the uv Python package and project manager.",
+    id: "uv",
+    label: "uv",
+  },
+  {
+    description: "Installs Miniconda for managing conda environments.",
+    id: "conda",
+    label: "Conda",
+  },
+  {
+    description: "Installs Ruby and Bundler via apt when needed.",
+    id: "ruby",
+    label: "Ruby",
+  },
+  {
+    description: "Installs the Temurin JDK (Java) via apt when needed.",
+    id: "java",
+    label: "Java",
+  },
+  {
+    description: "Installs Kotlin through SDKMAN (requires Java).",
+    id: "kotlin",
+    label: "Kotlin",
+  },
+  {
+    description: "Installs the .NET SDK via the official install script.",
+    id: "dotnet",
+    label: ".NET",
+  },
+  {
+    description: "Installs Elixir and Erlang/OTP via apt when needed.",
+    id: "elixir",
+    label: "Elixir",
+  },
+  {
+    description: "Downloads the latest Zig release tarball.",
+    id: "zig",
+    label: "Zig",
+  },
+  {
+    description: "Downloads the latest Swift Linux toolchain.",
+    id: "swift",
+    label: "Swift",
+  },
+] as const
+
 function shortModel(m: Model) {
   return m.replace(/^gpt-/, "")
 }
@@ -632,6 +730,11 @@ function ChatInner() {
   const { isLoading: userLoading } = useStoreUserEffect()
   const rawChats = useQuery(api.chats.list)
   const chats = useMemo(() => (rawChats ?? []) as ChatRecord[], [rawChats])
+  const rawPresets = useQuery(api.sandboxPresets.list)
+  const sandboxPresets = useMemo(
+    () => (rawPresets ?? []) as SandboxPresetRecord[],
+    [rawPresets]
+  )
   const createThread = useMutation(api.chats.createThread)
   const appendRunMessages = useMutation(api.chats.appendRunMessages)
   const completeAssistantMessage = useMutation(
@@ -675,8 +778,17 @@ function ChatInner() {
       ? (stored as Thinking)
       : "medium"
   })
+  const [draftSandboxPresetId, setDraftSandboxPresetId] = useState<
+    Id<"sandboxPresets"> | ""
+  >(() =>
+    typeof window === "undefined"
+      ? ""
+      : ((localStorage.getItem(PRESET_KEY) as Id<"sandboxPresets"> | null) ??
+        "")
+  )
   const [editingRepo, setEditingRepo] = useState(false)
   const [modelOpen, setModelOpen] = useState(false)
+  const [presetOpen, setPresetOpen] = useState(false)
   const [speedOpen, setSpeedOpen] = useState(false)
   const [thinkingOpen, setThinkingOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
@@ -693,6 +805,9 @@ function ChatInner() {
   const [view, setView] = useState<"chat" | "settings">("chat")
   const [busy, setBusy] = useState(false)
   const [runLogs, setRunLogs] = useState<Record<string, RunLog[]>>({})
+  const [liveRunStates, setLiveRunStates] = useState<
+    Record<string, CachedRunState>
+  >({})
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
   const [authError, setAuthError] = useState("")
   const abortRef = useRef<AbortController | null>(null)
@@ -716,15 +831,19 @@ function ChatInner() {
     () => chats.find((c) => c.id === activeId) ?? null,
     [chats, activeId]
   )
-  const activeSandboxId = active?.sandboxId ?? null
+  const activeRunState = active ? liveRunStates[active.id as string] : undefined
+  const activeSandboxId = activeRunState?.sandboxId ?? active?.sandboxId ?? null
+  const activeSnapshotCandidate =
+    activeRunState?.sandboxSnapshotId ?? active?.sandboxSnapshotId
   const activeSandboxSnapshotId =
-    active?.sandboxSnapshotId && !deletedSnapshotIds.has(active.sandboxSnapshotId)
-      ? active.sandboxSnapshotId
+    activeSnapshotCandidate && !deletedSnapshotIds.has(activeSnapshotCandidate)
+      ? activeSnapshotCandidate
       : null
   const terminalVisible = terminalOpen && Boolean(activeSandboxId)
 
   const repoUrl = active ? active.repoUrl : draftRepo
   const model = active ? active.model : draftModel
+  const sandboxPresetId = active ? active.sandboxPresetId : draftSandboxPresetId
   const speed = draftSpeed
   const thinking = draftThinking
   const messages = active?.messages ?? []
@@ -824,6 +943,33 @@ function ChatInner() {
     })
   }
 
+  function mergeThreadRunState(threadId: Id<"threads">, patch: CachedRunState) {
+    const key = threadId as string
+    const next = {
+      ...threadRunStateRef.current[key],
+      ...patch,
+    }
+    threadRunStateRef.current[key] = next
+    setLiveRunStates((current) => ({
+      ...current,
+      [key]: {
+        ...(current[key] ?? {}),
+        ...patch,
+      },
+    }))
+    return next
+  }
+
+  function removeThreadRunState(threadId: Id<"threads">) {
+    const key = threadId as string
+    delete threadRunStateRef.current[key]
+    setLiveRunStates((current) => {
+      const { [key]: _removed, ...next } = current
+      void _removed
+      return next
+    })
+  }
+
   function persistRepo(value: string) {
     if (active) {
       void updateThread({ repoUrl: value, threadId: active.id })
@@ -851,6 +997,13 @@ function ChatInner() {
   function persistThinking(next: Thinking) {
     setDraftThinking(next)
     localStorage.setItem(THINKING_KEY, next)
+  }
+
+  function persistSandboxPreset(next: Id<"sandboxPresets"> | "") {
+    if (active) return
+    setDraftSandboxPresetId(next)
+    if (next) localStorage.setItem(PRESET_KEY, next)
+    else localStorage.removeItem(PRESET_KEY)
   }
 
   function startNewChat() {
@@ -953,7 +1106,7 @@ function ChatInner() {
       }
 
       await deleteThreadMutation({ threadId: id })
-      delete threadRunStateRef.current[id as string]
+      removeThreadRunState(id)
     })()
     if (activeId === id) setActiveId(null)
     setPendingDeleteId(null)
@@ -987,11 +1140,13 @@ function ChatInner() {
     abortRef.current = controller
 
     try {
+      const runSandboxPresetId = active?.sandboxPresetId ?? draftSandboxPresetId
       if (!chatId) {
         const created = await createThread({
           model: draftModel,
           prompt: trimmed,
           repoUrl: repoUrl.trim(),
+          sandboxPresetId: runSandboxPresetId || undefined,
           speed: draftSpeed,
           thinking: draftThinking,
           title: trimmed.split("\n")[0].slice(0, 60),
@@ -1029,8 +1184,7 @@ function ChatInner() {
         ...threadPendingSnapshotIds(chatId),
       ])
       const previousSandboxSnapshotCandidate =
-        cachedRunState?.sandboxSnapshotId ??
-        active?.sandboxSnapshotId
+        cachedRunState?.sandboxSnapshotId ?? active?.sandboxSnapshotId
       const previousSandboxSnapshotId =
         previousSandboxSnapshotCandidate &&
         !deletedOrPendingSnapshotIds.has(previousSandboxSnapshotCandidate)
@@ -1057,15 +1211,31 @@ function ChatInner() {
           repoUrl: repoUrl.trim(),
           resumeContext,
           sandboxId: cachedRunState?.sandboxId ?? active?.sandboxId,
+          sandboxPresetId: runSandboxPresetId || undefined,
           speed,
           model,
         }),
         signal: controller.signal,
       })
       const runMessageId = assistantMessageId
-      const data = await readCodexRunResponse(res, (log, time) =>
+      const data = await readCodexRunResponse(res, (log, time) => {
         appendRunLog(runMessageId, log, time)
-      )
+
+        if (
+          chatId &&
+          log.kind === "setup" &&
+          log.detail &&
+          /sandbox/i.test(log.message)
+        ) {
+          mergeThreadRunState(chatId, { sandboxId: log.detail })
+          void saveRunState({
+            sandboxId: log.detail,
+            threadId: chatId,
+          }).catch((error) => {
+            console.warn("Unable to save live sandbox id.", error)
+          })
+        }
+      })
       const content =
         (typeof data.lastMessage === "string" && data.lastMessage.trim()) ||
         (typeof data.stdout === "string" && data.stdout.trim()) ||
@@ -1091,10 +1261,7 @@ function ChatInner() {
           data.sandboxSnapshotIdsToDelete
         ),
       }
-      threadRunStateRef.current[chatId as string] = {
-        ...threadRunStateRef.current[chatId as string],
-        ...nextRunState,
-      }
+      mergeThreadRunState(chatId, nextRunState)
       await completeAssistantMessage({
         content,
         messageId: assistantMessageId,
@@ -1118,8 +1285,7 @@ function ChatInner() {
             codexThreadId: nextRunState.codexThreadId,
             sandboxId: nextRunState.sandboxId,
             sandboxSnapshotId: nextRunState.sandboxSnapshotId,
-            sandboxSnapshotIdsToDelete:
-              nextRunState.sandboxSnapshotIdsToDelete,
+            sandboxSnapshotIdsToDelete: nextRunState.sandboxSnapshotIdsToDelete,
             threadId: chatId,
           })
         } catch (error) {
@@ -1134,12 +1300,22 @@ function ChatInner() {
           ? err.message
           : "Request failed."
       if (chatId && assistantMessageId) {
+        const liveRunState = threadRunStateRef.current[chatId as string]
         await completeAssistantMessage({
           content: msg,
           error: !aborted,
           messageId: assistantMessageId,
+          sandboxId: liveRunState?.sandboxId,
           threadId: chatId,
         })
+        if (liveRunState?.sandboxId) {
+          await saveRunState({
+            sandboxId: liveRunState.sandboxId,
+            threadId: chatId,
+          }).catch((error) => {
+            console.warn("Unable to save failed run sandbox state.", error)
+          })
+        }
       }
     } finally {
       setBusy(false)
@@ -1173,19 +1349,15 @@ function ChatInner() {
       const sandboxSnapshotIdsToDelete = stringArrayValue(
         data?.previousSnapshotDeferredIds
       )
-      threadRunStateRef.current[active.id as string] = {
-        ...threadRunStateRef.current[active.id as string],
-        sandboxSnapshotIdsToDelete,
-      }
+      mergeThreadRunState(active.id, { sandboxSnapshotIdsToDelete })
     } catch (error) {
       console.warn("Failed to kill sandbox.", error)
     }
 
-    threadRunStateRef.current[active.id as string] = {
-      ...threadRunStateRef.current[active.id as string],
+    mergeThreadRunState(active.id, {
       sandboxId: undefined,
       ...(sandboxSnapshotId ? { sandboxSnapshotId } : {}),
-    }
+    })
 
     try {
       if (sandboxSnapshotId) {
@@ -1231,11 +1403,10 @@ function ChatInner() {
 
       const deferredIds = stringArrayValue(data?.deferredIds)
 
-      threadRunStateRef.current[active.id as string] = {
-        ...threadRunStateRef.current[active.id as string],
+      mergeThreadRunState(active.id, {
         sandboxSnapshotId: undefined,
         sandboxSnapshotIdsToDelete: deferredIds,
-      }
+      })
       setDeletedSnapshotIds((current) => new Set(current).add(snapshotId))
       setActiveFilePath(null)
       await clearSandboxSnapshot({
@@ -1276,13 +1447,12 @@ function ChatInner() {
       )
     }
 
-    threadRunStateRef.current[active.id as string] = {
-      ...threadRunStateRef.current[active.id as string],
+    mergeThreadRunState(active.id, {
       sandboxSnapshotId: data.sandboxSnapshotId,
       sandboxSnapshotIdsToDelete: stringArrayValue(
         data.previousSnapshotDeferredIds
       ),
-    }
+    })
 
     await saveRunState({
       sandboxSnapshotId: data.sandboxSnapshotId,
@@ -1325,13 +1495,12 @@ function ChatInner() {
     }
 
     if (typeof data?.sandboxSnapshotId === "string") {
-      threadRunStateRef.current[active.id as string] = {
-        ...threadRunStateRef.current[active.id as string],
+      mergeThreadRunState(active.id, {
         sandboxSnapshotId: data.sandboxSnapshotId,
         sandboxSnapshotIdsToDelete: stringArrayValue(
           data.previousSnapshotDeferredIds
         ),
-      }
+      })
       await saveRunState({
         sandboxSnapshotId: data.sandboxSnapshotId,
         sandboxSnapshotIdsToDelete:
@@ -1389,6 +1558,7 @@ function ChatInner() {
           <SettingsScreen
             authStatus={authStatus}
             authError={authError}
+            sandboxPresets={sandboxPresets}
             sidebarOpen={sidebarOpen}
             onToggleSidebar={() => setSidebarOpen((v) => !v)}
           />
@@ -1423,7 +1593,10 @@ function ChatInner() {
                 placement="main"
               />
             ) : (
-          <div ref={setThreadElement} className="min-h-0 flex-1 overflow-y-auto">
+              <div
+                ref={setThreadElement}
+                className="min-h-0 flex-1 overflow-y-auto"
+              >
                 <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col px-6 pt-16 pb-40">
                   {empty ? (
                     <div className="flex flex-1 flex-col items-center justify-center text-center">
@@ -1499,6 +1672,15 @@ function ChatInner() {
                     setEditing={setEditingRepo}
                     onChange={persistRepo}
                     locked={Boolean(active)}
+                  />
+                  <PresetPill
+                    value={sandboxPresetId ?? ""}
+                    presets={sandboxPresets}
+                    open={presetOpen}
+                    setOpen={setPresetOpen}
+                    onSelect={persistSandboxPreset}
+                    locked={Boolean(active)}
+                    activeLabel={active?.sandboxPresetName}
                   />
 
                   <div className="ml-auto flex items-center gap-1.5">
@@ -1603,11 +1785,13 @@ function SignedOutScreen() {
 function SettingsScreen({
   authStatus,
   authError,
+  sandboxPresets,
   sidebarOpen,
   onToggleSidebar,
 }: {
   authStatus: AuthStatus | null
   authError: string
+  sandboxPresets: SandboxPresetRecord[]
   sidebarOpen: boolean
   onToggleSidebar: () => void
 }) {
@@ -1634,7 +1818,7 @@ function SettingsScreen({
             Settings
           </h1>
           <p className="mt-1.5 text-sm text-muted-foreground">
-            Manage connected accounts and integrations.
+            Manage connected accounts, sandbox presets, and preset secrets.
           </p>
 
           <div className="mt-8">
@@ -1678,6 +1862,352 @@ function SettingsScreen({
                   {connected ? "Reconnect" : "Connect"}
                 </a>
               </div>
+            </div>
+          </div>
+
+          <PresetSettings presets={sandboxPresets} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
+  const createPreset = useMutation(api.sandboxPresets.create)
+  const updatePreset = useMutation(api.sandboxPresets.update)
+  const removePreset = useMutation(api.sandboxPresets.remove)
+  const removeSecret = useMutation(api.sandboxPresets.removeSecret)
+  const [selectedId, setSelectedId] = useState<Id<"sandboxPresets"> | null>(
+    null
+  )
+  const selected = presets.find((preset) => preset.id === selectedId) ?? null
+  const [name, setName] = useState("")
+  const [tools, setTools] = useState<string[]>([])
+  const [installScript, setInstallScript] = useState("")
+  const [secretName, setSecretName] = useState("")
+  const [secretValue, setSecretValue] = useState("")
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState("")
+
+  function startNewPreset() {
+    setSelectedId(null)
+    setName("")
+    setTools([])
+    setInstallScript("")
+    setSecretName("")
+    setSecretValue("")
+    setError("")
+  }
+
+  function selectPreset(preset: SandboxPresetRecord) {
+    setSelectedId(preset.id)
+    setName(preset.name)
+    setTools(preset.tools)
+    setInstallScript(preset.installScript ?? "")
+    setSecretName("")
+    setSecretValue("")
+    setError("")
+  }
+
+  function toggleTool(tool: string) {
+    setTools((current) =>
+      current.includes(tool)
+        ? current.filter((item) => item !== tool)
+        : [...current, tool]
+    )
+  }
+
+  async function savePreset() {
+    setSaving(true)
+    setError("")
+    try {
+      if (selected) {
+        await updatePreset({
+          installScript: installScript.trim() || undefined,
+          name,
+          presetId: selected.id,
+          tools,
+        })
+      } else {
+        const id = await createPreset({
+          installScript: installScript.trim() || undefined,
+          name,
+          tools,
+        })
+        setSelectedId(id)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to save preset.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function deletePreset() {
+    if (!selected || saving) return
+    setSaving(true)
+    setError("")
+    try {
+      await removePreset({ presetId: selected.id })
+      startNewPreset()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to delete preset.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function saveSecret() {
+    if (!selected) {
+      setError("Save the preset before adding secrets.")
+      return
+    }
+
+    setSaving(true)
+    setError("")
+    try {
+      const response = await fetch("/api/sandbox/presets/secrets", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: secretName,
+          presetId: selected.id,
+          value: secretValue,
+        }),
+      })
+      const data = (await response.json().catch(() => undefined)) as
+        | { error?: unknown }
+        | undefined
+
+      if (!response.ok) {
+        throw new Error(
+          typeof data?.error === "string"
+            ? data.error
+            : "Unable to save secret."
+        )
+      }
+      setSecretName("")
+      setSecretValue("")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to save secret.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function deleteSecret(secretId: Id<"sandboxPresetSecrets">) {
+    setSaving(true)
+    setError("")
+    try {
+      await removeSecret({ secretId })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to delete secret.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="mt-8">
+      <div className="flex items-center justify-between px-1">
+        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+          Presets
+        </h2>
+        <button
+          type="button"
+          onClick={startNewPreset}
+          className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <Plus className="size-3.5" />
+          New
+        </button>
+      </div>
+
+      <div className="mt-2 grid gap-3 md:grid-cols-[15rem_1fr]">
+        <div className="overflow-hidden rounded-xl border border-border/60 bg-background">
+          {presets.length === 0 ? (
+            <div className="px-3.5 py-6 text-center text-xs leading-5 text-muted-foreground">
+              No presets yet.
+            </div>
+          ) : (
+            presets.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                onClick={() => selectPreset(preset)}
+                className={cn(
+                  "flex w-full items-center gap-2 border-b border-border/50 px-3.5 py-3 text-left last:border-0 hover:bg-muted/70",
+                  selected?.id === preset.id && "bg-muted"
+                )}
+              >
+                <Package className="size-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium text-foreground/85">
+                    {preset.name}
+                  </span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {preset.tools.length || preset.installScript
+                      ? [
+                          preset.tools.length
+                            ? `${preset.tools.length} tool${preset.tools.length === 1 ? "" : "s"}`
+                            : "",
+                          preset.installScript ? "script" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(", ")
+                      : "No setup commands"}
+                  </span>
+                </span>
+                {preset.secrets.length ? (
+                  <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                    {preset.secrets.length}
+                  </span>
+                ) : null}
+              </button>
+            ))
+          )}
+        </div>
+
+        <div className="rounded-xl border border-border/60 bg-background p-4">
+          <div className="grid gap-3">
+            <label className="grid gap-1.5 text-xs font-medium text-foreground/80">
+              Name
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="Flutter + Bun"
+                className="h-9 rounded-md border border-border/70 bg-transparent px-3 text-sm font-normal transition-colors outline-none focus:border-foreground/30"
+              />
+            </label>
+
+            <div>
+              <div className="mb-2 text-xs font-medium text-foreground/80">
+                Tools
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {PRESET_TOOLS.map((tool) => (
+                  <label
+                    key={tool.id}
+                    title={tool.description}
+                    className="flex min-h-10 cursor-pointer items-center gap-2 rounded-md border border-border/60 px-2.5 py-2 text-xs text-foreground/80 transition-colors hover:bg-muted"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={tools.includes(tool.id)}
+                      onChange={() => toggleTool(tool.id)}
+                      className="size-3.5 accent-foreground"
+                    />
+                    <span>{tool.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <label className="grid gap-1.5 text-xs font-medium text-foreground/80">
+              Custom install script
+              <textarea
+                value={installScript}
+                onChange={(event) => setInstallScript(event.target.value)}
+                rows={5}
+                spellCheck={false}
+                placeholder={
+                  "npm install -g firebase-tools\nfirebase --version"
+                }
+                className="min-h-28 resize-y rounded-md border border-border/70 bg-transparent px-3 py-2 font-mono text-xs leading-5 font-normal transition-colors outline-none focus:border-foreground/30"
+              />
+              <span className="text-[11px] leading-4 text-muted-foreground">
+                Use this for lightweight tool setup. Avoid repo dependency
+                installs like bun install; they can exhaust sandbox resources.
+              </span>
+            </label>
+
+            <div className="border-t border-border/60 pt-4">
+              <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground/80">
+                <KeyRound className="size-3.5 text-muted-foreground" />
+                Secrets
+              </div>
+              {selected?.secrets.length ? (
+                <div className="mb-3 overflow-hidden rounded-md border border-border/60">
+                  {selected.secrets.map((secret) => (
+                    <div
+                      key={secret.id}
+                      className="flex items-center gap-2 border-b border-border/50 px-2.5 py-2 last:border-0"
+                    >
+                      <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground/80">
+                        {secret.name}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground">
+                        saved
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => deleteSecret(secret.id)}
+                        disabled={saving}
+                        aria-label={`Delete ${secret.name}`}
+                        title={`Delete ${secret.name}`}
+                        className="grid size-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-destructive disabled:opacity-50"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mb-3 rounded-md border border-dashed border-border/70 px-3 py-4 text-center text-xs text-muted-foreground">
+                  No preset secrets.
+                </div>
+              )}
+
+              <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                <input
+                  value={secretName}
+                  onChange={(event) => setSecretName(event.target.value)}
+                  placeholder="SUPABASE_SERVICE_ROLE_KEY"
+                  className="h-9 rounded-md border border-border/70 bg-transparent px-3 font-mono text-xs transition-colors outline-none focus:border-foreground/30"
+                  spellCheck={false}
+                />
+                <input
+                  value={secretValue}
+                  onChange={(event) => setSecretValue(event.target.value)}
+                  placeholder="Value"
+                  type="password"
+                  className="h-9 rounded-md border border-border/70 bg-transparent px-3 text-xs transition-colors outline-none focus:border-foreground/30"
+                />
+                <button
+                  type="button"
+                  onClick={saveSecret}
+                  disabled={saving || !selected || !secretName || !secretValue}
+                  className="inline-flex h-9 items-center justify-center rounded-md bg-foreground px-3 text-xs font-medium text-background transition-opacity hover:opacity-85 disabled:opacity-40"
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+
+            {error ? (
+              <div className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                {error}
+              </div>
+            ) : null}
+
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <button
+                type="button"
+                onClick={deletePreset}
+                disabled={!selected || saving}
+                className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-destructive disabled:opacity-40"
+              >
+                <Trash2 className="size-3.5" />
+                Delete
+              </button>
+              <button
+                type="button"
+                onClick={savePreset}
+                disabled={saving || !name.trim()}
+                className="inline-flex h-8 items-center justify-center rounded-md bg-foreground px-3 text-xs font-medium text-background transition-opacity hover:opacity-85 disabled:opacity-40"
+              >
+                {saving ? "Saving" : selected ? "Save preset" : "Create preset"}
+              </button>
             </div>
           </div>
         </div>
@@ -2995,6 +3525,91 @@ function RepoChip({
   )
 }
 
+function PresetPill({
+  activeLabel,
+  locked,
+  onSelect,
+  open,
+  presets,
+  setOpen,
+  value,
+}: {
+  activeLabel?: string
+  locked?: boolean
+  onSelect: (value: Id<"sandboxPresets"> | "") => void
+  open: boolean
+  presets: SandboxPresetRecord[]
+  setOpen: (value: boolean) => void
+  value: Id<"sandboxPresets"> | ""
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const selected = presets.find((preset) => preset.id === value)
+  const label = selected?.name ?? activeLabel ?? "Default"
+
+  useEffect(() => {
+    if (!open) return
+    function onClick(event: MouseEvent) {
+      if (!ref.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener("mousedown", onClick)
+    return () => document.removeEventListener("mousedown", onClick)
+  }, [open, setOpen])
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => {
+          if (!locked) setOpen(!open)
+        }}
+        disabled={locked}
+        title={
+          locked ? "Preset is chosen when a chat starts" : "Sandbox preset"
+        }
+        className="flex h-8 max-w-[11rem] items-center gap-1.5 rounded-full px-2.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:hover:bg-transparent"
+      >
+        <Package className="size-3.5 shrink-0" />
+        <span className="truncate">{label}</span>
+        {locked ? null : <ChevronDown className="size-3 opacity-60" />}
+      </button>
+      {open && !locked ? (
+        <div className="absolute bottom-10 left-0 z-10 min-w-52 overflow-hidden rounded-2xl border border-black/[0.06] bg-popover p-1.5 shadow-[0_10px_30px_-12px_rgba(0,0,0,0.18)] dark:border-white/10">
+          <div className="px-3 pt-1.5 pb-1 text-xs text-muted-foreground">
+            Preset
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              onSelect("")
+              setOpen(false)
+            }}
+            className="flex w-full items-center justify-between gap-6 rounded-xl px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-muted"
+          >
+            <span>Default</span>
+            {!value ? <Check className="size-4 shrink-0" /> : null}
+          </button>
+          {presets.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() => {
+                onSelect(preset.id)
+                setOpen(false)
+              }}
+              className="flex w-full items-center justify-between gap-6 rounded-xl px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-muted"
+            >
+              <span className="min-w-0 truncate">{preset.name}</span>
+              {preset.id === value ? (
+                <Check className="size-4 shrink-0" strokeWidth={2.25} />
+              ) : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function Pill<T extends string>({
   header,
   value,
@@ -3845,8 +4460,7 @@ function getFilePathFromHref(href: string, repoName: string | null) {
   }
 
   if (path.startsWith("/")) {
-    if (!looksLikeFileHref(path)) return null
-    return sanitizeRelativeFilePath(path.replace(/^\/+/, ""))
+    return null
   }
 
   if (!looksLikeFileHref(path)) return null

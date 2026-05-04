@@ -8,6 +8,7 @@ export const runtime = "nodejs"
 const TERMINAL_PORT = 8766
 const TERMINAL_SCRIPT = "/home/user/.cloudcode-terminal-ws.py"
 const TERMINAL_LOG = "/home/user/.cloudcode-terminal-ws.log"
+const CLOUDCODE_PROFILE_PATH = "/home/user/.cloudcode-profile"
 
 function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`
@@ -145,9 +146,12 @@ def handle_client(conn):
                 pass
             env = os.environ.copy()
             env.setdefault("TERM", "xterm-256color")
+            env.setdefault("COLORTERM", "truecolor")
+            env.setdefault("CLICOLOR", "1")
+            env.setdefault("FORCE_COLOR", "1")
             env.setdefault("LANG", "C.UTF-8")
             env.setdefault("LC_ALL", "C.UTF-8")
-            os.execvpe("/bin/bash", ["bash", "-i", "-l"], env)
+            os.execvpe("/bin/bash", ["bash", "--rcfile", "/home/user/.bashrc", "-i"], env)
 
         set_winsize(fd, 100, 24)
         set_nonblocking(fd)
@@ -248,6 +252,10 @@ export async function GET(request: Request) {
       "  exit 0",
       "fi",
       `mkdir -p ${shellQuote("/home/user")}`,
+      `if [ -f ${shellQuote(CLOUDCODE_PROFILE_PATH)} ]; then`,
+      `  grep -qxF '. ${CLOUDCODE_PROFILE_PATH}' /home/user/.bashrc 2>/dev/null || printf '\\n. ${CLOUDCODE_PROFILE_PATH}\\n' >> /home/user/.bashrc`,
+      `  grep -qxF '. ${CLOUDCODE_PROFILE_PATH}' /home/user/.profile 2>/dev/null || printf '\\n. ${CLOUDCODE_PROFILE_PATH}\\n' >> /home/user/.profile`,
+      "fi",
       `python3 - <<'PY'`,
       "import base64",
       "from pathlib import Path",
