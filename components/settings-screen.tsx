@@ -14,7 +14,13 @@ import { useState } from "react"
 
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import { PRESET_TOOLS } from "@/lib/chat-options"
+import {
+  DEFAULT_SANDBOX_CPU_COUNT,
+  DEFAULT_SANDBOX_MEMORY_MB,
+  memoryLabel,
+  PRESET_TOOLS,
+  SANDBOX_SIZE_OPTIONS,
+} from "@/lib/chat-options"
 import { cn } from "@/lib/utils"
 
 type AuthStatus = {
@@ -27,8 +33,10 @@ type SandboxPresetSecretRecord = {
 }
 
 type SandboxPresetRecord = {
+  cpuCount: number
   id: Id<"sandboxPresets">
   installScript?: string
+  memoryMB: number
   name: string
   secrets: SandboxPresetSecretRecord[]
   tools: string[]
@@ -135,6 +143,8 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
   const selected = presets.find((preset) => preset.id === selectedId) ?? null
   const [name, setName] = useState("")
   const [tools, setTools] = useState<string[]>([])
+  const [cpuCount, setCpuCount] = useState(DEFAULT_SANDBOX_CPU_COUNT)
+  const [memoryMB, setMemoryMB] = useState(DEFAULT_SANDBOX_MEMORY_MB)
   const [installScript, setInstallScript] = useState("")
   const [secretName, setSecretName] = useState("")
   const [secretValue, setSecretValue] = useState("")
@@ -147,6 +157,8 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
     setCreating(true)
     setName("")
     setTools([])
+    setCpuCount(DEFAULT_SANDBOX_CPU_COUNT)
+    setMemoryMB(DEFAULT_SANDBOX_MEMORY_MB)
     setInstallScript("")
     setSecretName("")
     setSecretValue("")
@@ -158,6 +170,8 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
     setCreating(false)
     setName("")
     setTools([])
+    setCpuCount(DEFAULT_SANDBOX_CPU_COUNT)
+    setMemoryMB(DEFAULT_SANDBOX_MEMORY_MB)
     setInstallScript("")
     setSecretName("")
     setSecretValue("")
@@ -169,6 +183,8 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
     setCreating(false)
     setName(preset.name)
     setTools(preset.tools)
+    setCpuCount(preset.cpuCount)
+    setMemoryMB(preset.memoryMB)
     setInstallScript(preset.installScript ?? "")
     setSecretName("")
     setSecretValue("")
@@ -189,14 +205,18 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
     try {
       if (selected) {
         await updatePreset({
+          cpuCount,
           installScript: installScript.trim() || undefined,
+          memoryMB,
           name,
           presetId: selected.id,
           tools,
         })
       } else {
         const id = await createPreset({
+          cpuCount,
           installScript: installScript.trim() || undefined,
+          memoryMB,
           name,
           tools,
         })
@@ -235,7 +255,9 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
           return
         }
         presetId = await createPreset({
+          cpuCount,
           installScript: installScript.trim() || undefined,
+          memoryMB,
           name,
           tools,
         })
@@ -284,6 +306,19 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
   }
 
   const isEditing = selected !== null || creating
+  const sizeId =
+    SANDBOX_SIZE_OPTIONS.find(
+      (option) =>
+        option.cpuCount === cpuCount && option.memoryMB === memoryMB
+    )?.id ?? "normal"
+
+  function selectSize(size: string) {
+    const option =
+      SANDBOX_SIZE_OPTIONS.find((item) => item.id === size) ??
+      SANDBOX_SIZE_OPTIONS[0]
+    setCpuCount(option.cpuCount)
+    setMemoryMB(option.memoryMB)
+  }
 
   return (
     <div className="mt-8">
@@ -314,6 +349,8 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
               preset.tools.length
                 ? `${preset.tools.length} tool${preset.tools.length === 1 ? "" : "s"}`
                 : null,
+              `${preset.cpuCount} CPU`,
+              memoryLabel(preset.memoryMB),
               preset.installScript ? "install script" : null,
             ].filter(Boolean) as string[]
             return (
@@ -409,6 +446,38 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                       />
                       <span>{tool.label}</span>
                     </label>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div>
+              <div className="mb-2 text-xs font-medium text-foreground/80">
+                Resources
+              </div>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {SANDBOX_SIZE_OPTIONS.map((option) => {
+                  const active = sizeId === option.id
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => selectSize(option.id)}
+                      aria-pressed={active}
+                      className={cn(
+                        "rounded-md border px-2.5 py-2 text-left transition-colors",
+                        active
+                          ? "border-foreground/25 bg-muted text-foreground"
+                          : "border-border/60 text-foreground/80 hover:bg-muted"
+                      )}
+                    >
+                      <span className="block text-xs font-medium">
+                        {option.label}
+                      </span>
+                      <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                        {option.cpuCount} CPU · {memoryLabel(option.memoryMB)}
+                      </span>
+                    </button>
                   )
                 })}
               </div>

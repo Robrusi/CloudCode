@@ -303,9 +303,8 @@ function sandboxStateForChat(
   chat: SidebarChat,
   liveSandboxState?: SandboxState
 ) {
-  if (liveSandboxState) return liveSandboxState
-  if (chat.sandboxState) return chat.sandboxState
-  if (chat.sandboxId) return "running"
+  const state = liveSandboxState ?? chat.sandboxState
+  if (chat.sandboxId) return state ?? "running"
   if (chat.sandboxSnapshotId) return "killed"
   return undefined
 }
@@ -327,7 +326,7 @@ function useSidebarSandboxStates(chats: SidebarChat[]) {
 
   useEffect(() => {
     let cancelled = false
-    const threadIds = new Set(chats.map((chat) => chat.id as string))
+    const threadIds = new Set(sandboxLookups.map(({ threadId }) => threadId))
 
     async function load() {
       const results = await Promise.all(

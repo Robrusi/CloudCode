@@ -26,9 +26,18 @@ const TOOL_IDS = new Set([
 
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 const ENCRYPTED_SECRET_PREFIX = "cloudcode:v1:"
+const DEFAULT_CPU_COUNT = 2
+const DEFAULT_MEMORY_MB = 2048
+const RESOURCE_PROFILES = [
+  { cpuCount: 2, memoryMB: 2048 },
+  { cpuCount: 4, memoryMB: 4096 },
+  { cpuCount: 8, memoryMB: 8192 },
+] as const
 const DEFAULT_PRESETS = [
   {
+    cpuCount: DEFAULT_CPU_COUNT,
     installScript: undefined,
+    memoryMB: DEFAULT_MEMORY_MB,
     name: "Auto-detect",
     tools: ["auto-detect"],
   },
@@ -56,6 +65,36 @@ function cleanTools(tools: string[]) {
     if (!TOOL_IDS.has(tool)) throw new Error(`Unknown tool "${tool}".`)
   }
   return unique
+}
+
+function cleanResources(cpuCount?: number, memoryMB?: number) {
+  const cleanedCpuCount = cpuCount ?? DEFAULT_CPU_COUNT
+  const cleanedMemoryMB = memoryMB ?? DEFAULT_MEMORY_MB
+  const valid = RESOURCE_PROFILES.some(
+    (profile) =>
+      profile.cpuCount === cleanedCpuCount &&
+      profile.memoryMB === cleanedMemoryMB
+  )
+
+  if (!valid) {
+    throw new Error("Sandbox size must be Normal, Large, or XLarge.")
+  }
+
+  return {
+    cpuCount: cleanedCpuCount,
+    memoryMB: cleanedMemoryMB,
+  }
+}
+
+function storedResources(cpuCount?: number, memoryMB?: number) {
+  try {
+    return cleanResources(cpuCount, memoryMB)
+  } catch {
+    return {
+      cpuCount: DEFAULT_CPU_COUNT,
+      memoryMB: DEFAULT_MEMORY_MB,
+    }
+  }
 }
 
 function cleanEnvName(name: string) {
@@ -96,15 +135,18 @@ export const list = query({
 
     return await Promise.all(
       presets.map(async (preset) => {
+        const resources = storedResources(preset.cpuCount, preset.memoryMB)
         const secrets = await ctx.db
           .query("sandboxPresetSecrets")
           .withIndex("by_preset", (q) => q.eq("presetId", preset._id))
           .collect()
 
         return {
+          cpuCount: resources.cpuCount,
           createdAt: preset.createdAt,
           id: preset._id,
           installScript: preset.installScript,
+          memoryMB: resources.memoryMB,
           name: preset.name,
           secrets: secrets
             .map((secret) => ({
@@ -131,14 +173,17 @@ export const getForRun = query({
     if (!user) return null
 
     const preset = await requireOwnedPreset(ctx, args.presetId, user._id)
+    const resources = storedResources(preset.cpuCount, preset.memoryMB)
     const secrets = await ctx.db
       .query("sandboxPresetSecrets")
       .withIndex("by_preset", (q) => q.eq("presetId", preset._id))
       .collect()
 
     return {
+      cpuCount: resources.cpuCount,
       id: preset._id,
       installScript: preset.installScript,
+      memoryMB: resources.memoryMB,
       name: preset.name,
       secrets: secrets
         .map((secret) => ({
@@ -153,17 +198,22 @@ export const getForRun = query({
 
 export const create = mutation({
   args: {
+    cpuCount: v.optional(v.number()),
     installScript: v.optional(v.string()),
+    memoryMB: v.optional(v.number()),
     name: v.string(),
     tools: v.array(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
     const now = Date.now()
+    const resources = cleanResources(args.cpuCount, args.memoryMB)
 
     return await ctx.db.insert("sandboxPresets", {
+      cpuCount: resources.cpuCount,
       createdAt: now,
       installScript: cleanInstallScript(args.installScript),
+      memoryMB: resources.memoryMB,
       name: cleanName(args.name),
       tools: cleanTools(args.tools),
       updatedAt: now,
@@ -193,8 +243,10 @@ export const ensureDefaultPresets = mutation({
 
       ensuredIds.push(
         await ctx.db.insert("sandboxPresets", {
+          cpuCount: preset.cpuCount,
           createdAt: now,
           installScript: preset.installScript,
+          memoryMB: preset.memoryMB,
           name: preset.name,
           tools: [...preset.tools],
           updatedAt: now,
@@ -209,7 +261,9 @@ export const ensureDefaultPresets = mutation({
 
 export const update = mutation({
   args: {
+    cpuCount: v.optional(v.number()),
     installScript: v.optional(v.string()),
+    memoryMB: v.optional(v.number()),
     name: v.string(),
     presetId: v.id("sandboxPresets"),
     tools: v.array(v.string()),
@@ -217,9 +271,12 @@ export const update = mutation({
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
     await requireOwnedPreset(ctx, args.presetId, userId)
+    const resources = cleanResources(args.cpuCount, args.memoryMB)
 
     await ctx.db.patch(args.presetId, {
+      cpuCount: resources.cpuCount,
       installScript: cleanInstallScript(args.installScript),
+      memoryMB: resources.memoryMB,
       name: cleanName(args.name),
       tools: cleanTools(args.tools),
       updatedAt: Date.now(),

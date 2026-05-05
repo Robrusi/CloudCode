@@ -34,6 +34,23 @@ const PRESET_EXIT_MARKER = "__CLOUDCODE_PRESET_EXIT__"
 const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60 * 1000
 const CODEX_UPDATE_TIMEOUT_MS = 3 * 60 * 1000
 const PRESET_INSTALL_TIMEOUT_MS = 20 * 60 * 1000
+const SANDBOX_TEMPLATE_BY_SIZE = [
+  {
+    cpuCount: 2,
+    memoryMB: 2048,
+    template: process.env.E2B_CODEX_NORMAL_TEMPLATE ?? "codex",
+  },
+  {
+    cpuCount: 4,
+    memoryMB: 4096,
+    template: process.env.E2B_CODEX_LARGE_TEMPLATE ?? "codex-large",
+  },
+  {
+    cpuCount: 8,
+    memoryMB: 8192,
+    template: process.env.E2B_CODEX_XLARGE_TEMPLATE ?? "codex-xlarge",
+  },
+] as const
 type CommandResult = {
   exitCode: number
   stderr: string
@@ -79,7 +96,9 @@ export type RunCodexInSandboxInput = {
 }
 
 export type SandboxPresetInput = {
+  cpuCount: number
   installScript?: string
+  memoryMB: number
   name: string
   secrets: SandboxPresetEnvVar[]
   tools: string[]
@@ -205,11 +224,44 @@ function parseOpaqueId(value: string | undefined, label: string) {
   return normalized
 }
 
-async function createSandbox(timeoutMs: number) {
-  return await Sandbox.create(SANDBOX_TEMPLATE, {
-    lifecycle: SANDBOX_LIFECYCLE,
-    timeoutMs,
-  })
+function sandboxTemplateForPreset(preset?: SandboxPresetInput) {
+  if (!preset) return SANDBOX_TEMPLATE
+
+  return (
+    SANDBOX_TEMPLATE_BY_SIZE.find(
+      (size) =>
+        size.cpuCount === preset.cpuCount && size.memoryMB === preset.memoryMB
+    )?.template ?? SANDBOX_TEMPLATE
+  )
+}
+
+function sandboxCreateError(error: unknown, template: string) {
+  if (
+    template !== SANDBOX_TEMPLATE &&
+    error instanceof Error &&
+    /template .*not found|404/i.test(error.message)
+  ) {
+    return new Error(
+      `E2B template "${template}" was not found. Build that template or set E2B_CODEX_LARGE_TEMPLATE/E2B_CODEX_XLARGE_TEMPLATE to an existing template before using this sandbox size.`
+    )
+  }
+
+  return error
+}
+
+async function createSandbox(
+  timeoutMs: number,
+  preset?: SandboxPresetInput
+) {
+  const template = sandboxTemplateForPreset(preset)
+  try {
+    return await Sandbox.create(template, {
+      lifecycle: SANDBOX_LIFECYCLE,
+      timeoutMs,
+    })
+  } catch (error) {
+    throw sandboxCreateError(error, template)
+  }
 }
 
 async function createSandboxFromSnapshot(
@@ -224,7 +276,8 @@ async function createSandboxFromSnapshot(
 
 async function createRestoredOrFreshSandbox(
   snapshotId: string | undefined,
-  timeoutMs: number
+  timeoutMs: number,
+  preset?: SandboxPresetInput
 ) {
   if (snapshotId) {
     try {
@@ -235,14 +288,14 @@ async function createRestoredOrFreshSandbox(
     } catch {
       return {
         restoredFromSnapshot: false,
-        sandbox: await createSandbox(timeoutMs),
+        sandbox: await createSandbox(timeoutMs, preset),
       }
     }
   }
 
   return {
     restoredFromSnapshot: false,
-    sandbox: await createSandbox(timeoutMs),
+    sandbox: await createSandbox(timeoutMs, preset),
   }
 }
 
@@ -293,11 +346,12 @@ async function createDefaultBranch(
 async function connectOrCreateSandbox(
   sandboxId: string | undefined,
   snapshotId: string | undefined,
-  timeoutMs: number
+  timeoutMs: number,
+  preset?: SandboxPresetInput
 ) {
   if (!sandboxId) {
     const { restoredFromSnapshot, sandbox } =
-      await createRestoredOrFreshSandbox(snapshotId, timeoutMs)
+      await createRestoredOrFreshSandbox(snapshotId, timeoutMs, preset)
 
     return {
       recoveredSandbox: false,
@@ -314,7 +368,7 @@ async function connectOrCreateSandbox(
     }
   } catch {
     const { restoredFromSnapshot, sandbox } =
-      await createRestoredOrFreshSandbox(snapshotId, timeoutMs)
+      await createRestoredOrFreshSandbox(snapshotId, timeoutMs, preset)
 
     return {
       recoveredSandbox: true,
@@ -441,6 +495,7 @@ function presetPathExports(preset?: SandboxPresetInput) {
     "#!/usr/bin/env bash",
     `export PATH="${paths.join(":")}:$PATH"`,
     'export DOTNET_ROOT="/home/user/.dotnet"',
+    'export MISE_TRUSTED_CONFIG_PATHS="/home/user/repo"',
     ...(preset?.secrets ?? []).map(
       (secret) => `export ${secret.name}=${shellQuote(secret.value)}`
     ),
@@ -1006,6 +1061,32 @@ function summarizeCodexEvent(event: unknown): RunCodexLog | undefined {
   return undefined
 }
 
+function summarizeUnknownCodexEvent(event: unknown): RunCodexLog | undefined {
+  const record = objectRecord(event)
+  if (!record) return undefined
+
+  const type = stringValue(record.type)
+  if (!type) return undefined
+
+  const status = stringValue(record.status)
+  const text = findString(record, [
+    "summary",
+    "message",
+    "text",
+    "content",
+    "delta",
+    "reason",
+    "detail",
+  ])
+
+  if (!text && !status) return undefined
+
+  return {
+    kind: type.toLowerCase().includes("error") ? "stderr" : "stdout",
+    message: compactLine([type, status, text].filter(Boolean).join(": ")),
+  }
+}
+
 function createStdoutLogger(
   onLog: RunCodexInSandboxInput["onLog"],
   onCodexThreadId: (threadId: string) => void
@@ -1027,7 +1108,12 @@ function createStdoutLogger(
       const threadId = codexThreadIdFromEvent(event)
       if (threadId) onCodexThreadId(threadId)
       const summary = summarizeCodexEvent(event)
-      if (summary) void onLog?.(summary)
+      if (summary) {
+        void onLog?.(summary)
+      } else {
+        const fallback = summarizeUnknownCodexEvent(event)
+        if (fallback) void onLog?.(fallback)
+      }
     } catch {
       emitPlainLine(trimmed)
     }
@@ -1154,20 +1240,32 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     input.previousSandboxSnapshotId,
     "previousSandboxSnapshotId"
   )
+  const sandboxTemplate = sandboxTemplateForPreset(input.sandboxPreset)
   await emitLog(input, {
     kind: "setup",
     message: input.sandboxId
       ? "Connecting to sandbox"
       : previousSandboxSnapshotId
         ? "Creating sandbox from snapshot"
-        : "Creating sandbox",
+        : `Creating ${sandboxTemplate} sandbox`,
   })
   const { recoveredSandbox, restoredFromSnapshot, sandbox } =
     await connectOrCreateSandbox(
       input.sandboxId,
       previousSandboxSnapshotId,
-      sandboxTimeoutMs
+      sandboxTimeoutMs,
+      input.sandboxPreset
     )
+  try {
+    const info = await sandbox.getInfo()
+    await emitLog(input, {
+      kind: "setup",
+      message: `Sandbox resources: ${info.cpuCount} CPU, ${Math.round(info.memoryMB / 1024)} GB RAM`,
+      detail: info.templateId,
+    })
+  } catch {
+    // Resource reporting is diagnostic only; sandbox setup can continue.
+  }
   await emitLog(input, {
     kind: "setup",
     message: restoredFromSnapshot
@@ -1416,6 +1514,12 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       })
     )
     stdoutLogger.flush()
+
+    await emitLog(input, {
+      detail: String(result.exitCode),
+      kind: result.exitCode === 0 ? "setup" : "stderr",
+      message: `Codex exited with code ${result.exitCode}`,
+    })
 
     await emitLog(input, {
       kind: "command",
