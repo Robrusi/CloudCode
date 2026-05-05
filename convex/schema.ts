@@ -83,8 +83,10 @@ export default defineSchema({
     .index("by_user_preset_name", ["userId", "presetId", "name"]),
 
   sandboxPresets: defineTable({
+    cpuCount: v.optional(v.number()),
     createdAt: v.number(),
     installScript: v.optional(v.string()),
+    memoryMB: v.optional(v.number()),
     name: v.string(),
     tools: v.array(v.string()),
     updatedAt: v.number(),

@@ -7,6 +7,29 @@ export type Speed = (typeof SPEEDS)[number]
 export const THINKINGS = ["none", "low", "medium", "high", "xhigh"] as const
 export type Thinking = (typeof THINKINGS)[number]
 
+export const DEFAULT_SANDBOX_CPU_COUNT = 2
+export const DEFAULT_SANDBOX_MEMORY_MB = 2048
+export const SANDBOX_SIZE_OPTIONS = [
+  {
+    cpuCount: 2,
+    id: "normal",
+    label: "Normal",
+    memoryMB: 2048,
+  },
+  {
+    cpuCount: 4,
+    id: "large",
+    label: "Large",
+    memoryMB: 4096,
+  },
+  {
+    cpuCount: 8,
+    id: "xlarge",
+    label: "XLarge",
+    memoryMB: 8192,
+  },
+] as const
+
 export const MODEL_LABEL: Record<Model, string> = {
   "gpt-5.5": "GPT 5.5",
   "gpt-5.4": "GPT 5.4",
@@ -112,4 +135,10 @@ export const PRESET_TOOLS = [
 
 export function shortModel(m: Model) {
   return m.replace(/^gpt-/, "")
+}
+
+export function memoryLabel(memoryMB: number) {
+  return memoryMB >= 1024 && memoryMB % 1024 === 0
+    ? `${memoryMB / 1024} GB`
+    : `${memoryMB} MB`
 }

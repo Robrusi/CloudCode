@@ -149,8 +149,10 @@ type SandboxPresetSecretRecord = {
 
 type SandboxPresetRecord = {
   createdAt: number
+  cpuCount: number
   id: Id<"sandboxPresets">
   installScript?: string
+  memoryMB: number
   name: string
   secrets: SandboxPresetSecretRecord[]
   tools: string[]
@@ -186,6 +188,7 @@ function hasCachedRunKey<K extends keyof CachedRunState>(
 const SPEED_KEY = "cloudcode:speed"
 const THINKING_KEY = "cloudcode:thinking"
 const ACTIVE_KEY = "cloudcode:activeChatId"
+const DRAFT_RUN_KEY = "__draft__"
 const EMPTY_LOGS: RunLog[] = []
 
 function repoLabel(url: string) {
@@ -288,20 +291,23 @@ function ChatInner() {
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null)
   const [activeFileMode, setActiveFileMode] =
     useState<FileBrowserOpenMode>("file")
-  const [deletingSnapshot, setDeletingSnapshot] = useState(false)
+  const [deletingSnapshotByThread, setDeletingSnapshotByThread] = useState<
+    Record<string, true>
+  >({})
   const [deletedSnapshotIds, setDeletedSnapshotIds] = useState<Set<string>>(
     () => new Set()
   )
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [view, setView] = useState<"chat" | "settings">("chat")
-  const [busy, setBusy] = useState(false)
+  const [runningRunKeys, setRunningRunKeys] = useState<Record<string, true>>({})
   const [runLogs, setRunLogs] = useState<Record<string, RunLog[]>>({})
   const [liveRunStates, setLiveRunStates] = useState<
     Record<string, CachedRunState>
   >({})
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
   const [authError, setAuthError] = useState("")
-  const abortRef = useRef<AbortController | null>(null)
+  const runControllersRef = useRef<Record<string, AbortController>>({})
+  const runningRunKeysRef = useRef<Set<string>>(new Set())
   const threadRunStateRef = useRef<Record<string, CachedRunState>>({})
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const threadRef = useRef<HTMLDivElement | null>(null)
@@ -343,7 +349,9 @@ function ChatInner() {
   )
   const activeRunState = active ? liveRunStates[active.id as string] : undefined
   const activeSandboxId =
-    hasCachedRunKey(activeRunState, "sandboxId")
+    activeRunState?.sandboxState === "killed"
+      ? null
+      : hasCachedRunKey(activeRunState, "sandboxId")
       ? (activeRunState?.sandboxId ?? null)
       : (active?.sandboxId ?? null)
   const activeSnapshotCandidate = hasCachedRunKey(
@@ -356,6 +364,15 @@ function ChatInner() {
     activeSnapshotCandidate && !deletedSnapshotIds.has(activeSnapshotCandidate)
       ? activeSnapshotCandidate
       : null
+  const messages = active?.messages ?? []
+  const activeRunKey = active ? (active.id as string) : DRAFT_RUN_KEY
+  const activeLocalRunPending = Boolean(runningRunKeys[activeRunKey])
+  const activeMessagePending = messages.some((message) => message.pending)
+  const activeRunPending = activeLocalRunPending || activeMessagePending
+  const canStopActiveRun = Boolean(runControllersRef.current[activeRunKey])
+  const deletingSnapshot = active
+    ? Boolean(deletingSnapshotByThread[active.id as string])
+    : false
   const terminalVisible = terminalOpen && Boolean(activeSandboxId)
 
   const repoUrl = active ? active.repoUrl : draftRepo
@@ -364,7 +381,6 @@ function ChatInner() {
   const sandboxPresetId = active ? active.sandboxPresetId : draftSandboxPresetId
   const speed = draftSpeed
   const thinking = draftThinking
-  const messages = active?.messages ?? []
   const empty = messages.length === 0
   const activeDiff = useMemo(
     () =>
@@ -495,6 +511,55 @@ function ChatInner() {
     })
   }
 
+  function markRunActive(runKey: string, controller: AbortController) {
+    runControllersRef.current[runKey] = controller
+    runningRunKeysRef.current.add(runKey)
+    setRunningRunKeys((current) => ({ ...current, [runKey]: true }))
+  }
+
+  function transferRunKey(previousKey: string, nextKey: string) {
+    if (previousKey === nextKey) return nextKey
+
+    const controller = runControllersRef.current[previousKey]
+    if (controller) {
+      delete runControllersRef.current[previousKey]
+      runControllersRef.current[nextKey] = controller
+    }
+    runningRunKeysRef.current.delete(previousKey)
+    runningRunKeysRef.current.add(nextKey)
+    setRunningRunKeys((current) => {
+      const { [previousKey]: _removed, ...rest } = current
+      void _removed
+      return { ...rest, [nextKey]: true }
+    })
+
+    return nextKey
+  }
+
+  function clearRunKey(runKey: string) {
+    delete runControllersRef.current[runKey]
+    runningRunKeysRef.current.delete(runKey)
+    setRunningRunKeys((current) => {
+      if (!current[runKey]) return current
+      const { [runKey]: _removed, ...next } = current
+      void _removed
+      return next
+    })
+  }
+
+  function setThreadDeletingSnapshot(
+    threadId: Id<"threads">,
+    deleting: boolean
+  ) {
+    const key = threadId as string
+    setDeletingSnapshotByThread((current) => {
+      if (deleting) return { ...current, [key]: true }
+      const { [key]: _removed, ...next } = current
+      void _removed
+      return next
+    })
+  }
+
   function persistDraftRepo(value: string) {
     setDraftRepo(value)
     if (value) localStorage.setItem(REPO_KEY, value)
@@ -570,6 +635,7 @@ function ChatInner() {
     setInput("")
     setEditingRepo(false)
     setActiveFilePath(null)
+    setFilesOpen(false)
     setTerminalOpen(false)
     setView("chat")
     setNewChatOpen(false)
@@ -581,6 +647,7 @@ function ChatInner() {
     setInput("")
     setEditingRepo(false)
     setActiveFilePath(null)
+    setFilesOpen(false)
     setTerminalOpen(false)
     setView("chat")
   }
@@ -588,6 +655,7 @@ function ChatInner() {
   function showSettings() {
     setView("settings")
     setActiveFilePath(null)
+    setFilesOpen(false)
     setTerminalOpen(false)
   }
 
@@ -684,7 +752,15 @@ function ChatInner() {
 
   async function send(prompt: string) {
     const trimmed = prompt.trim()
-    if (!trimmed || busy || userLoading) return
+    const initialRunKey = active ? (active.id as string) : DRAFT_RUN_KEY
+    if (
+      !trimmed ||
+      userLoading ||
+      runningRunKeysRef.current.has(initialRunKey) ||
+      (active ? active.messages.some((message) => message.pending) : false)
+    ) {
+      return
+    }
     if (!repoUrl.trim()) {
       setEditingRepo(true)
       return
@@ -694,14 +770,14 @@ function ChatInner() {
       return
     }
 
-    let chatId = activeId
+    let chatId = active?.id ?? null
     let assistantMessageId: Id<"messages"> | null = null
+    let runKey = initialRunKey
 
     setInput("")
-    setBusy(true)
 
     const controller = new AbortController()
-    abortRef.current = controller
+    markRunActive(runKey, controller)
 
     try {
       const runSandboxPresetId = active?.sandboxPresetId ?? draftSandboxPresetId
@@ -719,6 +795,7 @@ function ChatInner() {
         })
         chatId = created.threadId
         assistantMessageId = created.assistantMessageId
+        runKey = transferRunKey(runKey, chatId as string)
         setActiveId(chatId)
       } else {
         const appended = await appendRunMessages({
@@ -906,8 +983,7 @@ function ChatInner() {
         }
       }
     } finally {
-      setBusy(false)
-      abortRef.current = null
+      clearRunKey(runKey)
     }
   }
 
@@ -920,6 +996,10 @@ function ChatInner() {
     const previousSnapshotIds = threadSnapshotCleanupIds(active.id)
     setTerminalOpen(false)
     closeBrowserTerminalSession(sandboxId)
+    mergeThreadRunState(active.id, {
+      sandboxId: undefined,
+      sandboxState: "killed",
+    })
 
     let sandboxSnapshotId: string | undefined
     try {
@@ -972,7 +1052,7 @@ function ChatInner() {
       active.sandboxSnapshotId
     if (!snapshotId) return
 
-    setDeletingSnapshot(true)
+    setThreadDeletingSnapshot(active.id, true)
     try {
       const response = await fetch("/api/sandbox/snapshot", {
         method: "DELETE",
@@ -994,6 +1074,7 @@ function ChatInner() {
       const deferredIds = stringArrayValue(data?.deferredIds)
 
       mergeThreadRunState(active.id, {
+        sandboxState: undefined,
         sandboxSnapshotId: undefined,
         sandboxSnapshotIdsToDelete: deferredIds,
       })
@@ -1006,7 +1087,7 @@ function ChatInner() {
     } catch (error) {
       console.warn("Failed to delete sandbox snapshot.", error)
     } finally {
-      setDeletingSnapshot(false)
+      setThreadDeletingSnapshot(active.id, false)
     }
   }
 
@@ -1062,6 +1143,7 @@ function ChatInner() {
     const previousSnapshotIds = threadSnapshotCleanupIds(active.id)
     setTerminalOpen(false)
     closeBrowserTerminalSession(sandboxId)
+    mergeThreadRunState(active.id, { sandboxState: "paused" })
 
     const response = await fetch("/api/sandbox/pause", {
       method: "POST",
@@ -1101,6 +1183,21 @@ function ChatInner() {
         threadId: active.id,
       })
     }
+  }
+
+  function stopActiveRun() {
+    const runKey = active ? (active.id as string) : DRAFT_RUN_KEY
+    runControllersRef.current[runKey]?.abort()
+    if (!active || !activeSandboxId) return
+    mergeThreadRunState(active.id, {
+      sandboxId: undefined,
+      sandboxState: "killed",
+    })
+    closeBrowserTerminalSession(activeSandboxId)
+    setTerminalOpen(false)
+    void clearSandbox({ threadId: active.id }).catch((error) => {
+      console.warn("Unable to clear stopped sandbox state.", error)
+    })
   }
 
   function onSubmit(e: FormEvent) {
@@ -1324,12 +1421,16 @@ function ChatInner() {
                       triggerClassName="text-muted-foreground"
                     />
 
-                    {busy ? (
+                    {activeRunPending ? (
                       <button
                         type="button"
-                        onClick={() => abortRef.current?.abort()}
-                        className="grid size-8 place-items-center rounded-full bg-foreground text-background transition-opacity hover:opacity-80"
+                        onClick={stopActiveRun}
+                        disabled={!canStopActiveRun}
+                        className="grid size-8 place-items-center rounded-full bg-foreground text-background transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
                         aria-label="Stop"
+                        title={
+                          canStopActiveRun ? "Stop" : "Run finishing elsewhere"
+                        }
                       >
                         <Square className="size-3.5 fill-current" />
                       </button>
@@ -1455,6 +1556,7 @@ function TopBar({
       <div className="ml-auto flex items-center gap-6">
         {sandboxId ? (
           <SandboxStatus
+            key={sandboxId}
             sandboxId={sandboxId}
             onKill={onKillSandbox}
             onPause={onPauseSandbox}
@@ -1463,6 +1565,7 @@ function TopBar({
           />
         ) : sandboxSnapshotId ? (
           <SnapshotStatus
+            key={sandboxSnapshotId}
             deleting={deletingSnapshot}
             onDelete={onDeleteSnapshot}
           />

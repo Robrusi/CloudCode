@@ -78,7 +78,7 @@ export function smartToolingInstallScript() {
     "  ensure_mise",
     '  log_tooling "Installing tools declared by mise/.tool-versions"',
     '  record_tooling "install mise-declared-tools source=mise-or-tool-versions"',
-    "  mise trust -a || true",
+    "  env -u MISE_TRUSTED_CONFIG_PATHS mise trust -a || true",
     "  mise install",
     "else",
     '  record_tooling "skip mise-declared-tools reason=no-mise-config"',

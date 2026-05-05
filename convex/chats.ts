@@ -329,6 +329,7 @@ export const clearSandboxSnapshot = mutation({
     await requireOwnedThread(ctx, args.threadId, userId)
 
     await ctx.db.patch(args.threadId, {
+      sandboxState: undefined,
       sandboxSnapshotId: undefined,
       sandboxSnapshotIdsToDelete:
         args.sandboxSnapshotIdsToDelete === undefined

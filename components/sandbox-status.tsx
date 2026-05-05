@@ -1,7 +1,15 @@
 "use client"
 
-import { Check, Loader2, Pause, Save, Trash2 } from "lucide-react"
-import { useEffect, useState } from "react"
+import {
+  Check,
+  Loader2,
+  Pause,
+  Play,
+  Save,
+  Snowflake,
+  Trash2,
+} from "lucide-react"
+import { useCallback, useEffect, useState } from "react"
 
 type SandboxInfo = {
   startedAt: number
@@ -83,7 +91,32 @@ export function SandboxStatus({
   const [pausing, setPausing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [freezePending, setFreezePending] = useState(false)
+  const [timeoutFreeze, setTimeoutFreeze] = useState<{
+    remainingMs: number
+    sandboxId: string
+  } | null>(null)
   const [now, setNow] = useState(() => Date.now())
+
+  const applySandboxTimeout = useCallback(
+    async (timeoutMs: number) => {
+      const res = await fetch("/api/sandbox/timeout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sandboxId, timeoutMs }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        throw new Error(data.error ?? "Failed to update sandbox timeout")
+      }
+      return {
+        startedAt: data.startedAt,
+        endAt: data.endAt,
+        state: data.state === "paused" ? "paused" : "running",
+      } satisfies SandboxInfo
+    },
+    [sandboxId]
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -112,15 +145,10 @@ export function SandboxStatus({
       }
     }
 
-    const firstLoad = window.setTimeout(() => {
-      setInfo(null)
-      setMissing(false)
-      void load()
-    }, 0)
+    void load()
     const id = window.setInterval(load, 15_000)
     return () => {
       cancelled = true
-      window.clearTimeout(firstLoad)
       window.clearInterval(id)
     }
   }, [sandboxId])
@@ -130,8 +158,37 @@ export function SandboxStatus({
     return () => window.clearInterval(id)
   }, [])
 
+  const frozenRemainingMs =
+    timeoutFreeze?.sandboxId === sandboxId ? timeoutFreeze.remainingMs : null
+  const timeoutFrozen = frozenRemainingMs !== null
+
+  useEffect(() => {
+    if (frozenRemainingMs === null) return
+    if (info?.state !== "running") return
+
+    let cancelled = false
+    const frozenMs = frozenRemainingMs
+
+    async function keepTimeoutFrozen() {
+      try {
+        const nextInfo = await applySandboxTimeout(frozenMs)
+        if (!cancelled) setInfo(nextInfo)
+      } catch {
+        // The regular status poll will surface missing/paused sandboxes.
+      }
+    }
+
+    void keepTimeoutFrozen()
+    const refreshEveryMs = Math.min(30_000, Math.max(1_000, frozenMs / 3))
+    const id = window.setInterval(keepTimeoutFrozen, refreshEveryMs)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [applySandboxTimeout, frozenRemainingMs, info?.state])
+
   async function handleKill() {
-    if (killing || pausing || saving) return
+    if (killing || pausing || saving || freezePending) return
     setKilling(true)
     try {
       await onKill()
@@ -141,10 +198,19 @@ export function SandboxStatus({
   }
 
   async function handlePause() {
-    if (killing || pausing || saving || info?.state === "paused") return
+    if (
+      killing ||
+      pausing ||
+      saving ||
+      freezePending ||
+      info?.state === "paused"
+    ) {
+      return
+    }
     setPausing(true)
     try {
       await onPause()
+      setTimeoutFreeze(null)
       setInfo((current) =>
         current
           ? {
@@ -159,8 +225,41 @@ export function SandboxStatus({
     }
   }
 
+  async function handleFreezeToggle() {
+    if (
+      freezePending ||
+      killing ||
+      pausing ||
+      saving ||
+      !info ||
+      info.state === "paused"
+    ) {
+      return
+    }
+
+    const remainingAtClick =
+      frozenRemainingMs !== null
+        ? frozenRemainingMs
+        : Math.max(0, info.endAt - Date.now())
+    if (remainingAtClick <= 0) return
+
+    setFreezePending(true)
+    try {
+      const nextInfo = await applySandboxTimeout(remainingAtClick)
+      setInfo(nextInfo)
+      setNow(Date.now())
+      if (frozenRemainingMs !== null) {
+        setTimeoutFreeze(null)
+      } else {
+        setTimeoutFreeze({ remainingMs: remainingAtClick, sandboxId })
+      }
+    } finally {
+      setFreezePending(false)
+    }
+  }
+
   async function handleSave() {
-    if (saving || killing || pausing) return
+    if (saving || killing || pausing || freezePending) return
     setSaving(true)
     setSaved(false)
     try {
@@ -181,9 +280,19 @@ export function SandboxStatus({
   const elapsed = info
     ? Math.max(0, (info.state === "paused" ? info.endAt : now) - info.startedAt)
     : 0
-  const remaining = info ? Math.max(0, info.endAt - now) : 0
+  const liveRemaining = info ? Math.max(0, info.endAt - now) : 0
+  const frozenRemaining =
+    timeoutFrozen && info?.state === "running" && frozenRemainingMs !== null
+      ? frozenRemainingMs
+      : null
+  const remaining = frozenRemaining ?? liveRemaining
 
-  const timeoutLabel = info?.state === "paused" ? "Paused" : "Idle timeout"
+  const timeoutLabel =
+    info?.state === "paused"
+      ? "Paused"
+      : timeoutFrozen
+        ? "Frozen timeout"
+        : "Idle timeout"
   const timeoutValue =
     info?.state === "paused"
       ? "Sleeping"
@@ -191,7 +300,7 @@ export function SandboxStatus({
         ? formatCountdown(remaining)
         : "-"
   const tooltip = info
-    ? `Sandbox ${sandboxId}\nState ${info.state}\nStarted ${new Date(info.startedAt).toLocaleString()}\nIdles out ${new Date(info.endAt).toLocaleString()}`
+    ? `Sandbox ${sandboxId}\nState ${info.state}\nStarted ${new Date(info.startedAt).toLocaleString()}\nIdles out ${new Date(info.endAt).toLocaleString()}${frozenRemaining === null ? "" : `\nFrozen at ${formatCountdown(frozenRemaining)}`}`
     : `Sandbox ${sandboxId}`
 
   return (
@@ -206,8 +315,37 @@ export function SandboxStatus({
       )}
       <button
         type="button"
+        onClick={handleFreezeToggle}
+        disabled={
+          freezePending ||
+          killing ||
+          pausing ||
+          saving ||
+          !info ||
+          info.state === "paused"
+        }
+        aria-label={timeoutFrozen ? "Unfreeze timeout" : "Freeze timeout"}
+        aria-pressed={timeoutFrozen}
+        title={timeoutFrozen ? "Unfreeze timeout" : "Freeze timeout"}
+        className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+      >
+        {freezePending ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : timeoutFrozen ? (
+          <Play className="size-3.5" />
+        ) : (
+          <Snowflake className="size-3.5" />
+        )}
+        {hideActions ? null : (
+          <span>
+            {freezePending ? "Updating" : timeoutFrozen ? "Unfreeze" : "Freeze"}
+          </span>
+        )}
+      </button>
+      <button
+        type="button"
         onClick={handleSave}
-        disabled={saving || killing || pausing}
+        disabled={saving || killing || pausing || freezePending}
         aria-label="Save sandbox"
         title="Save sandbox"
         className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
@@ -226,7 +364,13 @@ export function SandboxStatus({
       <button
         type="button"
         onClick={handlePause}
-        disabled={pausing || saving || killing || info?.state === "paused"}
+        disabled={
+          pausing ||
+          saving ||
+          killing ||
+          freezePending ||
+          info?.state === "paused"
+        }
         aria-label="Pause sandbox"
         title="Pause sandbox"
         className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
@@ -243,7 +387,7 @@ export function SandboxStatus({
       <button
         type="button"
         onClick={handleKill}
-        disabled={killing || saving || pausing}
+        disabled={killing || saving || pausing || freezePending}
         aria-label="Kill sandbox"
         title="Kill sandbox"
         className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-destructive disabled:opacity-50"

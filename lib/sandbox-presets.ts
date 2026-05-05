@@ -6,8 +6,10 @@ import { getConvexAuthToken } from "@/lib/codex-auth"
 import { decryptSecret } from "@/lib/secret-crypto"
 
 export type SandboxPresetForRun = {
+  cpuCount: number
   id: Id<"sandboxPresets">
   installScript?: string
+  memoryMB: number
   name: string
   secrets: Array<{
     name: string
