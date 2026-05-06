@@ -1,7 +1,11 @@
 import { Sandbox } from "e2b"
 import { NextResponse } from "next/server"
 
-import { compactSnapshotIds, deleteSandboxSnapshots } from "@/lib/e2b-snapshots"
+import {
+  compactSnapshotIds,
+  deleteSandboxSnapshots,
+  type SnapshotCleanupResult,
+} from "@/lib/e2b-snapshots"
 import { refreshSandboxInactivityTimeout } from "@/lib/e2b-sandbox-timeout"
 import { withoutCloudcodeEnvLocal } from "@/lib/sandbox-env"
 
@@ -13,6 +17,7 @@ const REPO_PATH = "/home/user/repo"
 const PROMPT_PATH = "/tmp/cloudcode-prompt.txt"
 const PREVIOUS_DIFF_PATH = "/tmp/cloudcode-previous.diff"
 const LAST_MESSAGE_PATH = "/tmp/cloudcode-last-message.txt"
+const SNAPSHOT_DELETE_RETRY_DELAY_MS = 1_000
 
 function snapshotIdsFromBody(body: {
   previousSnapshotId?: unknown
@@ -34,6 +39,47 @@ function snapshotIdsFromBody(body: {
       ? body.snapshotIds.map((id) => (typeof id === "string" ? id : undefined))
       : []),
   ])
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function deleteSnapshotsWithReleaseRetry(
+  snapshotIds: string[],
+  retryAfterSandboxKill: boolean
+): Promise<SnapshotCleanupResult> {
+  const cleanup = await deleteSandboxSnapshots(snapshotIds)
+  if (!retryAfterSandboxKill || cleanup.deferredIds.length === 0) {
+    return cleanup
+  }
+
+  await delay(SNAPSHOT_DELETE_RETRY_DELAY_MS)
+  const retryCleanup = await deleteSandboxSnapshots(cleanup.deferredIds)
+
+  return {
+    deletedIds: [...cleanup.deletedIds, ...retryCleanup.deletedIds],
+    deferredIds: retryCleanup.deferredIds,
+    errors: {
+      ...cleanup.errors,
+      ...retryCleanup.errors,
+    },
+  }
+}
+
+async function killSandboxForCleanup(sandboxId: string) {
+  try {
+    await Sandbox.kill(sandboxId)
+    return { sandboxKilled: true, sandboxMissing: false }
+  } catch (error) {
+    try {
+      await Sandbox.getInfo(sandboxId)
+    } catch {
+      return { sandboxKilled: false, sandboxMissing: true }
+    }
+
+    throw error
+  }
 }
 
 export async function POST(request: Request) {
@@ -104,14 +150,26 @@ export async function DELETE(request: Request) {
     // ignore
   }
 
-  if (snapshotIds.length === 0) {
-    return NextResponse.json({ error: "snapshotId required" }, { status: 400 })
+  if (!sandboxId && snapshotIds.length === 0) {
+    return NextResponse.json(
+      { error: "sandboxId or snapshotId required" },
+      { status: 400 }
+    )
   }
 
   try {
-    if (sandboxId) await Sandbox.kill(sandboxId).catch(() => undefined)
-    const cleanup = await deleteSandboxSnapshots(snapshotIds)
-    return NextResponse.json(cleanup)
+    let sandboxKilled = false
+    let sandboxMissing = false
+    if (sandboxId) {
+      const sandboxCleanup = await killSandboxForCleanup(sandboxId)
+      sandboxKilled = sandboxCleanup.sandboxKilled
+      sandboxMissing = sandboxCleanup.sandboxMissing
+    }
+    const cleanup = await deleteSnapshotsWithReleaseRetry(
+      snapshotIds,
+      sandboxKilled
+    )
+    return NextResponse.json({ ...cleanup, sandboxKilled, sandboxMissing })
   } catch (error) {
     return NextResponse.json(
       {

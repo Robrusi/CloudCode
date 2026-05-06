@@ -150,11 +150,13 @@ type SandboxPresetSecretRecord = {
 type SandboxPresetRecord = {
   createdAt: number
   cpuCount: number
+  customToolingCommands: string[]
   id: Id<"sandboxPresets">
   installScript?: string
   memoryMB: number
   name: string
   secrets: SandboxPresetSecretRecord[]
+  toolVersions: Array<{ tool: string; version: string }>
   tools: string[]
   updatedAt: number
 }
@@ -663,33 +665,49 @@ function ChatInner() {
     setPendingDeleteId(id)
   }
 
-  async function deleteSnapshots({
+  async function deleteSandboxResources({
     sandboxId,
     snapshotIds,
   }: {
     sandboxId?: string
     snapshotIds: string[]
   }) {
-    if (snapshotIds.length === 0) return []
+    const cleanupSnapshotIds = compactIds(snapshotIds)
+    if (!sandboxId && cleanupSnapshotIds.length === 0) return []
 
     const response = await fetch("/api/sandbox/snapshot", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sandboxId, snapshotIds }),
+      body: JSON.stringify({ sandboxId, snapshotIds: cleanupSnapshotIds }),
     })
     const data = (await response.json().catch(() => undefined)) as
-      | { deferredIds?: unknown; error?: unknown }
+      | { deferredIds?: unknown; error?: unknown; errors?: unknown }
       | undefined
 
     if (!response.ok) {
       throw new Error(
         typeof data?.error === "string"
           ? data.error
-          : "Failed to delete sandbox snapshot."
+          : "Failed to delete sandbox resources."
       )
     }
 
-    return stringArrayValue(data?.deferredIds)
+    const errors =
+      data?.errors && typeof data.errors === "object"
+        ? Object.values(data.errors).filter(
+            (message): message is string => typeof message === "string"
+          )
+        : []
+    if (errors.length > 0) {
+      throw new Error(errors[0] ?? "Failed to delete sandbox resources.")
+    }
+
+    const deferredIds = stringArrayValue(data?.deferredIds)
+    if (deferredIds.length > 0) {
+      throw new Error("Sandbox snapshot deletion was deferred.")
+    }
+
+    return deferredIds
   }
 
   function threadSnapshotId(id: Id<"threads">) {
@@ -727,21 +745,33 @@ function ChatInner() {
   function confirmDeleteChat() {
     const id = pendingDeleteId
     if (!id) return
-    void (async () => {
-      try {
-        await deleteSnapshots({
-          sandboxId: threadSandboxId(id),
-          snapshotIds: threadSnapshotCleanupIds(id),
-        })
-      } catch (error) {
-        console.warn("Failed to delete sandbox snapshot.", error)
-      }
-
-      await deleteThreadMutation({ threadId: id })
-      removeThreadRunState(id)
-    })()
-    if (activeId === id) setActiveId(null)
     setPendingDeleteId(null)
+    void (async () => {
+      const sandboxId = threadSandboxId(id)
+      const snapshotIds = threadSnapshotCleanupIds(id)
+      runControllersRef.current[id as string]?.abort()
+      clearRunKey(id as string)
+      if (sandboxId) closeBrowserTerminalSession(sandboxId)
+
+      try {
+        await deleteSandboxResources({ sandboxId, snapshotIds })
+        await deleteThreadMutation({ threadId: id })
+        removeThreadRunState(id)
+        setDeletedSnapshotIds((current) => {
+          const next = new Set(current)
+          for (const snapshotId of snapshotIds) next.add(snapshotId)
+          return next
+        })
+        if (activeId === id) {
+          setActiveId(null)
+          setActiveFilePath(null)
+          setFilesOpen(false)
+          setTerminalOpen(false)
+        }
+      } catch (error) {
+        console.warn("Failed to delete thread sandbox resources.", error)
+      }
+    })()
   }
 
   function renameChat(id: Id<"threads">, title: string) {

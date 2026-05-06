@@ -34,11 +34,13 @@ type SandboxPresetSecretRecord = {
 
 type SandboxPresetRecord = {
   cpuCount: number
+  customToolingCommands: string[]
   id: Id<"sandboxPresets">
   installScript?: string
   memoryMB: number
   name: string
   secrets: SandboxPresetSecretRecord[]
+  toolVersions: Array<{ tool: string; version: string }>
   tools: string[]
 }
 
@@ -143,8 +145,10 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
   const selected = presets.find((preset) => preset.id === selectedId) ?? null
   const [name, setName] = useState("")
   const [tools, setTools] = useState<string[]>([])
+  const [toolVersions, setToolVersions] = useState<Record<string, string>>({})
   const [cpuCount, setCpuCount] = useState(DEFAULT_SANDBOX_CPU_COUNT)
   const [memoryMB, setMemoryMB] = useState(DEFAULT_SANDBOX_MEMORY_MB)
+  const [customToolingCommands, setCustomToolingCommands] = useState("")
   const [installScript, setInstallScript] = useState("")
   const [secretName, setSecretName] = useState("")
   const [secretValue, setSecretValue] = useState("")
@@ -152,13 +156,25 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
   const [error, setError] = useState("")
   const [creating, setCreating] = useState(false)
 
+  function normalizeToolsForEditor(items: string[]) {
+    return [
+      ...new Set(
+        items.flatMap((item) =>
+          item === "node-pnpm" ? ["node", "pnpm"] : [item]
+        )
+      ),
+    ]
+  }
+
   function startNewPreset() {
     setSelectedId(null)
     setCreating(true)
     setName("")
     setTools([])
+    setToolVersions({})
     setCpuCount(DEFAULT_SANDBOX_CPU_COUNT)
     setMemoryMB(DEFAULT_SANDBOX_MEMORY_MB)
+    setCustomToolingCommands("")
     setInstallScript("")
     setSecretName("")
     setSecretValue("")
@@ -170,8 +186,10 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
     setCreating(false)
     setName("")
     setTools([])
+    setToolVersions({})
     setCpuCount(DEFAULT_SANDBOX_CPU_COUNT)
     setMemoryMB(DEFAULT_SANDBOX_MEMORY_MB)
+    setCustomToolingCommands("")
     setInstallScript("")
     setSecretName("")
     setSecretValue("")
@@ -182,9 +200,18 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
     setSelectedId(preset.id)
     setCreating(false)
     setName(preset.name)
-    setTools(preset.tools)
+    setTools(normalizeToolsForEditor(preset.tools))
+    setToolVersions(
+      Object.fromEntries(
+        (preset.toolVersions ?? []).map((item) => [
+          item.tool === "node-pnpm" ? "node" : item.tool,
+          item.version,
+        ])
+      )
+    )
     setCpuCount(preset.cpuCount)
     setMemoryMB(preset.memoryMB)
+    setCustomToolingCommands(preset.customToolingCommands.join("\n"))
     setInstallScript(preset.installScript ?? "")
     setSecretName("")
     setSecretValue("")
@@ -199,26 +226,49 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
     )
   }
 
+  function setToolVersion(tool: string, version: string) {
+    setToolVersions((current) => ({ ...current, [tool]: version }))
+  }
+
+  function selectedToolVersions(selectedTools: string[]) {
+    return selectedTools
+      .map((tool) => ({
+        tool,
+        version: toolVersions[tool]?.trim() ?? "",
+      }))
+      .filter((item) => item.version)
+  }
+
   async function savePreset() {
+    const selectedTools = normalizeToolsForEditor(tools)
+    const customCommands = customToolingCommands
+      .split("\n")
+      .map((command) => command.trim())
+      .filter(Boolean)
+    const versions = selectedToolVersions(selectedTools)
     setSaving(true)
     setError("")
     try {
       if (selected) {
         await updatePreset({
           cpuCount,
+          customToolingCommands: customCommands,
           installScript: installScript.trim() || undefined,
           memoryMB,
           name,
           presetId: selected.id,
-          tools,
+          toolVersions: versions,
+          tools: selectedTools,
         })
       } else {
         const id = await createPreset({
           cpuCount,
+          customToolingCommands: customCommands,
           installScript: installScript.trim() || undefined,
           memoryMB,
           name,
-          tools,
+          toolVersions: versions,
+          tools: selectedTools,
         })
         setSelectedId(id)
         setCreating(false)
@@ -245,6 +295,12 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
   }
 
   async function saveSecret() {
+    const selectedTools = normalizeToolsForEditor(tools)
+    const customCommands = customToolingCommands
+      .split("\n")
+      .map((command) => command.trim())
+      .filter(Boolean)
+    const versions = selectedToolVersions(selectedTools)
     setSaving(true)
     setError("")
     try {
@@ -256,10 +312,12 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
         }
         presetId = await createPreset({
           cpuCount,
+          customToolingCommands: customCommands,
           installScript: installScript.trim() || undefined,
           memoryMB,
           name,
-          tools,
+          toolVersions: versions,
+          tools: selectedTools,
         })
         setSelectedId(presetId)
         setCreating(false)
@@ -351,6 +409,12 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                 : null,
               `${preset.cpuCount} CPU`,
               memoryLabel(preset.memoryMB),
+              preset.customToolingCommands.length
+                ? `${preset.customToolingCommands.length} custom command${preset.customToolingCommands.length === 1 ? "" : "s"}`
+                : null,
+              preset.toolVersions.length
+                ? `${preset.toolVersions.length} pinned`
+                : null,
               preset.installScript ? "install script" : null,
             ].filter(Boolean) as string[]
             return (
@@ -428,24 +492,40 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                 {PRESET_TOOLS.map((tool) => {
                   const checked = tools.includes(tool.id)
                   return (
-                    <label
+                    <div
                       key={tool.id}
                       title={tool.description}
                       className={cn(
-                        "flex min-h-10 cursor-pointer items-center gap-2 rounded-md border px-2.5 py-2 text-xs transition-colors",
+                        "grid min-h-10 gap-2 rounded-md border px-2.5 py-2 text-xs transition-colors",
                         checked
                           ? "border-foreground/25 bg-muted text-foreground"
                           : "border-border/60 text-foreground/80 hover:bg-muted"
                       )}
                     >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggleTool(tool.id)}
-                        className="size-3.5 accent-foreground"
-                      />
-                      <span>{tool.label}</span>
-                    </label>
+                      <label className="flex cursor-pointer items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleTool(tool.id)}
+                          className="size-3.5 accent-foreground"
+                        />
+                        <span className="min-w-0 flex-1 truncate">
+                          {tool.label}
+                        </span>
+                      </label>
+                      {checked && "versionPlaceholder" in tool ? (
+                        <input
+                          value={toolVersions[tool.id] ?? ""}
+                          onChange={(event) =>
+                            setToolVersion(tool.id, event.target.value)
+                          }
+                          aria-label={`${tool.label} version`}
+                          placeholder={tool.versionPlaceholder}
+                          spellCheck={false}
+                          className="h-8 rounded-md border border-border/70 bg-background/80 px-2.5 font-mono text-[11px] text-foreground outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-foreground/30"
+                        />
+                      ) : null}
+                    </div>
                   )
                 })}
               </div>
@@ -484,6 +564,26 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
             </div>
 
             <label className="grid gap-1.5 text-xs font-medium text-foreground/80">
+              Custom tooling
+              <textarea
+                value={customToolingCommands}
+                onChange={(event) =>
+                  setCustomToolingCommands(event.target.value)
+                }
+                rows={4}
+                spellCheck={false}
+                placeholder={
+                  "mise use --global node@22\ndart pub global activate fvm\nfvm install stable"
+                }
+                className="min-h-24 resize-y rounded-md border border-border/70 bg-transparent px-3 py-2 font-mono text-xs leading-5 font-normal transition-colors outline-none focus:border-foreground/30"
+              />
+              <span className="text-[11px] leading-4 font-normal text-muted-foreground">
+                One command per line. Runs from /home/user for global runtimes
+                and CLIs, after selected tools and before the custom script.
+              </span>
+            </label>
+
+            <label className="grid gap-1.5 text-xs font-medium text-foreground/80">
               Custom install script
               <textarea
                 value={installScript}
@@ -496,8 +596,8 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                 className="min-h-28 resize-y rounded-md border border-border/70 bg-transparent px-3 py-2 font-mono text-xs leading-5 font-normal transition-colors outline-none focus:border-foreground/30"
               />
               <span className="text-[11px] leading-4 font-normal text-muted-foreground">
-                Use this for lightweight tool setup. Avoid repo dependency
-                installs like bun install; they can exhaust sandbox resources.
+                Runs from /home/user/repo. Use this only when setup needs the
+                checked-out project.
               </span>
             </label>
 

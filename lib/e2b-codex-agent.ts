@@ -17,7 +17,13 @@ import {
   writeCloudcodeEnvLocal,
   type SandboxPresetEnvVar,
 } from "./sandbox-env"
-import { smartToolingInstallScript } from "./smart-tooling"
+import {
+  bunWrapperInstallScript,
+  flutterWrapperInstallScript,
+  nodeToolWrapperInstallScript,
+  resetExecInstallScript,
+  smartToolingInstallScript,
+} from "./smart-tooling"
 
 const CODEX_HOME = "/home/user/.codex"
 const REPO_PATH = "/home/user/repo"
@@ -28,6 +34,7 @@ const BASE_REF_PATH = "/tmp/cloudcode-base-ref.txt"
 const LAST_MESSAGE_PATH = "/tmp/cloudcode-last-message.txt"
 const CODEX_LAUNCHER_PATH = "/tmp/cloudcode-codex-latest"
 const PRESET_ENV_PATH = CLOUDCODE_PRESET_ENV_PATH
+const RESET_EXEC_PATH = "/home/user/.cloudcode/bin/cloudcode-exec"
 const SANDBOX_TEMPLATE = "codex"
 const EXIT_MARKER = "__CLOUDCODE_CODEX_EXIT__"
 const PRESET_EXIT_MARKER = "__CLOUDCODE_PRESET_EXIT__"
@@ -97,10 +104,15 @@ export type RunCodexInSandboxInput = {
 
 export type SandboxPresetInput = {
   cpuCount: number
+  customToolingCommands: string[]
   installScript?: string
   memoryMB: number
   name: string
   secrets: SandboxPresetEnvVar[]
+  toolVersions: Array<{
+    tool: string
+    version: string
+  }>
   tools: string[]
 }
 
@@ -123,6 +135,10 @@ export type RunCodexInSandboxResult = {
 
 function shellQuote(value: string) {
   return `'${value.replace(/'/g, "'\\''")}'`
+}
+
+function resetExecBashCommand(script: string) {
+  return `${shellQuote(RESET_EXEC_PATH)} bash -lc ${shellQuote(script)}`
 }
 
 function parseModel(model?: string) {
@@ -386,12 +402,22 @@ async function readLastMessage(sandbox: Sandbox) {
   }
 }
 
+async function ensureResetExec(sandbox: Sandbox) {
+  await sandbox.commands.run(resetExecInstallScript(), {
+    timeoutMs: 10_000,
+  })
+}
+
 async function getCodexExecHelp(sandbox: Sandbox) {
   try {
+    await ensureResetExec(sandbox)
     return (
-      await sandbox.commands.run(`${CODEX_LAUNCHER_PATH} exec --help`, {
-        timeoutMs: 10_000,
-      })
+      await sandbox.commands.run(
+        `${shellQuote(RESET_EXEC_PATH)} ${CODEX_LAUNCHER_PATH} exec --help`,
+        {
+          timeoutMs: 10_000,
+        }
+      )
     ).stdout
   } catch {
     return ""
@@ -400,10 +426,14 @@ async function getCodexExecHelp(sandbox: Sandbox) {
 
 async function getCodexResumeHelp(sandbox: Sandbox) {
   try {
+    await ensureResetExec(sandbox)
     return (
-      await sandbox.commands.run(`${CODEX_LAUNCHER_PATH} exec resume --help`, {
-        timeoutMs: 10_000,
-      })
+      await sandbox.commands.run(
+        `${shellQuote(RESET_EXEC_PATH)} ${CODEX_LAUNCHER_PATH} exec resume --help`,
+        {
+          timeoutMs: 10_000,
+        }
+      )
     ).stdout
   } catch {
     return ""
@@ -411,6 +441,8 @@ async function getCodexResumeHelp(sandbox: Sandbox) {
 }
 
 async function updateCodexCli(sandbox: Sandbox, input: RunCodexInSandboxInput) {
+  await ensureResetExec(sandbox)
+
   await emitLog(input, {
     kind: "setup",
     message: "Updating Codex CLI to latest",
@@ -442,7 +474,7 @@ async function updateCodexCli(sandbox: Sandbox, input: RunCodexInSandboxInput) {
   })
 
   const result = await sandbox.commands.run(
-    `bash -lc ${shellQuote(updateCommand)}`,
+    resetExecBashCommand(updateCommand),
     {
       onStderr: (data) => {
         const trimmed = compactLine(data)
@@ -475,8 +507,9 @@ async function updateCodexCli(sandbox: Sandbox, input: RunCodexInSandboxInput) {
 
 function presetPathExports(preset?: SandboxPresetInput) {
   const paths = [
-    "/home/user/.bun/bin",
     "/home/user/.cloudcode/bin",
+    "/home/user/repo/node_modules/.bin",
+    "/home/user/.bun/bin",
     "/home/user/.local/share/mise/shims",
     "/home/user/.cloudcode/flutter/bin",
     "/home/user/.cargo/bin",
@@ -493,9 +526,20 @@ function presetPathExports(preset?: SandboxPresetInput) {
 
   return [
     "#!/usr/bin/env bash",
+    "trap - CHLD 2>/dev/null || true",
     `export PATH="${paths.join(":")}:$PATH"`,
     'export DOTNET_ROOT="/home/user/.dotnet"',
+    'export FLUTTER_ROOT="/home/user/.cloudcode/flutter"',
+    'export MISE_PYTHON_GITHUB_ATTESTATIONS=false',
     'export MISE_TRUSTED_CONFIG_PATHS="/home/user/repo"',
+    "case $- in",
+    "  *i*)",
+    '    if [ -z "${CLOUDCODE_SIGCHLD_RESET:-}" ] && [ -x /home/user/.cloudcode/bin/cloudcode-exec ] && [ -x /usr/bin/python3 ]; then',
+    "      export CLOUDCODE_SIGCHLD_RESET=1",
+    "      exec /home/user/.cloudcode/bin/cloudcode-exec /bin/bash -i",
+    "    fi",
+    "    ;;",
+    "esac",
     ...(preset?.secrets ?? []).map(
       (secret) => `export ${secret.name}=${shellQuote(secret.value)}`
     ),
@@ -515,46 +559,143 @@ function presetProfileSnippet(preset?: SandboxPresetInput) {
   ].join("\n")
 }
 
-function presetToolInstallScript(tool: string) {
+function miseToolInstallScript(tool: string, version: string) {
+  return [
+    "if ! command -v mise >/dev/null 2>&1 && [ ! -x /home/user/.local/bin/mise ]; then",
+    "  curl https://mise.run | sh",
+    "fi",
+    'export PATH="/home/user/.local/bin:/home/user/.local/share/mise/shims:$PATH"',
+    "mkdir -p /home/user/.config/mise",
+    'export MISE_PYTHON_GITHUB_ATTESTATIONS=false',
+    "mise settings set python.github_attestations false || true",
+    `mise use --global ${shellQuote(`${tool}@${version}`)}`,
+    "mise reshim || true",
+  ].join("\n")
+}
+
+function packageManagerInstallScript(packageSpec: string) {
+  const packageName = packageSpec.split("@")[0] || packageSpec
+  return [
+    "PACKAGE_MANAGER_READY=0",
+    `PACKAGE_SPEC=${shellQuote(packageSpec)}`,
+    `PACKAGE_NAME=${shellQuote(packageName)}`,
+    `PACKAGE_REQUESTED_VERSION=${shellQuote(
+      packageSpec.includes("@") ? packageSpec.split("@").slice(1).join("@") : ""
+    )}`,
+    'package_manager_path() {',
+    '  if command -v mise >/dev/null 2>&1; then',
+    '    MISE_NODE_ROOT="$(mise where node 2>/dev/null || true)"',
+    '    if [ -n "$MISE_NODE_ROOT" ]; then',
+    '      MISE_PACKAGE_MANAGER="$MISE_NODE_ROOT/bin/$PACKAGE_NAME"',
+    '      if [ -x "$MISE_PACKAGE_MANAGER" ]; then printf "%s\\n" "$MISE_PACKAGE_MANAGER"; return 0; fi',
+    "    fi",
+    '    for MISE_PACKAGE_MANAGER in /home/user/.local/share/mise/installs/node/*/bin/$PACKAGE_NAME; do',
+    '      if [ -x "$MISE_PACKAGE_MANAGER" ]; then printf "%s\\n" "$MISE_PACKAGE_MANAGER"; return 0; fi',
+    "    done",
+    "  fi",
+    '  SEARCH_PATH="$(printf "%s" "$PATH" | tr ":" "\\n" | grep -vx "/home/user/.cloudcode/bin" | paste -sd: -)"',
+    '  PATH="$SEARCH_PATH" command -v "$PACKAGE_NAME" 2>/dev/null || true',
+    "}",
+    'package_manager_version_matches() {',
+    '  if [ -z "$PACKAGE_REQUESTED_VERSION" ] || [ "$PACKAGE_REQUESTED_VERSION" = "latest" ]; then return 0; fi',
+    '  if ! printf "%s" "$PACKAGE_REQUESTED_VERSION" | grep -Eq "^[0-9]+[.][0-9]+[.][0-9]+$"; then return 0; fi',
+    '  ACTUAL_VERSION="$("$1" --version 2>/dev/null | head -n 1 | tr -d "[:space:]")"',
+    '  [ "$ACTUAL_VERSION" = "$PACKAGE_REQUESTED_VERSION" ]',
+    "}",
+    "if command -v corepack >/dev/null 2>&1; then",
+    "  corepack enable || true",
+    `  if corepack prepare ${shellQuote(packageSpec)} --activate; then`,
+    '    PACKAGE_MANAGER_BIN="$(package_manager_path)"',
+    '    if [ -n "$PACKAGE_MANAGER_BIN" ] && package_manager_version_matches "$PACKAGE_MANAGER_BIN"; then PACKAGE_MANAGER_READY=1; fi',
+    "  fi",
+    "fi",
+    'if [ "$PACKAGE_MANAGER_READY" != "1" ] && command -v npm >/dev/null 2>&1; then',
+    '  rm -f "$(npm bin -g 2>/dev/null)/$PACKAGE_NAME" 2>/dev/null || true',
+    '  SEARCH_PATH="$(printf "%s" "$PATH" | tr ":" "\\n" | grep -vx "/home/user/.cloudcode/bin" | paste -sd: -)"',
+    '  REAL_NODE="$(PATH="$SEARCH_PATH" command -v node 2>/dev/null || true)"',
+    '  if command -v mise >/dev/null 2>&1; then REAL_NODE="$(mise where node 2>/dev/null)/bin/node"; fi',
+    '  if [ -n "$REAL_NODE" ]; then rm -f "$(dirname "$REAL_NODE")/$PACKAGE_NAME" 2>/dev/null || true; fi',
+    `  npm install -g --force ${shellQuote(packageSpec)}`,
+    "  mise reshim || true",
+    "fi",
+    'PACKAGE_MANAGER_BIN="$(package_manager_path)"',
+    'if [ -z "$PACKAGE_MANAGER_BIN" ] || ! package_manager_version_matches "$PACKAGE_MANAGER_BIN"; then',
+    '  echo "$PACKAGE_NAME is not installed after attempting $PACKAGE_SPEC." >&2',
+    "  exit 127",
+    "fi",
+    '"$PACKAGE_MANAGER_BIN" --version',
+  ].join("\n")
+}
+
+function presetToolInstallScript(tool: string, version?: string) {
   if (tool === "auto-detect") {
     return smartToolingInstallScript()
   }
 
   if (tool === "bun") {
+    if (version) {
+      return [
+        miseToolInstallScript("bun", version),
+        bunWrapperInstallScript(),
+        'export PATH="/home/user/.cloudcode/bin:/home/user/.bun/bin:/home/user/.local/share/mise/shims:$PATH"',
+        "bun --version",
+      ].join("\n")
+    }
+
     return [
       "if ! command -v bun >/dev/null 2>&1; then",
       "  curl -fsSL https://bun.sh/install | bash",
       "fi",
-      'export PATH="/home/user/.bun/bin:$PATH"',
+      bunWrapperInstallScript(),
+      'export PATH="/home/user/.cloudcode/bin:/home/user/.bun/bin:$PATH"',
       "bun --version",
     ].join("\n")
   }
 
   if (tool === "flutter") {
+    const flutterVersion = version || "stable"
     return [
       "mkdir -p /home/user/.cloudcode",
       "if [ ! -d /home/user/.cloudcode/flutter/.git ]; then",
-      "  git clone --depth 1 --branch stable https://github.com/flutter/flutter.git /home/user/.cloudcode/flutter",
+      `  git clone --depth 1 --branch ${shellQuote(flutterVersion)} https://github.com/flutter/flutter.git /home/user/.cloudcode/flutter || git clone --depth 1 --branch stable https://github.com/flutter/flutter.git /home/user/.cloudcode/flutter`,
+      "else",
+      `  git -C /home/user/.cloudcode/flutter fetch --depth 1 origin ${shellQuote(flutterVersion)} || git -C /home/user/.cloudcode/flutter fetch --depth 1 origin stable`,
+      `  git -C /home/user/.cloudcode/flutter checkout ${shellQuote(flutterVersion)} || git -C /home/user/.cloudcode/flutter checkout stable`,
       "fi",
-      'export PATH="/home/user/.cloudcode/flutter/bin:$PATH"',
+      flutterWrapperInstallScript(),
+      'export PATH="/home/user/.cloudcode/bin:/home/user/.cloudcode/flutter/bin:$PATH"',
       "flutter --version",
     ].join("\n")
   }
 
-  if (tool === "node-pnpm") {
+  if (tool === "node" || tool === "node-pnpm") {
     return [
+      ...(version
+        ? [
+            miseToolInstallScript("node", version),
+            nodeToolWrapperInstallScript(),
+            'export PATH="/home/user/.cloudcode/bin:/home/user/.local/share/mise/shims:$PATH"',
+          ]
+        : []),
       "node --version",
-      "if command -v corepack >/dev/null 2>&1; then",
-      "  corepack enable",
-      "  corepack prepare pnpm@latest --activate",
-      "elif command -v npm >/dev/null 2>&1; then",
-      "  npm install -g pnpm@latest",
-      "fi",
-      "pnpm --version",
     ].join("\n")
   }
 
+  if (tool === "pnpm") {
+    const packageSpec = version ? `pnpm@${version}` : "pnpm@latest"
+    return packageManagerInstallScript(packageSpec)
+  }
+
   if (tool === "python") {
+    if (version) {
+      return [
+        miseToolInstallScript("python", version),
+        'export PATH="/home/user/.local/share/mise/shims:$PATH"',
+        "python --version",
+        "python -m pip --version || true",
+      ].join("\n")
+    }
+
     return [
       "if command -v python3 >/dev/null 2>&1; then",
       "  python3 --version",
@@ -566,6 +707,14 @@ function presetToolInstallScript(tool: string) {
   }
 
   if (tool === "go") {
+    if (version) {
+      return [
+        miseToolInstallScript("go", version),
+        'export PATH="/home/user/.local/share/mise/shims:$PATH"',
+        "go version",
+      ].join("\n")
+    }
+
     return [
       "if ! command -v go >/dev/null 2>&1 && [ ! -x /home/user/.cloudcode/go/bin/go ]; then",
       "  mkdir -p /home/user/.cloudcode",
@@ -591,6 +740,12 @@ function presetToolInstallScript(tool: string) {
       "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y",
       "fi",
       'export PATH="/home/user/.cargo/bin:$PATH"',
+      ...(version
+        ? [
+            `rustup toolchain install ${shellQuote(version)}`,
+            `rustup default ${shellQuote(version)}`,
+          ]
+        : []),
       "rustc --version",
       "cargo --version",
     ].join("\n")
@@ -620,6 +775,15 @@ function presetToolInstallScript(tool: string) {
   }
 
   if (tool === "ruby") {
+    if (version) {
+      return [
+        miseToolInstallScript("ruby", version),
+        'export PATH="/home/user/.local/share/mise/shims:$PATH"',
+        "ruby --version",
+        "gem --version",
+      ].join("\n")
+    }
+
     return [
       "if ! command -v ruby >/dev/null 2>&1; then",
       "  sudo apt-get update -y",
@@ -631,6 +795,15 @@ function presetToolInstallScript(tool: string) {
   }
 
   if (tool === "java") {
+    if (version) {
+      return [
+        miseToolInstallScript("java", version),
+        'export PATH="/home/user/.local/share/mise/shims:$PATH"',
+        "java -version",
+        "javac -version",
+      ].join("\n")
+    }
+
     return [
       "if ! command -v java >/dev/null 2>&1; then",
       "  sudo apt-get update -y",
@@ -642,6 +815,7 @@ function presetToolInstallScript(tool: string) {
   }
 
   if (tool === "kotlin") {
+    const kotlinVersion = version || ""
     return [
       "if ! command -v java >/dev/null 2>&1; then",
       "  echo 'Kotlin requires Java. Enable the Java preset tool as well.' >&2",
@@ -649,7 +823,9 @@ function presetToolInstallScript(tool: string) {
       "fi",
       "if [ ! -x /home/user/.cloudcode/kotlinc/bin/kotlin ]; then",
       "  mkdir -p /home/user/.cloudcode",
-      '  KOTLIN_VERSION="$(curl -fsSL https://api.github.com/repos/JetBrains/kotlin/releases/latest | python3 -c "import json,sys; print(json.load(sys.stdin)[\\"tag_name\\"].lstrip(\\"v\\"))")"',
+      kotlinVersion
+        ? `  KOTLIN_VERSION=${shellQuote(kotlinVersion)}`
+        : '  KOTLIN_VERSION="$(curl -fsSL https://api.github.com/repos/JetBrains/kotlin/releases/latest | python3 -c "import json,sys; print(json.load(sys.stdin)[\\"tag_name\\"].lstrip(\\"v\\"))")"',
       '  curl -fsSL "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip" -o /tmp/kotlin.zip',
       "  command -v unzip >/dev/null 2>&1 || sudo apt-get install -y unzip",
       "  rm -rf /home/user/.cloudcode/kotlinc",
@@ -662,10 +838,15 @@ function presetToolInstallScript(tool: string) {
   }
 
   if (tool === "dotnet") {
+    const dotnetInstallArg = version
+      ? /^\d/.test(version)
+        ? `--version ${shellQuote(version)}`
+        : `--channel ${shellQuote(version)}`
+      : "--channel LTS"
     return [
       "if ! command -v dotnet >/dev/null 2>&1; then",
       "  curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh",
-      "  bash /tmp/dotnet-install.sh --channel LTS --install-dir /home/user/.dotnet",
+      `  bash /tmp/dotnet-install.sh ${dotnetInstallArg} --install-dir /home/user/.dotnet`,
       "  rm -f /tmp/dotnet-install.sh",
       "fi",
       'export DOTNET_ROOT="/home/user/.dotnet"',
@@ -675,6 +856,14 @@ function presetToolInstallScript(tool: string) {
   }
 
   if (tool === "elixir") {
+    if (version) {
+      return [
+        miseToolInstallScript("elixir", version),
+        'export PATH="/home/user/.local/share/mise/shims:$PATH"',
+        "elixir --version",
+      ].join("\n")
+    }
+
     return [
       "if ! command -v elixir >/dev/null 2>&1; then",
       "  sudo apt-get update -y",
@@ -685,6 +874,14 @@ function presetToolInstallScript(tool: string) {
   }
 
   if (tool === "zig") {
+    if (version) {
+      return [
+        miseToolInstallScript("zig", version),
+        'export PATH="/home/user/.local/share/mise/shims:$PATH"',
+        "zig version",
+      ].join("\n")
+    }
+
     return [
       "if ! command -v zig >/dev/null 2>&1; then",
       "  mkdir -p /home/user/.cloudcode",
@@ -702,12 +899,13 @@ function presetToolInstallScript(tool: string) {
   }
 
   if (tool === "swift") {
+    const swiftVersion = version || "6.0.3"
     return [
       "if [ ! -x /home/user/.cloudcode/swift/usr/bin/swift ]; then",
       "  sudo apt-get update -y",
       "  sudo apt-get install -y binutils git gnupg2 libc6-dev libcurl4-openssl-dev libedit2 libpython3-dev libsqlite3-0 libxml2-dev libz3-dev pkg-config tzdata unzip zlib1g-dev",
       "  mkdir -p /home/user/.cloudcode",
-      '  SWIFT_VERSION="6.0.3"',
+      `  SWIFT_VERSION=${shellQuote(swiftVersion)}`,
       '  SWIFT_DIR="ubuntu2204"',
       '  SWIFT_FILE="ubuntu22.04"',
       '  SWIFT_URL="https://download.swift.org/swift-${SWIFT_VERSION}-release/${SWIFT_DIR}/swift-${SWIFT_VERSION}-RELEASE/swift-${SWIFT_VERSION}-RELEASE-${SWIFT_FILE}.tar.gz"',
@@ -727,9 +925,22 @@ function presetToolInstallScript(tool: string) {
 
 async function prepareSandboxPresetRuntime(
   sandbox: Sandbox,
-  input: RunCodexInSandboxInput
+  input: RunCodexInSandboxInput,
+  options: { installToolWrappers?: boolean } = {}
 ) {
+  const installToolWrappers = options.installToolWrappers ?? true
+  await ensureResetExec(sandbox)
+
   if (!input.sandboxPreset) return
+
+  if (!installToolWrappers) {
+    await sandbox.commands
+      .run(
+        "rm -f /home/user/.cloudcode/bin/bun /home/user/.cloudcode/bin/node /home/user/.cloudcode/bin/npm /home/user/.cloudcode/bin/pnpm /home/user/.cloudcode/bin/yarn /home/user/.cloudcode/bin/flutter /home/user/.cloudcode/bin/dart",
+        { timeoutMs: 10_000 }
+      )
+      .catch(() => undefined)
+  }
 
   await sandbox.commands
     .run(
@@ -743,6 +954,14 @@ async function prepareSandboxPresetRuntime(
     PRESET_ENV_PATH,
     presetPathExports(input.sandboxPreset)
   )
+  if (installToolWrappers) {
+    await sandbox.commands.run(bunWrapperInstallScript(), {
+      timeoutMs: 10_000,
+    })
+    await sandbox.commands.run(nodeToolWrapperInstallScript(), {
+      timeoutMs: 10_000,
+    })
+  }
   await sandbox.commands.run(`chmod 600 ${shellQuote(PRESET_ENV_PATH)}`, {
     timeoutMs: 10_000,
   })
@@ -774,19 +993,37 @@ async function installSandboxPreset(
     message: `Preparing preset: ${preset.name}`,
   })
 
-  await prepareSandboxPresetRuntime(sandbox, input)
+  await prepareSandboxPresetRuntime(sandbox, input, {
+    installToolWrappers: false,
+  })
 
+  const toolVersionById = new Map(
+    preset.toolVersions.map((item) => [item.tool, item.version])
+  )
   const installBlocks = [
     "set -e",
     "export HOME=/home/user",
     `. ${PRESET_ENV_PATH}`,
     ...preset.tools
       .map((tool) => {
-        const script = presetToolInstallScript(tool)
+        const script = presetToolInstallScript(tool, toolVersionById.get(tool))
         if (!script) return ""
-        return [`echo "::cloudcode-preset-tool::${tool}"`, script].join("\n")
+        const workingDir = tool === "auto-detect" ? REPO_PATH : "/home/user"
+        return [
+          `echo "::cloudcode-preset-tool::${tool}"`,
+          `cd ${workingDir}`,
+          script,
+        ].join("\n")
       })
       .filter(Boolean),
+    ...preset.customToolingCommands.map((command, index) =>
+      [
+        `echo "::cloudcode-preset-custom-tool::${index + 1}"`,
+        "# Custom tooling command",
+        "cd /home/user",
+        command,
+      ].join("\n")
+    ),
     preset.installScript
       ? [
           "# Custom preset install script",
@@ -871,7 +1108,7 @@ async function runPresetInstallCommand(
 
   try {
     result = await sandbox.commands.run(
-      `bash -lc ${shellQuote(wrappedInstallCommand)}`,
+      resetExecBashCommand(wrappedInstallCommand),
       {
         envs: {
           HOME: "/home/user",
@@ -1472,16 +1709,14 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         ]
           .filter(Boolean)
           .join(" ")
-    const command = shellQuote(
-      [
-        "set +e",
-        `[ -f ${PRESET_ENV_PATH} ] && . ${PRESET_ENV_PATH}`,
-        codexCommand,
-        "code=$?",
-        `printf '\\n${EXIT_MARKER}%s\\n' \"$code\"`,
-        "exit 0",
-      ].join("\n")
-    )
+    const command = [
+      "set +e",
+      `[ -f ${PRESET_ENV_PATH} ] && . ${PRESET_ENV_PATH}`,
+      codexCommand,
+      "code=$?",
+      `printf '\\n${EXIT_MARKER}%s\\n' \"$code\"`,
+      "exit 0",
+    ].join("\n")
 
     await emitLog(input, {
       kind: "command",
@@ -1492,7 +1727,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       codexThreadId = threadId
     })
     const result = redactAuthPathOutput(
-      await sandbox.commands.run(`bash -lc ${command}`, {
+      await sandbox.commands.run(resetExecBashCommand(command), {
         envs: {
           CODEX_HOME,
           HOME: "/home/user",

@@ -7,6 +7,7 @@ import { decryptSecret } from "@/lib/secret-crypto"
 
 export type SandboxPresetForRun = {
   cpuCount: number
+  customToolingCommands: string[]
   id: Id<"sandboxPresets">
   installScript?: string
   memoryMB: number
@@ -14,6 +15,10 @@ export type SandboxPresetForRun = {
   secrets: Array<{
     name: string
     value: string
+  }>
+  toolVersions: Array<{
+    tool: string
+    version: string
   }>
   tools: string[]
 }

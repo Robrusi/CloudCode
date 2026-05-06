@@ -278,7 +278,11 @@ export const saveRunState = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
-    await requireOwnedThread(ctx, args.threadId, userId)
+    const thread = await ctx.db.get(args.threadId)
+
+    if (!thread || thread.userId !== userId) {
+      return { saved: false }
+    }
 
     await ctx.db.patch(args.threadId, {
       ...(args.codexThreadId ? { codexThreadId: args.codexThreadId } : {}),
@@ -300,6 +304,7 @@ export const saveRunState = mutation({
         : {}),
       updatedAt: Date.now(),
     })
+    return { saved: true }
   },
 })
 

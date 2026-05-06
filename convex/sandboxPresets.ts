@@ -9,7 +9,9 @@ const TOOL_IDS = new Set([
   "auto-detect",
   "bun",
   "flutter",
+  "node",
   "node-pnpm",
+  "pnpm",
   "python",
   "go",
   "rust",
@@ -36,9 +38,11 @@ const RESOURCE_PROFILES = [
 const DEFAULT_PRESETS = [
   {
     cpuCount: DEFAULT_CPU_COUNT,
+    customToolingCommands: [],
     installScript: undefined,
     memoryMB: DEFAULT_MEMORY_MB,
     name: "Auto-detect",
+    toolVersions: [],
     tools: ["auto-detect"],
   },
 ] as const
@@ -58,13 +62,65 @@ function cleanInstallScript(script?: string) {
 }
 
 function cleanTools(tools: string[]) {
-  const unique = [...new Set(tools.map((tool) => tool.trim()).filter(Boolean))]
+  const normalized = tools.flatMap((tool) => {
+    const trimmed = tool.trim()
+    if (trimmed === "node-pnpm") return ["node", "pnpm"]
+    return trimmed ? [trimmed] : []
+  })
+  const unique = [...new Set(normalized)]
   if (unique.length > 20)
     throw new Error("A preset can include up to 20 tools.")
   for (const tool of unique) {
     if (!TOOL_IDS.has(tool)) throw new Error(`Unknown tool "${tool}".`)
   }
   return unique
+}
+
+function cleanCustomToolingCommands(commands?: string[]) {
+  const cleaned = (commands ?? [])
+    .map((command) => command.trim())
+    .filter(Boolean)
+  if (cleaned.length > 50) {
+    throw new Error("A preset can include up to 50 custom tooling commands.")
+  }
+  const totalLength = cleaned.join("\n").length
+  if (totalLength > 20_000) {
+    throw new Error("Custom tooling commands are too long.")
+  }
+  for (const command of cleaned) {
+    if (command.length > 1_000) {
+      throw new Error("Custom tooling commands must be 1000 characters or less.")
+    }
+  }
+  return cleaned
+}
+
+function cleanToolVersions(
+  toolVersions?: Array<{ tool: string; version: string }>,
+  selectedTools?: string[]
+) {
+  const selected = new Set(selectedTools ?? [])
+  const cleaned = new Map<string, string>()
+
+  for (const item of toolVersions ?? []) {
+    const rawTool = item.tool.trim()
+    const tool = rawTool === "node-pnpm" ? "node" : rawTool
+    const version = item.version.trim()
+    if (!tool || !version) continue
+    if (!TOOL_IDS.has(tool)) throw new Error(`Unknown tool "${tool}".`)
+    if (selected.size && !selected.has(tool)) continue
+    if (version.length > 80) {
+      throw new Error("Tool versions must be 80 characters or less.")
+    }
+    if (!/^[A-Za-z0-9._+@:/-]+$/.test(version)) {
+      throw new Error(
+        "Tool versions can only contain letters, numbers, dots, dashes, underscores, plus signs, slashes, colons, and @."
+      )
+    }
+    cleaned.set(tool, version)
+  }
+
+  return [...cleaned].map(([tool, version]) => ({ tool, version }))
 }
 
 function cleanResources(cpuCount?: number, memoryMB?: number) {
@@ -144,6 +200,7 @@ export const list = query({
         return {
           cpuCount: resources.cpuCount,
           createdAt: preset.createdAt,
+          customToolingCommands: preset.customToolingCommands ?? [],
           id: preset._id,
           installScript: preset.installScript,
           memoryMB: resources.memoryMB,
@@ -156,6 +213,7 @@ export const list = query({
               updatedAt: secret.updatedAt,
             }))
             .sort((a, b) => a.name.localeCompare(b.name)),
+          toolVersions: preset.toolVersions ?? [],
           tools: preset.tools,
           updatedAt: preset.updatedAt,
         }
@@ -181,6 +239,7 @@ export const getForRun = query({
 
     return {
       cpuCount: resources.cpuCount,
+      customToolingCommands: preset.customToolingCommands ?? [],
       id: preset._id,
       installScript: preset.installScript,
       memoryMB: resources.memoryMB,
@@ -191,6 +250,7 @@ export const getForRun = query({
           value: secret.value,
         }))
         .sort((a, b) => a.name.localeCompare(b.name)),
+      toolVersions: preset.toolVersions ?? [],
       tools: preset.tools,
     }
   },
@@ -199,23 +259,32 @@ export const getForRun = query({
 export const create = mutation({
   args: {
     cpuCount: v.optional(v.number()),
+    customToolingCommands: v.optional(v.array(v.string())),
     installScript: v.optional(v.string()),
     memoryMB: v.optional(v.number()),
     name: v.string(),
+    toolVersions: v.optional(
+      v.array(v.object({ tool: v.string(), version: v.string() }))
+    ),
     tools: v.array(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
     const now = Date.now()
     const resources = cleanResources(args.cpuCount, args.memoryMB)
+    const tools = cleanTools(args.tools)
 
     return await ctx.db.insert("sandboxPresets", {
       cpuCount: resources.cpuCount,
       createdAt: now,
+      customToolingCommands: cleanCustomToolingCommands(
+        args.customToolingCommands
+      ),
       installScript: cleanInstallScript(args.installScript),
       memoryMB: resources.memoryMB,
       name: cleanName(args.name),
-      tools: cleanTools(args.tools),
+      toolVersions: cleanToolVersions(args.toolVersions, tools),
+      tools,
       updatedAt: now,
       userId,
     })
@@ -245,9 +314,11 @@ export const ensureDefaultPresets = mutation({
         await ctx.db.insert("sandboxPresets", {
           cpuCount: preset.cpuCount,
           createdAt: now,
+          customToolingCommands: [...preset.customToolingCommands],
           installScript: preset.installScript,
           memoryMB: preset.memoryMB,
           name: preset.name,
+          toolVersions: [...preset.toolVersions],
           tools: [...preset.tools],
           updatedAt: now,
           userId,
@@ -262,23 +333,32 @@ export const ensureDefaultPresets = mutation({
 export const update = mutation({
   args: {
     cpuCount: v.optional(v.number()),
+    customToolingCommands: v.optional(v.array(v.string())),
     installScript: v.optional(v.string()),
     memoryMB: v.optional(v.number()),
     name: v.string(),
     presetId: v.id("sandboxPresets"),
+    toolVersions: v.optional(
+      v.array(v.object({ tool: v.string(), version: v.string() }))
+    ),
     tools: v.array(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
     await requireOwnedPreset(ctx, args.presetId, userId)
     const resources = cleanResources(args.cpuCount, args.memoryMB)
+    const tools = cleanTools(args.tools)
 
     await ctx.db.patch(args.presetId, {
       cpuCount: resources.cpuCount,
+      customToolingCommands: cleanCustomToolingCommands(
+        args.customToolingCommands
+      ),
       installScript: cleanInstallScript(args.installScript),
       memoryMB: resources.memoryMB,
       name: cleanName(args.name),
-      tools: cleanTools(args.tools),
+      toolVersions: cleanToolVersions(args.toolVersions, tools),
+      tools,
       updatedAt: Date.now(),
     })
   },

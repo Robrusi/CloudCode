@@ -85,9 +85,18 @@ export default defineSchema({
   sandboxPresets: defineTable({
     cpuCount: v.optional(v.number()),
     createdAt: v.number(),
+    customToolingCommands: v.optional(v.array(v.string())),
     installScript: v.optional(v.string()),
     memoryMB: v.optional(v.number()),
     name: v.string(),
+    toolVersions: v.optional(
+      v.array(
+        v.object({
+          tool: v.string(),
+          version: v.string(),
+        })
+      )
+    ),
     tools: v.array(v.string()),
     updatedAt: v.number(),
     userId: v.id("users"),
