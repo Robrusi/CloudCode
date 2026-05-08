@@ -149,6 +149,12 @@ export async function POST(request: Request) {
                   ? body.githubToken
                   : undefined,
               model: typeof body.model === "string" ? body.model : undefined,
+              onContentDelta: (delta: string) => {
+                safeStreamEvent({
+                  delta,
+                  type: "assistant_delta",
+                })
+              },
               onLog: (log: RunCodexLog) => {
                 if (
                   log.kind === "setup" &&

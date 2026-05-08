@@ -238,10 +238,18 @@ export const completeAssistantMessage = mutation({
       throw new Error("Message not found.")
     }
 
+    const nextMeta =
+      message.meta || args.meta
+        ? {
+            ...message.meta,
+            ...args.meta,
+          }
+        : undefined
+
     await ctx.db.patch(args.messageId, {
       content: args.content,
       error: args.error,
-      meta: args.meta,
+      meta: nextMeta,
       pending: false,
     })
     await ctx.db.patch(args.threadId, {
@@ -252,6 +260,64 @@ export const completeAssistantMessage = mutation({
           ? { sandboxState: "running" as const }
           : {}),
       updatedAt: Date.now(),
+    })
+  },
+})
+
+export const appendAssistantLogs = mutation({
+  args: {
+    logs: v.array(runLog),
+    messageId: v.id("messages"),
+    threadId: v.id("threads"),
+  },
+  handler: async (ctx, args) => {
+    if (args.logs.length === 0) return
+
+    const userId = await ensureCurrentUser(ctx)
+    await requireOwnedThread(ctx, args.threadId, userId)
+
+    const message = await ctx.db.get(args.messageId)
+    if (
+      !message ||
+      message.threadId !== args.threadId ||
+      message.userId !== userId ||
+      message.role !== "assistant"
+    ) {
+      throw new Error("Message not found.")
+    }
+
+    await ctx.db.patch(args.messageId, {
+      meta: {
+        ...message.meta,
+        logs: [...(message.meta?.logs ?? []), ...args.logs].slice(-500),
+      },
+    })
+  },
+})
+
+export const updateAssistantContent = mutation({
+  args: {
+    content: v.string(),
+    messageId: v.id("messages"),
+    threadId: v.id("threads"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await ensureCurrentUser(ctx)
+    await requireOwnedThread(ctx, args.threadId, userId)
+
+    const message = await ctx.db.get(args.messageId)
+    if (
+      !message ||
+      message.threadId !== args.threadId ||
+      message.userId !== userId ||
+      message.role !== "assistant" ||
+      !message.pending
+    ) {
+      throw new Error("Message not found.")
+    }
+
+    await ctx.db.patch(args.messageId, {
+      content: args.content,
     })
   },
 })

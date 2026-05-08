@@ -72,6 +72,7 @@ export type RunCodexInSandboxInput = {
   codexThreadId?: string
   githubToken?: string
   model?: string
+  onContentDelta?: (delta: string) => void | Promise<void>
   onLog?: (log: RunCodexLog) => void | Promise<void>
   previousDiff?: string
   prompt: string
@@ -196,6 +197,21 @@ function stringValue(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
 }
 
+function numberValue(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined
+}
+
+function eventTypeText(record: Record<string, unknown>) {
+  const nestedTypes = ["item", "event", "payload"]
+    .map((key) => objectRecord(record[key]))
+    .map((nested) => (nested ? stringValue(nested.type) : undefined))
+    .filter(Boolean)
+
+  return [stringValue(record.type), ...nestedTypes].join(" ").toLowerCase()
+}
+
 function readableCodexText(value: string): string {
   try {
     const parsed = JSON.parse(value) as unknown
@@ -215,11 +231,59 @@ function codexThreadIdFromEvent(event: unknown) {
   return type === "thread.started" ? threadId : undefined
 }
 
+function assistantTextFromEvent(event: unknown) {
+  const record = objectRecord(event)
+  if (!record) return undefined
+
+  const type = eventTypeText(record)
+  if (
+    !type ||
+    type.includes("reason") ||
+    type.includes("tool") ||
+    type.includes("user")
+  ) {
+    return undefined
+  }
+
+  const text = findString(record, ["delta", "text_delta", "content_delta"])
+  if (
+    text &&
+    (type.includes("assistant") ||
+      type.includes("agent_message") ||
+      type.includes("message_delta") ||
+      type.includes("output_text.delta"))
+  ) {
+    return { mode: "delta" as const, text }
+  }
+
+  const snapshot = findString(record, ["message", "content", "text"])
+  if (
+    snapshot &&
+    (type.includes("assistant") ||
+      type.includes("agent_message") ||
+      type.includes("message"))
+  ) {
+    return { mode: "snapshot" as const, text: snapshot }
+  }
+
+  return undefined
+}
+
 function findString(
   value: unknown,
   keys: readonly string[],
   depth = 0
 ): string | undefined {
+  if (Array.isArray(value)) {
+    if (depth > 3) return undefined
+
+    const parts = value
+      .map((nested) => findString(nested, keys, depth + 1))
+      .filter(Boolean)
+
+    return parts.length ? parts.join(" ") : undefined
+  }
+
   const record = objectRecord(value)
   if (!record || depth > 3) return undefined
 
@@ -236,13 +300,58 @@ function findString(
   return undefined
 }
 
+function findNumber(
+  value: unknown,
+  keys: readonly string[],
+  depth = 0
+): number | undefined {
+  if (Array.isArray(value)) {
+    if (depth > 3) return undefined
+
+    for (const nested of value) {
+      const found = findNumber(nested, keys, depth + 1)
+      if (found !== undefined) return found
+    }
+
+    return undefined
+  }
+
+  const record = objectRecord(value)
+  if (!record || depth > 3) return undefined
+
+  for (const key of keys) {
+    const found = numberValue(record[key])
+    if (found !== undefined) return found
+  }
+
+  for (const nested of Object.values(record)) {
+    const found = findNumber(nested, keys, depth + 1)
+    if (found !== undefined) return found
+  }
+
+  return undefined
+}
+
+function logDetail(value: Record<string, unknown>) {
+  return JSON.stringify(value)
+}
+
 function summarizeCodexEvent(event: unknown): RunCodexLog | undefined {
   const record = objectRecord(event)
   if (!record) return undefined
 
-  const type = stringValue(record.type)?.toLowerCase() ?? ""
+  const type = eventTypeText(record)
   const status = stringValue(record.status)
+  const nestedStatus = findString(record, ["status"])
   const command = findString(record, ["command", "cmd", "shell_command"])
+  const output = findString(record, ["aggregated_output", "output", "stdout"])
+  const exitCode = findNumber(record, ["exit_code", "exitCode"])
+  const toolName = findString(record, [
+    "tool",
+    "tool_name",
+    "name",
+    "function_name",
+  ])
   const text = findString(record, [
     "summary",
     "message",
@@ -266,9 +375,37 @@ function summarizeCodexEvent(event: unknown): RunCodexLog | undefined {
       type.includes("function"))
   ) {
     return {
-      detail: status,
+      detail: logDetail({
+        command,
+        exitCode,
+        kind: "command_execution",
+        output,
+        status: nestedStatus ?? status,
+      }),
       kind: "command",
-      message: compactLine(command),
+      message: "Shell command",
+    }
+  }
+
+  if (type.includes("tool") || type.includes("function")) {
+    const name = toolName ?? "Tool call"
+    return {
+      detail: logDetail({
+        kind: "tool_call",
+        name,
+        status: nestedStatus ?? status,
+        text: text ? readableCodexText(text) : undefined,
+      }),
+      kind: "command",
+      message: name,
+    }
+  }
+
+  if (type.includes("result")) {
+    return {
+      detail: status,
+      kind: "result",
+      message: text ? compactLine(readableCodexText(text)) : "Result",
     }
   }
 
@@ -319,9 +456,11 @@ function summarizeUnknownCodexEvent(event: unknown): RunCodexLog | undefined {
 
 function createStdoutLogger(
   onLog: RunCodexInSandboxInput["onLog"],
+  onContentDelta: RunCodexInSandboxInput["onContentDelta"],
   onCodexThreadId: (threadId: string) => void
 ) {
   let buffer = ""
+  let assistantSnapshot = ""
 
   function emitPlainLine(line: string) {
     const trimmed = compactLine(line)
@@ -337,6 +476,21 @@ function createStdoutLogger(
       const event = JSON.parse(trimmed) as unknown
       const threadId = codexThreadIdFromEvent(event)
       if (threadId) onCodexThreadId(threadId)
+      const assistantText = assistantTextFromEvent(event)
+      if (assistantText) {
+        if (assistantText.mode === "delta") {
+          void onContentDelta?.(assistantText.text)
+        } else if (assistantText.text.startsWith(assistantSnapshot)) {
+          const delta = assistantText.text.slice(assistantSnapshot.length)
+          assistantSnapshot = assistantText.text
+          if (delta) void onContentDelta?.(delta)
+        } else if (assistantText.text !== assistantSnapshot) {
+          const separator = assistantSnapshot ? "\n\n" : ""
+          assistantSnapshot = assistantText.text
+          void onContentDelta?.(`${separator}${assistantText.text}`)
+        }
+        return
+      }
       const summary = summarizeCodexEvent(event)
       if (summary) {
         void onLog?.(summary)
@@ -1372,9 +1526,13 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       message: compactLine(codexCommand),
     })
     let codexThreadId = codexThreadIdToResume
-    const stdoutLogger = createStdoutLogger(input.onLog, (threadId) => {
-      codexThreadId = threadId
-    })
+    const stdoutLogger = createStdoutLogger(
+      input.onLog,
+      input.onContentDelta,
+      (threadId) => {
+        codexThreadId = threadId
+      }
+    )
     const result = redactAuthPathOutput(
       await runDaytonaCommand(sandbox, command, {
         cwd: paths.home,

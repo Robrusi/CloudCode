@@ -22,6 +22,10 @@ import {
   getDiffStats,
   type DiffFileStat,
 } from "@/lib/diff-metadata"
+import {
+  readCachedFileList,
+  writeCachedFileList,
+} from "@/lib/sandbox-file-cache"
 
 type FileEntry = { path: string; type: "file" | "dir" }
 export type FileBrowserOpenMode = "diff" | "file"
@@ -109,6 +113,7 @@ const TREE_SCROLLBAR_CSS = `
 
 export function FileBrowser({
   sandboxId,
+  cacheScope,
   open,
   diff,
   activePath,
@@ -117,6 +122,7 @@ export function FileBrowser({
   onOpenFile,
 }: {
   sandboxId: string | null
+  cacheScope: string | null
   open: boolean
   diff?: string
   /**
@@ -315,8 +321,18 @@ export function FileBrowser({
 
   const fetchList = useCallback(async () => {
     if (!sandboxId) return
-    const sourceKey = `sandbox:${sandboxId}`
-    const cached = fileListCache.get(sourceKey)
+    const sourceKey = cacheScope ?? `sandbox:${sandboxId}`
+    let cached = fileListCache.get(sourceKey)
+    if (!cached && cacheScope) {
+      const stored = await readCachedFileList(cacheScope)
+      if (stored) {
+        cached = {
+          entries: stored.entries,
+          truncated: stored.truncated,
+        }
+        fileListCache.set(sourceKey, cached)
+      }
+    }
     if (cached) {
       setEntries(cached.entries)
       setTruncated(cached.truncated)
@@ -340,6 +356,13 @@ export function FileBrowser({
         entries: nextEntries,
         truncated: nextTruncated,
       })
+      if (cacheScope) {
+        void writeCachedFileList(cacheScope, {
+          entries: nextEntries,
+          sandboxId,
+          truncated: nextTruncated,
+        })
+      }
       setEntries(nextEntries)
       setTruncated(nextTruncated)
     } catch (err) {
@@ -350,7 +373,25 @@ export function FileBrowser({
     } finally {
       setLoading(false)
     }
-  }, [sandboxId])
+  }, [cacheScope, sandboxId])
+
+  useEffect(() => {
+    if (!open || !cacheScope) return
+    let cancelled = false
+    void readCachedFileList(cacheScope).then((cached) => {
+      if (cancelled || !cached) return
+      fileListCache.set(cacheScope, {
+        entries: cached.entries,
+        truncated: cached.truncated,
+      })
+      setEntries(cached.entries)
+      setTruncated(cached.truncated)
+      setError(null)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [cacheScope, open])
 
   useEffect(() => {
     if (!open || !sandboxId) return
@@ -397,8 +438,8 @@ export function FileBrowser({
       </div>
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        {!sandboxId ? (
-          <EmptyState message="No sandbox yet." />
+        {!sandboxId && filePaths.length === 0 ? (
+          <EmptyState message="No cached files yet." />
         ) : error ? (
           <EmptyState
             message={error}
