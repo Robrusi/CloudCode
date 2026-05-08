@@ -3,15 +3,12 @@
 import { useClerk } from "@clerk/nextjs"
 import {
   ChevronRight,
-  CircleDot,
   Folder,
-  OctagonX,
-  Power,
   Settings,
   SquarePen,
   User,
 } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 
 import type { Id } from "@/convex/_generated/dataModel"
 import { cn } from "@/lib/utils"
@@ -19,20 +16,8 @@ import { cn } from "@/lib/utils"
 type SidebarChat = {
   id: Id<"threads">
   repoUrl: string
-  sandboxId?: string
-  sandboxState?: StoredSandboxState
   title: string
   updatedAt: number
-}
-
-type SandboxState = "running" | "stopped" | "deleted" | "error"
-type StoredSandboxState = SandboxState | "paused" | "killed"
-
-const SANDBOX_STATE_LABEL: Record<SandboxState, string> = {
-  deleted: "Deleted",
-  error: "Error",
-  running: "Running",
-  stopped: "Stopped",
 }
 
 function repoLabel(url: string) {
@@ -64,7 +49,6 @@ export function Sidebar({
   brandClassName: string
 }) {
   const clerk = useClerk()
-  const liveSandboxStates = useSidebarSandboxStates(chats)
   const groups = useMemo(() => {
     const map = new Map<string, SidebarChat[]>()
     for (const c of chats) {
@@ -117,7 +101,6 @@ export function Sidebar({
                 key={g.repo || "untitled"}
                 label={repoLabel(g.repo)}
                 items={g.items}
-                liveSandboxStates={liveSandboxStates}
                 activeId={activeId}
                 onSelect={onSelect}
                 onDelete={onDelete}
@@ -158,7 +141,6 @@ export function Sidebar({
 function FolderGroup({
   label,
   items,
-  liveSandboxStates,
   activeId,
   onSelect,
   onDelete,
@@ -166,7 +148,6 @@ function FolderGroup({
 }: {
   label: string
   items: SidebarChat[]
-  liveSandboxStates: Record<string, SandboxState>
   activeId: Id<"threads"> | null
   onSelect: (id: Id<"threads">) => void
   onDelete: (id: Id<"threads">) => void
@@ -196,7 +177,6 @@ function FolderGroup({
             <SidebarItem
               key={c.id}
               chat={c}
-              liveSandboxState={liveSandboxStates[c.id as string]}
               active={c.id === activeId}
               onSelect={() => onSelect(c.id)}
               onDelete={() => onDelete(c.id)}
@@ -211,14 +191,12 @@ function FolderGroup({
 
 function SidebarItem({
   chat,
-  liveSandboxState,
   active,
   onSelect,
   onDelete,
   onRename,
 }: {
   chat: SidebarChat
-  liveSandboxState?: SandboxState
   active: boolean
   onSelect: () => void
   onDelete: () => void
@@ -227,7 +205,6 @@ function SidebarItem({
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(chat.title || "")
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
-  const sandboxState = sandboxStateForChat(chat, liveSandboxState)
 
   function startRename() {
     setDraft(chat.title || "")
@@ -281,7 +258,6 @@ function SidebarItem({
           <span className="min-w-0 flex-1 truncate">
             {chat.title || "Untitled"}
           </span>
-          {sandboxState ? <SandboxStateIcon state={sandboxState} /> : null}
         </button>
       )}
 
@@ -297,115 +273,6 @@ function SidebarItem({
         />
       ) : null}
     </div>
-  )
-}
-
-function sandboxStateForChat(
-  chat: SidebarChat,
-  liveSandboxState?: SandboxState
-) {
-  const state = liveSandboxState ?? normalizeStoredSandboxState(chat.sandboxState)
-  if (chat.sandboxId) return state ?? "running"
-  return undefined
-}
-
-function normalizeStoredSandboxState(
-  state?: StoredSandboxState
-): SandboxState | undefined {
-  if (state === "paused") return "stopped"
-  if (state === "killed") return "deleted"
-  return state
-}
-
-function useSidebarSandboxStates(chats: SidebarChat[]) {
-  const [states, setStates] = useState<Record<string, SandboxState>>({})
-  const sandboxLookups = useMemo(
-    () =>
-      chats
-        .filter((chat): chat is SidebarChat & { sandboxId: string } =>
-          Boolean(chat.sandboxId)
-        )
-        .map((chat) => ({
-          sandboxId: chat.sandboxId,
-          threadId: chat.id as string,
-        })),
-    [chats]
-  )
-
-  useEffect(() => {
-    let cancelled = false
-    const threadIds = new Set(sandboxLookups.map(({ threadId }) => threadId))
-
-    async function load() {
-      const results = await Promise.all(
-        sandboxLookups.map(async ({ sandboxId, threadId }) => {
-          try {
-            const res = await fetch(
-              `/api/sandbox/info?sandboxId=${encodeURIComponent(sandboxId)}`,
-              { cache: "no-store" }
-            )
-            if (!res.ok) return { state: "deleted" as const, threadId }
-
-            const data = (await res.json()) as { state?: unknown }
-            const state =
-              data.state === "stopped" ||
-              data.state === "deleted" ||
-              data.state === "error"
-                ? data.state
-                : "running"
-            return {
-              state,
-              threadId,
-            } satisfies { state: SandboxState; threadId: string }
-          } catch {
-            return undefined
-          }
-        })
-      )
-
-      if (cancelled) return
-
-      setStates((current) => {
-        const next: Record<string, SandboxState> = {}
-        for (const threadId of threadIds) {
-          if (current[threadId]) next[threadId] = current[threadId]
-        }
-        for (const result of results) {
-          if (result) next[result.threadId] = result.state
-        }
-        return next
-      })
-    }
-
-    void load()
-    const id = window.setInterval(load, 15_000)
-    return () => {
-      cancelled = true
-      window.clearInterval(id)
-    }
-  }, [chats, sandboxLookups])
-
-  return states
-}
-
-function SandboxStateIcon({ state }: { state: SandboxState }) {
-  const Icon =
-    state === "running" ? CircleDot : state === "stopped" ? Power : OctagonX
-  const label = `Sandbox ${SANDBOX_STATE_LABEL[state].toLowerCase()}`
-  return (
-    <span
-      role="img"
-      aria-label={label}
-      title={label}
-      className={cn(
-        "inline-flex shrink-0",
-        state === "running" && "text-emerald-600 dark:text-emerald-400",
-        state === "stopped" && "text-yellow-500 dark:text-yellow-400",
-        (state === "deleted" || state === "error") && "text-destructive"
-      )}
-    >
-      <Icon className="size-3.5" />
-    </span>
   )
 }
 

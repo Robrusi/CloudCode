@@ -138,6 +138,7 @@ function reconstructOldContent(
 
 const MIN_PANEL_WIDTH = 280
 const DEFAULT_PANEL_WIDTH = 640
+type FileViewMode = "diff" | "file"
 
 export function FileEditorPanel({
   sandboxId,
@@ -150,7 +151,7 @@ export function FileEditorPanel({
   sandboxId: string | null
   activePath: string | null
   diff?: string
-  mode?: "diff" | "file"
+  mode?: FileViewMode
   onClose: () => void
   placement?: "main" | "side"
 }) {
@@ -297,7 +298,7 @@ function FileViewer({
   path,
 }: {
   fileDiff?: FileDiffMetadata
-  mode: "diff" | "file"
+  mode: FileViewMode
   sandboxId: string | null
   path: string
 }) {

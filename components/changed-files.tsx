@@ -158,11 +158,13 @@ function FileTreeRows({
   nodes,
   depth,
   expanded,
+  onOpenDiff,
   onToggle,
 }: {
   nodes: TreeNode[]
   depth: number
   expanded: Set<string>
+  onOpenDiff?: (path: string) => void
   onToggle: (path: string) => void
 }) {
   return (
@@ -210,6 +212,7 @@ function FileTreeRows({
                   nodes={node.children}
                   depth={depth + 1}
                   expanded={expanded}
+                  onOpenDiff={onOpenDiff}
                   onToggle={onToggle}
                 />
               ) : null}
@@ -218,10 +221,13 @@ function FileTreeRows({
         }
 
         return (
-          <div
+          <button
+            type="button"
             key={`file:${node.path}`}
-            className="flex items-center gap-2 rounded-md py-1 pr-2"
+            onClick={() => onOpenDiff?.(node.path)}
+            className="flex w-full items-center gap-2 rounded-md py-1 pr-2 text-left transition-colors hover:bg-muted/60"
             style={indentStyle}
+            title={node.path}
           >
             <span className="size-3.5 shrink-0" />
             <FileBadge name={node.name} />
@@ -232,14 +238,20 @@ function FileTreeRows({
               additions={node.stat.additions}
               deletions={node.stat.deletions}
             />
-          </div>
+          </button>
         )
       })}
     </>
   )
 }
 
-export function ChangedFiles({ diff }: { diff: string }) {
+export function ChangedFiles({
+  diff,
+  onOpenDiff,
+}: {
+  diff: string
+  onOpenDiff?: (path: string) => void
+}) {
   const stats = useMemo(() => getDiffStats(diff), [diff])
   const tree = useMemo(() => buildFileTree(stats.files), [stats.files])
   const allDirPaths = useMemo(() => collectDirPaths(tree), [tree])
@@ -290,6 +302,7 @@ export function ChangedFiles({ diff }: { diff: string }) {
           nodes={tree}
           depth={0}
           expanded={expanded}
+          onOpenDiff={onOpenDiff}
           onToggle={toggle}
         />
       </div>

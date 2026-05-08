@@ -142,7 +142,7 @@ type FileLinkContext = {
 function renderInline(text: string, context: FileLinkContext): ReactNode {
   const parts: ReactNode[] = []
   const re =
-    /(\[([^\]]+)\]\(([^)\s]+)\)|\bhttps?:\/\/[^\s<>()]+[^\s<>().,!?;:]|\*\*([^*]+)\*\*|`([^`]+)`)/g
+    /(\[([^\]]+)\]\((<[^>]+>|[^)\s]+)\)|\bhttps?:\/\/[^\s<>()]+[^\s<>().,!?;:]|\*\*([^*]+)\*\*|`([^`]+)`)/g
   let last = 0
   let m: RegExpExecArray | null
   let key = 0
@@ -201,8 +201,8 @@ function MarkdownLink({
   fileLinkContext: FileLinkContext
   href: string
 }) {
-  const external = /^https?:\/\//i.test(href)
   const filePath = getFilePathFromHref(href, fileLinkContext.repoName)
+  const external = !filePath && /^https?:\/\//i.test(href)
 
   return (
     <a
@@ -225,7 +225,7 @@ function MarkdownLink({
 }
 
 function normalizeLinkHref(href: string) {
-  const trimmed = href.trim()
+  const trimmed = href.trim().replace(/^<(.+)>$/, "$1")
   if (/^(https?:\/\/|mailto:|\/|#)/i.test(trimmed)) return trimmed
   if (looksLikeFileHref(trimmed)) return trimmed
   return undefined
@@ -243,9 +243,16 @@ function looksLikeFileHref(href: string) {
 }
 
 function getFilePathFromHref(href: string, repoName: string | null) {
-  if (/^(https?:\/\/|mailto:|#)/i.test(href)) return null
+  if (/^(mailto:|#)/i.test(href)) return null
 
   let path = href.trim()
+  if (/^https?:\/\//i.test(path)) {
+    try {
+      path = new URL(path).pathname
+    } catch {
+      return null
+    }
+  }
   try {
     path = decodeURI(path)
   } catch {
@@ -257,9 +264,20 @@ function getFilePathFromHref(href: string, repoName: string | null) {
   path = path.replace(/:\d+(?::\d+)?$/, "")
   path = path.replace(/^\.\/+/, "")
 
-  const repoRoot = "/home/user/repo/"
-  if (path.startsWith(repoRoot)) {
-    return sanitizeRelativeFilePath(path.slice(repoRoot.length))
+  const sandboxRepoRoots = [
+    "/home/daytona/repo/",
+    "/home/user/repo/",
+    "/root/repo/",
+  ]
+  for (const repoRoot of sandboxRepoRoots) {
+    if (path.startsWith(repoRoot)) {
+      return sanitizeRelativeFilePath(path.slice(repoRoot.length))
+    }
+  }
+
+  const repoRootIndex = path.indexOf("/repo/")
+  if (repoRootIndex >= 0) {
+    return sanitizeRelativeFilePath(path.slice(repoRootIndex + "/repo/".length))
   }
 
   if (repoName) {

@@ -151,6 +151,11 @@ type SandboxPresetRecord = {
   updatedAt: number
 }
 
+type OptimisticRun = {
+  baseMessageCount: number
+  messages: Message[]
+}
+
 const REPO_KEY = "cloudcode:repoUrl"
 const BASE_BRANCH_KEY = "cloudcode:baseBranch"
 const MODEL_KEY = "cloudcode:model"
@@ -168,6 +173,7 @@ const THINKING_KEY = "cloudcode:thinking"
 const ACTIVE_KEY = "cloudcode:activeChatId"
 const DRAFT_RUN_KEY = "__draft__"
 const EMPTY_LOGS: RunLog[] = []
+const EMPTY_MESSAGES: Message[] = []
 
 function repoLabel(url: string) {
   if (!url) return "Untitled"
@@ -264,12 +270,16 @@ function ChatInner() {
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null)
   const [activeFileMode, setActiveFileMode] =
     useState<FileBrowserOpenMode>("file")
+  const [activeFileDiff, setActiveFileDiff] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [view, setView] = useState<"chat" | "settings">("chat")
   const [runningRunKeys, setRunningRunKeys] = useState<Record<string, true>>({})
   const [runLogs, setRunLogs] = useState<Record<string, RunLog[]>>({})
   const [liveRunStates, setLiveRunStates] = useState<
     Record<string, CachedRunState>
+  >({})
+  const [optimisticRuns, setOptimisticRuns] = useState<
+    Record<string, OptimisticRun>
   >({})
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
   const [authError, setAuthError] = useState("")
@@ -316,15 +326,23 @@ function ChatInner() {
       })),
     [chats, liveRunStates]
   )
-  const activeRunState = active ? liveRunStates[active.id as string] : undefined
+  const activeRunKey = activeId ? (activeId as string) : DRAFT_RUN_KEY
+  const activeRunState = activeId ? liveRunStates[activeId as string] : undefined
   const activeSandboxId =
     activeRunState?.sandboxState === "deleted"
       ? null
       : hasCachedRunKey(activeRunState, "sandboxId")
       ? (activeRunState?.sandboxId ?? null)
       : (active?.sandboxId ?? null)
-  const messages = active?.messages ?? []
-  const activeRunKey = active ? (active.id as string) : DRAFT_RUN_KEY
+  const serverMessages = active?.messages ?? []
+  const optimisticRun = optimisticRuns[activeRunKey]
+  const optimisticMessages =
+    optimisticRun &&
+    serverMessages.length <= optimisticRun.baseMessageCount &&
+    !serverMessages.some((message) => message.pending)
+      ? optimisticRun.messages
+      : EMPTY_MESSAGES
+  const messages = [...serverMessages, ...optimisticMessages]
   const activeLocalRunPending = Boolean(runningRunKeys[activeRunKey])
   const activeMessagePending = messages.some((message) => message.pending)
   const activeRunPending = activeLocalRunPending || activeMessagePending
@@ -346,6 +364,7 @@ function ChatInner() {
         : null,
     [active]
   )
+  const editorDiff = activeFileDiff ?? activeDiff
   const activeRepoName = useMemo(() => {
     const label = repoLabel(repoUrl)
     return label.split("/").pop() || null
@@ -354,6 +373,13 @@ function ChatInner() {
   const openFile = useCallback((path: string) => {
     setActiveFilePath(path)
     setActiveFileMode("file")
+    setActiveFileDiff(null)
+  }, [])
+
+  const openFileDiff = useCallback((path: string, diff: string) => {
+    setActiveFilePath(path)
+    setActiveFileMode("diff")
+    setActiveFileDiff(diff)
   }, [])
 
   useEffect(() => {
@@ -389,6 +415,28 @@ function ChatInner() {
   }, [activeId])
 
   useEffect(() => {
+    setOptimisticRuns((current) => {
+      let changed = false
+      const next = { ...current }
+
+      for (const chat of chats) {
+        const key = chat.id as string
+        const optimistic = next[key]
+        if (!optimistic) continue
+        if (
+          chat.messages.length > optimistic.baseMessageCount ||
+          chat.messages.some((message) => message.pending)
+        ) {
+          delete next[key]
+          changed = true
+        }
+      }
+
+      return changed ? next : current
+    })
+  }, [chats])
+
+  useEffect(() => {
     const el = textareaRef.current
     if (!el) return
     el.style.height = "0px"
@@ -412,6 +460,7 @@ function ChatInner() {
 
   useLayoutEffect(() => {
     isAtBottomRef.current = true
+    setActiveFileDiff(null)
     scrollThreadToBottom()
   }, [activeId])
 
@@ -480,6 +529,46 @@ function ChatInner() {
     setRunningRunKeys((current) => ({ ...current, [runKey]: true }))
   }
 
+  function showOptimisticRun(
+    runKey: string,
+    prompt: string,
+    baseMessageCount: number,
+    runSpeed: Speed,
+    runThinking: Thinking
+  ) {
+    const now = Date.now()
+    setOptimisticRuns((current) => ({
+      ...current,
+      [runKey]: {
+        baseMessageCount,
+        messages: [
+          {
+            content: prompt,
+            id: `optimistic-${runKey}-${now}-user` as Id<"messages">,
+            role: "user",
+          },
+          {
+            content: "",
+            id: `optimistic-${runKey}-${now}-assistant` as Id<"messages">,
+            pending: true,
+            role: "assistant",
+            speed: runSpeed,
+            thinking: runThinking,
+          },
+        ],
+      },
+    }))
+  }
+
+  function clearOptimisticRun(runKey: string) {
+    setOptimisticRuns((current) => {
+      if (!current[runKey]) return current
+      const { [runKey]: _removed, ...next } = current
+      void _removed
+      return next
+    })
+  }
+
   function transferRunKey(previousKey: string, nextKey: string) {
     if (previousKey === nextKey) return nextKey
 
@@ -494,6 +583,13 @@ function ChatInner() {
       const { [previousKey]: _removed, ...rest } = current
       void _removed
       return { ...rest, [nextKey]: true }
+    })
+    setOptimisticRuns((current) => {
+      const optimistic = current[previousKey]
+      if (!optimistic) return current
+      const { [previousKey]: _removed, ...rest } = current
+      void _removed
+      return { ...rest, [nextKey]: optimistic }
     })
 
     return nextKey
@@ -661,7 +757,7 @@ function ChatInner() {
 
   async function send(prompt: string) {
     const trimmed = prompt.trim()
-    const initialRunKey = active ? (active.id as string) : DRAFT_RUN_KEY
+    const initialRunKey = activeId ? (activeId as string) : DRAFT_RUN_KEY
     if (
       !trimmed ||
       userLoading ||
@@ -687,6 +783,13 @@ function ChatInner() {
 
     const controller = new AbortController()
     markRunActive(runKey, controller)
+    showOptimisticRun(
+      runKey,
+      trimmed,
+      active?.messages.length ?? 0,
+      draftSpeed,
+      draftThinking
+    )
 
     try {
       const runSandboxPresetId = active?.sandboxPresetId ?? draftSandboxPresetId
@@ -734,6 +837,12 @@ function ChatInner() {
       const runSandboxId = hasCachedRunKey(cachedRunState, "sandboxId")
         ? cachedRunState?.sandboxId
         : active?.sandboxId
+      if (chatId && runSandboxId) {
+        mergeThreadRunState(chatId, {
+          sandboxId: runSandboxId,
+          sandboxState: "running",
+        })
+      }
       const resumeContext = buildResumeHandoff({
         branchName,
         messages: active?.messages ?? [],
@@ -869,6 +978,8 @@ function ChatInner() {
             console.warn("Unable to save failed run sandbox state.", error)
           })
         }
+      } else {
+        clearOptimisticRun(runKey)
       }
     } finally {
       clearRunKey(runKey)
@@ -975,9 +1086,12 @@ function ChatInner() {
               <FileEditorPanel
                 sandboxId={activeSandboxId}
                 activePath={activeFilePath}
-                diff={activeDiff ?? undefined}
+                diff={editorDiff ?? undefined}
                 mode={activeFileMode}
-                onClose={() => setActiveFilePath(null)}
+                onClose={() => {
+                  setActiveFilePath(null)
+                  setActiveFileDiff(null)
+                }}
                 placement="main"
               />
             ) : (
@@ -1012,6 +1126,7 @@ function ChatInner() {
                           logs={runLogs[m.id as string] ?? EMPTY_LOGS}
                           repoName={activeRepoName}
                           onOpenFile={openFile}
+                          onOpenFileDiff={openFileDiff}
                         />
                       ))}
                     </div>
@@ -1151,10 +1266,12 @@ function ChatInner() {
         sandboxId={activeSandboxId}
         diff={activeDiff ?? undefined}
         activePath={activeFilePath}
+        activeMode={activeFileMode}
         onClose={() => setFilesOpen(false)}
         onOpenFile={(p, mode) => {
           setActiveFilePath(p)
           setActiveFileMode(mode)
+          setActiveFileDiff(null)
         }}
       />
     </div>

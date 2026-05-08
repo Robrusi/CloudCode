@@ -42,8 +42,7 @@ export function SandboxStatus({ sandboxId }: { sandboxId: string }) {
         const data = await res.json()
         if (cancelled) return
         if (!res.ok) {
-          setMissing(true)
-          setInfo(null)
+          setMissing(Boolean(data?.notFound))
           return
         }
         setMissing(false)
@@ -65,7 +64,7 @@ export function SandboxStatus({ sandboxId }: { sandboxId: string }) {
               : "running",
         })
       } catch {
-        if (!cancelled) setMissing(true)
+        if (!cancelled) setMissing(false)
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -88,11 +87,20 @@ export function SandboxStatus({ sandboxId }: { sandboxId: string }) {
     )
   }
 
-  if (missing || !info) {
+  if (missing) {
     return (
       <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
         <OctagonX className="size-3.5" />
         Sandbox missing
+      </span>
+    )
+  }
+
+  if (!info) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Loader2 className="size-3.5 animate-spin" />
+        Checking
       </span>
     )
   }

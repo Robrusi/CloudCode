@@ -112,6 +112,7 @@ export function FileBrowser({
   open,
   diff,
   activePath,
+  activeMode,
   onClose,
   onOpenFile,
 }: {
@@ -126,6 +127,7 @@ export function FileBrowser({
    * (see `arePathSetsEqual` in `@pierre/trees`).
    */
   activePath: string | null
+  activeMode: FileBrowserOpenMode
   onClose: () => void
   onOpenFile: (path: string, mode: FileBrowserOpenMode) => void
 }) {
@@ -217,6 +219,7 @@ export function FileBrowser({
   }, [diffStats.files, liveEntries, view])
 
   const onOpenFileRef = useRef(onOpenFile)
+  const syncingSelectionRef = useRef(false)
   const viewRef = useRef(view)
   useEffect(() => {
     onOpenFileRef.current = onOpenFile
@@ -224,6 +227,7 @@ export function FileBrowser({
   }, [onOpenFile, view])
 
   const handleSelectionChange = useCallback((paths: readonly string[]) => {
+    if (syncingSelectionRef.current) return
     const path = paths[0]
     if (!path || path === "__empty__") return
     if (!fileEntryPathsRef.current.has(path)) return
@@ -289,8 +293,10 @@ export function FileBrowser({
   // no-op and the file never reopens.
   useEffect(() => {
     if (!model) return
+    syncingSelectionRef.current = true
     const selected = model.getSelectedPaths()
-    if (activePath) {
+    const viewMode: FileBrowserOpenMode = view === "diffs" ? "diff" : "file"
+    if (activePath && activeMode === viewMode) {
       for (const p of selected) {
         if (p !== activePath) model.getItem(p)?.deselect()
       }
@@ -302,7 +308,10 @@ export function FileBrowser({
         model.getItem(p)?.deselect()
       }
     }
-  }, [activePath, model])
+    queueMicrotask(() => {
+      syncingSelectionRef.current = false
+    })
+  }, [activeMode, activePath, model, view])
 
   const fetchList = useCallback(async () => {
     if (!sandboxId) return

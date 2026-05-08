@@ -36,11 +36,13 @@ export const MessageBlock = memo(function MessageBlock({
   logs,
   message,
   onOpenFile,
+  onOpenFileDiff,
   repoName,
 }: {
   logs: ChatRunLog[]
   message: ChatMessage
   onOpenFile: (path: string) => void
+  onOpenFileDiff: (path: string, diff: string) => void
   repoName: string | null
 }) {
   if (message.role === "user") {
@@ -70,7 +72,10 @@ export const MessageBlock = memo(function MessageBlock({
         />
       ) : null}
       {!message.pending && message.meta?.diff ? (
-        <ChangedFiles diff={message.meta.diff} />
+        <ChangedFiles
+          diff={message.meta.diff}
+          onOpenDiff={(path) => onOpenFileDiff(path, message.meta!.diff!)}
+        />
       ) : null}
       {message.meta?.branch ? (
         <div className="font-mono text-[11px] text-muted-foreground">
