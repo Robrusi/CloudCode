@@ -11,6 +11,7 @@
 import type * as chats from "../chats.js";
 import type * as codexAuth from "../codexAuth.js";
 import type * as lib_users from "../lib/users.js";
+import type * as sandboxPresets from "../sandboxPresets.js";
 import type * as users from "../users.js";
 
 import type {
@@ -23,6 +24,7 @@ declare const fullApi: ApiFromModules<{
   chats: typeof chats;
   codexAuth: typeof codexAuth;
   "lib/users": typeof lib_users;
+  sandboxPresets: typeof sandboxPresets;
   users: typeof users;
 }>;
 

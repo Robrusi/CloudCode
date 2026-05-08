@@ -18,6 +18,14 @@ const thinking = v.union(
   v.literal("high"),
   v.literal("xhigh")
 )
+const sandboxState = v.union(
+  v.literal("running"),
+  v.literal("paused"),
+  v.literal("killed"),
+  v.literal("stopped"),
+  v.literal("deleted"),
+  v.literal("error")
+)
 
 const runLog = v.object({
   detail: v.optional(v.string()),
@@ -55,6 +63,21 @@ async function requireOwnedThread(
   return thread
 }
 
+async function requireOwnedPreset(
+  ctx: MutationCtx,
+  presetId: Id<"sandboxPresets"> | undefined,
+  userId: Id<"users">
+) {
+  if (!presetId) return undefined
+
+  const preset = await ctx.db.get(presetId)
+  if (!preset || preset.userId !== userId) {
+    throw new Error("Preset not found.")
+  }
+
+  return preset._id
+}
+
 export const list = query({
   args: {},
   handler: async (ctx) => {
@@ -75,6 +98,7 @@ export const list = query({
           .collect()
 
         return {
+          baseBranch: thread.baseBranch,
           codexThreadId: thread.codexThreadId,
           createdAt: thread.createdAt,
           id: thread._id,
@@ -90,9 +114,12 @@ export const list = query({
           })),
           model: thread.model,
           repoUrl: thread.repoUrl,
+          sandboxPresetId: thread.sandboxPresetId,
+          sandboxPresetName: thread.sandboxPresetId
+            ? (await ctx.db.get(thread.sandboxPresetId))?.name
+            : undefined,
           sandboxId: thread.sandboxId,
-          sandboxSnapshotId: thread.sandboxSnapshotId,
-          sandboxSnapshotIdsToDelete: thread.sandboxSnapshotIdsToDelete,
+          sandboxState: thread.sandboxState,
           title: thread.title,
           updatedAt: thread.updatedAt,
         }
@@ -103,20 +130,30 @@ export const list = query({
 
 export const createThread = mutation({
   args: {
+    baseBranch: v.optional(v.string()),
     model,
     prompt: v.string(),
     repoUrl: v.string(),
+    sandboxPresetId: v.optional(v.id("sandboxPresets")),
     speed,
     thinking,
     title: v.string(),
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
+    const sandboxPresetId = await requireOwnedPreset(
+      ctx,
+      args.sandboxPresetId,
+      userId
+    )
     const now = Date.now()
+    const trimmedBaseBranch = args.baseBranch?.trim()
     const threadId = await ctx.db.insert("threads", {
+      ...(trimmedBaseBranch ? { baseBranch: trimmedBaseBranch } : {}),
       createdAt: now,
       model: args.model,
       repoUrl: args.repoUrl,
+      ...(sandboxPresetId ? { sandboxPresetId } : {}),
       title: args.title,
       updatedAt: now,
       userId,
@@ -185,8 +222,7 @@ export const completeAssistantMessage = mutation({
     messageId: v.id("messages"),
     meta: v.optional(messageMeta),
     sandboxId: v.optional(v.string()),
-    sandboxSnapshotId: v.optional(v.string()),
-    sandboxSnapshotIdsToDelete: v.optional(v.array(v.string())),
+    sandboxState: v.optional(sandboxState),
     threadId: v.id("threads"),
   },
   handler: async (ctx, args) => {
@@ -210,16 +246,11 @@ export const completeAssistantMessage = mutation({
     })
     await ctx.db.patch(args.threadId, {
       ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
-      ...(args.sandboxSnapshotId
-        ? { sandboxSnapshotId: args.sandboxSnapshotId }
-        : {}),
-      ...(args.sandboxSnapshotIdsToDelete
-        ? {
-            sandboxSnapshotIdsToDelete: [
-              ...new Set(args.sandboxSnapshotIdsToDelete),
-            ],
-          }
-        : {}),
+      ...(args.sandboxState
+        ? { sandboxState: args.sandboxState }
+        : args.sandboxId
+          ? { sandboxState: "running" as const }
+          : {}),
       updatedAt: Date.now(),
     })
   },
@@ -229,29 +260,28 @@ export const saveRunState = mutation({
   args: {
     codexThreadId: v.optional(v.string()),
     sandboxId: v.optional(v.string()),
-    sandboxSnapshotId: v.optional(v.string()),
-    sandboxSnapshotIdsToDelete: v.optional(v.array(v.string())),
+    sandboxState: v.optional(sandboxState),
     threadId: v.id("threads"),
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
-    await requireOwnedThread(ctx, args.threadId, userId)
+    const thread = await ctx.db.get(args.threadId)
+
+    if (!thread || thread.userId !== userId) {
+      return { saved: false }
+    }
 
     await ctx.db.patch(args.threadId, {
       ...(args.codexThreadId ? { codexThreadId: args.codexThreadId } : {}),
       ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
-      ...(args.sandboxSnapshotId
-        ? { sandboxSnapshotId: args.sandboxSnapshotId }
-        : {}),
-      ...(args.sandboxSnapshotIdsToDelete
-        ? {
-            sandboxSnapshotIdsToDelete: [
-              ...new Set(args.sandboxSnapshotIdsToDelete),
-            ],
-          }
-        : {}),
+      ...(args.sandboxState
+        ? { sandboxState: args.sandboxState }
+        : args.sandboxId
+          ? { sandboxState: "running" as const }
+          : {}),
       updatedAt: Date.now(),
     })
+    return { saved: true }
   },
 })
 
@@ -265,26 +295,7 @@ export const clearSandbox = mutation({
 
     await ctx.db.patch(args.threadId, {
       sandboxId: undefined,
-      updatedAt: Date.now(),
-    })
-  },
-})
-
-export const clearSandboxSnapshot = mutation({
-  args: {
-    sandboxSnapshotIdsToDelete: v.optional(v.array(v.string())),
-    threadId: v.id("threads"),
-  },
-  handler: async (ctx, args) => {
-    const userId = await ensureCurrentUser(ctx)
-    await requireOwnedThread(ctx, args.threadId, userId)
-
-    await ctx.db.patch(args.threadId, {
-      sandboxSnapshotId: undefined,
-      sandboxSnapshotIdsToDelete:
-        args.sandboxSnapshotIdsToDelete === undefined
-          ? undefined
-          : [...new Set(args.sandboxSnapshotIdsToDelete)],
+      sandboxState: "deleted",
       updatedAt: Date.now(),
     })
   },

@@ -14,6 +14,14 @@ const thinking = v.union(
   v.literal("high"),
   v.literal("xhigh")
 )
+const sandboxState = v.union(
+  v.literal("running"),
+  v.literal("paused"),
+  v.literal("killed"),
+  v.literal("stopped"),
+  v.literal("deleted"),
+  v.literal("error")
+)
 
 const runLog = v.object({
   detail: v.optional(v.string()),
@@ -66,14 +74,50 @@ export default defineSchema({
     userId: v.id("users"),
   }).index("by_thread", ["threadId"]),
 
+  sandboxPresetSecrets: defineTable({
+    createdAt: v.number(),
+    name: v.string(),
+    presetId: v.id("sandboxPresets"),
+    updatedAt: v.number(),
+    userId: v.id("users"),
+    value: v.string(),
+  })
+    .index("by_preset", ["presetId"])
+    .index("by_user_preset_name", ["userId", "presetId", "name"]),
+
+  sandboxPresets: defineTable({
+    cpuCount: v.optional(v.number()),
+    createdAt: v.number(),
+    customToolingCommands: v.optional(v.array(v.string())),
+    daytonaSnapshot: v.optional(v.string()),
+    installScript: v.optional(v.string()),
+    memoryMB: v.optional(v.number()),
+    name: v.string(),
+    pathInstallScript: v.optional(v.string()),
+    toolVersions: v.optional(
+      v.array(
+        v.object({
+          tool: v.string(),
+          version: v.string(),
+        })
+      )
+    ),
+    tools: v.optional(v.array(v.string())),
+    updatedAt: v.number(),
+    userId: v.id("users"),
+  }).index("by_user_updated", ["userId", "updatedAt"]),
+
   threads: defineTable({
+    baseBranch: v.optional(v.string()),
     codexThreadId: v.optional(v.string()),
     createdAt: v.number(),
     model,
     repoUrl: v.string(),
-    sandboxId: v.optional(v.string()),
+    sandboxPresetId: v.optional(v.id("sandboxPresets")),
     sandboxSnapshotId: v.optional(v.string()),
     sandboxSnapshotIdsToDelete: v.optional(v.array(v.string())),
+    sandboxId: v.optional(v.string()),
+    sandboxState: v.optional(sandboxState),
     title: v.string(),
     updatedAt: v.number(),
     userId: v.id("users"),

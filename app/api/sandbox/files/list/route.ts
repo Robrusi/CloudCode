@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server"
 
-import { withReadableSandbox } from "@/lib/e2b-sandbox-files"
-import { refreshSandboxInactivityTimeout } from "@/lib/e2b-sandbox-timeout"
+import {
+  getStartedDaytonaSandbox,
+  resolveDaytonaPaths,
+  runDaytonaCommand,
+  shellQuote,
+} from "@/lib/daytona-sandbox"
 
 export const runtime = "nodejs"
 
-const REPO_PATH = "/home/user/repo"
-// Directories whose contents we don't recurse into (we still surface the
-// directory itself so it shows up — collapsed — in the tree).
 const SKIP_DESCEND = new Set([
   "node_modules",
   ".next",
@@ -22,10 +23,6 @@ const MAX_ENTRIES = 5000
 
 type EntryOut = { path: string; type: "file" | "dir" }
 
-function shellQuote(value: string) {
-  return `'${value.replaceAll("'", "'\\''")}'`
-}
-
 function toEntries(stdout: string) {
   const entries: EntryOut[] = []
   const seen = new Set<string>()
@@ -34,6 +31,13 @@ function toEntries(stdout: string) {
   for (const raw of stdout.split("\0")) {
     const path = raw.trim().replace(/^\.\//, "")
     if (!path || seen.has(path)) continue
+    if (
+      path.startsWith("tmp/cloudcode-") ||
+      path.startsWith(".codex/") ||
+      path.includes("/.env")
+    ) {
+      continue
+    }
     total += 1
     seen.add(path)
     entries.push({ path, type: "file" })
@@ -47,55 +51,42 @@ function toEntries(stdout: string) {
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const sandboxId = searchParams.get("sandboxId")
-  const snapshotId = searchParams.get("snapshotId")
-  const root = searchParams.get("root") || REPO_PATH
+  const requestedRoot = searchParams.get("root")
 
-  if (!sandboxId && !snapshotId) {
-    return NextResponse.json(
-      { error: "sandboxId or snapshotId required" },
-      { status: 400 }
-    )
+  if (!sandboxId) {
+    return NextResponse.json({ error: "sandboxId required" }, { status: 400 })
   }
 
   try {
-    const out = await withReadableSandbox(
-      { sandboxId, snapshotId },
-      async (sandbox, source) => {
-        if (source === "sandbox") {
-          await refreshSandboxInactivityTimeout(sandbox)
-        }
-        const skipNames = [...SKIP_DESCEND]
-          .map((name) => `-name ${shellQuote(name)}`)
-          .join(" -o ")
-        const command = [
-          "set -e",
-          `cd ${shellQuote(root)}`,
-          "if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then",
-          `  git ls-files -co --exclude-standard -z | head -z -n ${MAX_ENTRIES + 1}`,
-          "else",
-          `  find . \\( ${skipNames} \\) -prune -o -type f -print0 | head -z -n ${MAX_ENTRIES + 1}`,
-          "fi",
-        ].join("\n")
-        const result = await sandbox.commands.run(
-          `bash -lc ${shellQuote(command)}`,
-          {
-            timeoutMs: 10_000,
-          }
-        )
-        return toEntries(result.stdout)
-      }
-    )
+    const sandbox = await getStartedDaytonaSandbox(sandboxId)
+    const root = requestedRoot || (await resolveDaytonaPaths(sandbox)).repoPath
+    const skipNames = [...SKIP_DESCEND]
+      .map((name) => `-name ${shellQuote(name)}`)
+      .join(" -o ")
+    const command = [
+      "set -e",
+      `if [ ! -d ${shellQuote(root)} ]; then exit 0; fi`,
+      `cd ${shellQuote(root)}`,
+      "if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then",
+      `  git ls-files -co --exclude-standard -z | head -z -n ${MAX_ENTRIES + 1}`,
+      "else",
+      `  find . \\( ${skipNames} \\) -prune -o -type f -print0 | head -z -n ${MAX_ENTRIES + 1}`,
+      "fi",
+    ].join("\n")
+    const result = await runDaytonaCommand(sandbox, command, {
+      timeoutMs: 10_000,
+    })
+    const out = toEntries(result.stdout)
 
     return NextResponse.json({
-      root,
       entries: out.entries,
+      root,
       truncated: out.truncated,
     })
   } catch (error) {
     return NextResponse.json(
       {
-        error:
-          error instanceof Error ? error.message : "Failed to list files",
+        error: error instanceof Error ? error.message : "Failed to list files",
       },
       { status: 500 }
     )
