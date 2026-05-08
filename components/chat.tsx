@@ -277,8 +277,10 @@ function ChatInner() {
   const runningRunKeysRef = useRef<Set<string>>(new Set())
   const threadRunStateRef = useRef<Record<string, CachedRunState>>({})
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const composerRef = useRef<HTMLDivElement>(null)
   const threadRef = useRef<HTMLDivElement | null>(null)
   const isAtBottomRef = useRef(true)
+  const [composerHeight, setComposerHeight] = useState(144)
 
   function scrollThreadToBottom() {
     const el = threadRef.current
@@ -392,6 +394,21 @@ function ChatInner() {
     el.style.height = "0px"
     el.style.height = Math.min(Math.max(el.scrollHeight, 80), 200) + "px"
   }, [input])
+
+  useEffect(() => {
+    const el = composerRef.current
+    if (!el) return
+
+    const updateComposerHeight = () => {
+      setComposerHeight(Math.ceil(el.getBoundingClientRect().height))
+    }
+
+    updateComposerHeight()
+    const observer = new ResizeObserver(updateComposerHeight)
+    observer.observe(el)
+
+    return () => observer.disconnect()
+  }, [activeFilePath])
 
   useLayoutEffect(() => {
     isAtBottomRef.current = true
@@ -969,7 +986,13 @@ function ChatInner() {
                 onScroll={onThreadScroll}
                 className="min-h-0 flex-1 overflow-y-auto [contain:paint]"
               >
-                <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col px-6 pt-16 pb-40">
+                <div
+                  className="mx-auto flex min-h-full w-full max-w-2xl flex-col px-6 pt-16"
+                  style={{
+                    paddingBottom:
+                      composerHeight + (terminalVisible ? terminalHeight : 0),
+                  }}
+                >
                   {empty ? (
                     <div className="flex flex-1 flex-col items-center justify-center text-center">
                       <h1 className="text-3xl font-medium tracking-tight text-foreground/90">
@@ -1006,8 +1029,9 @@ function ChatInner() {
             />
 
             <div
+              ref={composerRef}
               className={cn(
-                "pointer-events-none absolute inset-x-0 flex justify-center px-4 pb-6",
+                "pointer-events-none absolute inset-x-0 z-10 flex justify-center bg-background px-4 pt-3 pb-6",
                 activeFilePath && "hidden"
               )}
               style={{ bottom: terminalVisible ? terminalHeight : 0 }}
