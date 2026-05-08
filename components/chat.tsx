@@ -35,7 +35,7 @@ import {
 import { SettingsScreen } from "@/components/settings-screen"
 import { Sidebar } from "@/components/chat-sidebar"
 import { NewChatDialog } from "@/components/new-chat-dialog"
-import { SandboxStatus, SnapshotStatus } from "@/components/sandbox-status"
+import { SandboxStatus } from "@/components/sandbox-status"
 import {
   BranchChip,
   IconButton,
@@ -89,7 +89,6 @@ type Message = {
     branch?: string
     diff?: string
     logs?: RunLog[]
-    sandboxSnapshotId?: string
     status?: string
   }
   speed?: Speed
@@ -108,11 +107,9 @@ type CachedRunState = {
   diff?: string
   sandboxId?: string
   sandboxState?: SandboxState
-  sandboxSnapshotId?: string
-  sandboxSnapshotIdsToDelete?: string[]
 }
 
-type SandboxState = "running" | "paused" | "killed"
+type SandboxState = "running" | "stopped" | "deleted" | "error"
 
 type AuthStatus = {
   accountId?: string | null
@@ -131,8 +128,6 @@ type ChatRecord = {
   sandboxPresetName?: string
   sandboxId?: string
   sandboxState?: SandboxState
-  sandboxSnapshotId?: string
-  sandboxSnapshotIdsToDelete?: string[]
   title: string
   messages: Message[]
   model: Model
@@ -149,15 +144,10 @@ type SandboxPresetSecretRecord = {
 
 type SandboxPresetRecord = {
   createdAt: number
-  cpuCount: number
-  customToolingCommands: string[]
+  daytonaSnapshot?: string
   id: Id<"sandboxPresets">
-  installScript?: string
-  memoryMB: number
   name: string
   secrets: SandboxPresetSecretRecord[]
-  toolVersions: Array<{ tool: string; version: string }>
-  tools: string[]
   updatedAt: number
 }
 
@@ -165,20 +155,6 @@ const REPO_KEY = "cloudcode:repoUrl"
 const BASE_BRANCH_KEY = "cloudcode:baseBranch"
 const MODEL_KEY = "cloudcode:model"
 const PRESET_KEY = "cloudcode:sandboxPresetId"
-
-function compactIds(ids: Array<string | null | undefined>) {
-  return [
-    ...new Set(
-      ids.map((id) => id?.trim()).filter((id): id is string => Boolean(id))
-    ),
-  ]
-}
-
-function stringArrayValue(value: unknown) {
-  return Array.isArray(value)
-    ? compactIds(value.map((item) => (typeof item === "string" ? item : null)))
-    : []
-}
 
 function hasCachedRunKey<K extends keyof CachedRunState>(
   state: CachedRunState | undefined,
@@ -227,12 +203,7 @@ function ChatInner() {
   const completeAssistantMessage = useMutation(
     api.chats.completeAssistantMessage
   )
-  const ensureDefaultPresets = useMutation(
-    api.sandboxPresets.ensureDefaultPresets
-  )
   const saveRunState = useMutation(api.chats.saveRunState)
-  const clearSandbox = useMutation(api.chats.clearSandbox)
-  const clearSandboxSnapshot = useMutation(api.chats.clearSandboxSnapshot)
   const deleteThreadMutation = useMutation(api.chats.deleteThread)
   const updateThread = useMutation(api.chats.updateThread)
   const [activeId, setActiveId] = useState<Id<"threads"> | null>(() =>
@@ -289,16 +260,10 @@ function ChatInner() {
   const [thinkingOpen, setThinkingOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
   const [terminalOpen, setTerminalOpen] = useState(false)
-  const [terminalHeight, setTerminalHeight] = useState(320)
+  const [terminalHeight, setTerminalHeight] = useState(380)
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null)
   const [activeFileMode, setActiveFileMode] =
     useState<FileBrowserOpenMode>("file")
-  const [deletingSnapshotByThread, setDeletingSnapshotByThread] = useState<
-    Record<string, true>
-  >({})
-  const [deletedSnapshotIds, setDeletedSnapshotIds] = useState<Set<string>>(
-    () => new Set()
-  )
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [view, setView] = useState<"chat" | "settings">("chat")
   const [runningRunKeys, setRunningRunKeys] = useState<Record<string, true>>({})
@@ -351,30 +316,17 @@ function ChatInner() {
   )
   const activeRunState = active ? liveRunStates[active.id as string] : undefined
   const activeSandboxId =
-    activeRunState?.sandboxState === "killed"
+    activeRunState?.sandboxState === "deleted"
       ? null
       : hasCachedRunKey(activeRunState, "sandboxId")
       ? (activeRunState?.sandboxId ?? null)
       : (active?.sandboxId ?? null)
-  const activeSnapshotCandidate = hasCachedRunKey(
-    activeRunState,
-    "sandboxSnapshotId"
-  )
-    ? activeRunState?.sandboxSnapshotId
-    : active?.sandboxSnapshotId
-  const activeSandboxSnapshotId =
-    activeSnapshotCandidate && !deletedSnapshotIds.has(activeSnapshotCandidate)
-      ? activeSnapshotCandidate
-      : null
   const messages = active?.messages ?? []
   const activeRunKey = active ? (active.id as string) : DRAFT_RUN_KEY
   const activeLocalRunPending = Boolean(runningRunKeys[activeRunKey])
   const activeMessagePending = messages.some((message) => message.pending)
   const activeRunPending = activeLocalRunPending || activeMessagePending
   const canStopActiveRun = Boolean(runControllersRef.current[activeRunKey])
-  const deletingSnapshot = active
-    ? Boolean(deletingSnapshotByThread[active.id as string])
-    : false
   const terminalVisible = terminalOpen && Boolean(activeSandboxId)
 
   const repoUrl = active ? active.repoUrl : draftRepo
@@ -401,14 +353,6 @@ function ChatInner() {
     setActiveFilePath(path)
     setActiveFileMode("file")
   }, [])
-
-  useEffect(() => {
-    if (userLoading) return
-
-    void ensureDefaultPresets().catch((error) => {
-      console.error("Unable to ensure default sandbox presets", error)
-    })
-  }, [ensureDefaultPresets, userLoading])
 
   useEffect(() => {
     if (userLoading) return
@@ -549,19 +493,6 @@ function ChatInner() {
     })
   }
 
-  function setThreadDeletingSnapshot(
-    threadId: Id<"threads">,
-    deleting: boolean
-  ) {
-    const key = threadId as string
-    setDeletingSnapshotByThread((current) => {
-      if (deleting) return { ...current, [key]: true }
-      const { [key]: _removed, ...next } = current
-      void _removed
-      return next
-    })
-  }
-
   function persistDraftRepo(value: string) {
     setDraftRepo(value)
     if (value) localStorage.setItem(REPO_KEY, value)
@@ -665,75 +596,6 @@ function ChatInner() {
     setPendingDeleteId(id)
   }
 
-  async function deleteSandboxResources({
-    sandboxId,
-    snapshotIds,
-  }: {
-    sandboxId?: string
-    snapshotIds: string[]
-  }) {
-    const cleanupSnapshotIds = compactIds(snapshotIds)
-    if (!sandboxId && cleanupSnapshotIds.length === 0) return []
-
-    const response = await fetch("/api/sandbox/snapshot", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sandboxId, snapshotIds: cleanupSnapshotIds }),
-    })
-    const data = (await response.json().catch(() => undefined)) as
-      | { deferredIds?: unknown; error?: unknown; errors?: unknown }
-      | undefined
-
-    if (!response.ok) {
-      throw new Error(
-        typeof data?.error === "string"
-          ? data.error
-          : "Failed to delete sandbox resources."
-      )
-    }
-
-    const errors =
-      data?.errors && typeof data.errors === "object"
-        ? Object.values(data.errors).filter(
-            (message): message is string => typeof message === "string"
-          )
-        : []
-    if (errors.length > 0) {
-      throw new Error(errors[0] ?? "Failed to delete sandbox resources.")
-    }
-
-    const deferredIds = stringArrayValue(data?.deferredIds)
-    if (deferredIds.length > 0) {
-      throw new Error("Sandbox snapshot deletion was deferred.")
-    }
-
-    return deferredIds
-  }
-
-  function threadSnapshotId(id: Id<"threads">) {
-    const cachedRunState = threadRunStateRef.current[id as string]
-    const snapshotId =
-      hasCachedRunKey(cachedRunState, "sandboxSnapshotId")
-        ? cachedRunState?.sandboxSnapshotId
-        : chats.find((chat) => chat.id === id)?.sandboxSnapshotId
-    return snapshotId && !deletedSnapshotIds.has(snapshotId)
-      ? snapshotId
-      : undefined
-  }
-
-  function threadPendingSnapshotIds(id: Id<"threads">) {
-    return compactIds([
-      ...(threadRunStateRef.current[id as string]?.sandboxSnapshotIdsToDelete ??
-        []),
-      ...(chats.find((chat) => chat.id === id)?.sandboxSnapshotIdsToDelete ??
-        []),
-    ])
-  }
-
-  function threadSnapshotCleanupIds(id: Id<"threads">) {
-    return compactIds([threadSnapshotId(id), ...threadPendingSnapshotIds(id)])
-  }
-
   function threadSandboxId(id: Id<"threads">) {
     const cachedRunState = threadRunStateRef.current[id as string]
     if (hasCachedRunKey(cachedRunState, "sandboxId")) {
@@ -748,20 +610,20 @@ function ChatInner() {
     setPendingDeleteId(null)
     void (async () => {
       const sandboxId = threadSandboxId(id)
-      const snapshotIds = threadSnapshotCleanupIds(id)
       runControllersRef.current[id as string]?.abort()
       clearRunKey(id as string)
       if (sandboxId) closeBrowserTerminalSession(sandboxId)
 
       try {
-        await deleteSandboxResources({ sandboxId, snapshotIds })
+        if (sandboxId) {
+          await fetch("/api/sandbox/kill", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sandboxId }),
+          }).catch(() => undefined)
+        }
         await deleteThreadMutation({ threadId: id })
         removeThreadRunState(id)
-        setDeletedSnapshotIds((current) => {
-          const next = new Set(current)
-          for (const snapshotId of snapshotIds) next.add(snapshotId)
-          return next
-        })
         if (activeId === id) {
           setActiveId(null)
           setActiveFilePath(null)
@@ -846,7 +708,7 @@ function ChatInner() {
         .find(
           (m) =>
             m.role === "assistant" &&
-            (m.meta?.branch || m.meta?.diff || m.meta?.sandboxSnapshotId)
+            (m.meta?.branch || m.meta?.diff)
         )
       const cachedRunState = threadRunStateRef.current[chatId as string]
       const branchName =
@@ -855,19 +717,6 @@ function ChatInner() {
       const runSandboxId = hasCachedRunKey(cachedRunState, "sandboxId")
         ? cachedRunState?.sandboxId
         : active?.sandboxId
-      const deletedOrPendingSnapshotIds = new Set([
-        ...deletedSnapshotIds,
-        ...threadPendingSnapshotIds(chatId),
-      ])
-      const previousSandboxSnapshotCandidate =
-        hasCachedRunKey(cachedRunState, "sandboxSnapshotId")
-          ? cachedRunState?.sandboxSnapshotId
-          : active?.sandboxSnapshotId
-      const previousSandboxSnapshotId =
-        previousSandboxSnapshotCandidate &&
-        !deletedOrPendingSnapshotIds.has(previousSandboxSnapshotCandidate)
-          ? previousSandboxSnapshotCandidate
-          : undefined
       const resumeContext = buildResumeHandoff({
         branchName,
         messages: active?.messages ?? [],
@@ -885,7 +734,6 @@ function ChatInner() {
           branchName,
           codexThreadId: cachedRunState?.codexThreadId ?? active?.codexThreadId,
           previousDiff,
-          previousSandboxSnapshotId,
           prompt: trimmed,
           reasoningEffort: thinking,
           repoUrl: repoUrl.trim(),
@@ -938,12 +786,6 @@ function ChatInner() {
         ...(typeof data.sandboxId === "string"
           ? { sandboxId: data.sandboxId, sandboxState: "running" }
           : {}),
-        ...(typeof data.sandboxSnapshotId === "string"
-          ? { sandboxSnapshotId: data.sandboxSnapshotId }
-          : {}),
-        sandboxSnapshotIdsToDelete: stringArrayValue(
-          data.sandboxSnapshotIdsToDelete
-        ),
       }
       mergeThreadRunState(chatId, nextRunState)
       await completeAssistantMessage({
@@ -952,26 +794,21 @@ function ChatInner() {
         meta: {
           branch: nextRunState.branch,
           diff: nextRunState.diff,
-          sandboxSnapshotId: nextRunState.sandboxSnapshotId,
           status: typeof data.status === "string" ? data.status : undefined,
         },
         sandboxId: nextRunState.sandboxId,
         sandboxState: nextRunState.sandboxState,
-        sandboxSnapshotId: nextRunState.sandboxSnapshotId,
         threadId: chatId,
       })
       if (
         nextRunState.codexThreadId ||
-        nextRunState.sandboxId ||
-        nextRunState.sandboxSnapshotId
+        nextRunState.sandboxId
       ) {
         try {
           await saveRunState({
             codexThreadId: nextRunState.codexThreadId,
             sandboxId: nextRunState.sandboxId,
             sandboxState: nextRunState.sandboxState,
-            sandboxSnapshotId: nextRunState.sandboxSnapshotId,
-            sandboxSnapshotIdsToDelete: nextRunState.sandboxSnapshotIdsToDelete,
             threadId: chatId,
           })
         } catch (error) {
@@ -996,11 +833,15 @@ function ChatInner() {
         })
         if (aborted && liveRunState?.sandboxId) {
           mergeThreadRunState(chatId, {
-            sandboxId: undefined,
-            sandboxState: "killed",
+            sandboxId: liveRunState.sandboxId,
+            sandboxState: "stopped",
           })
-          await clearSandbox({ threadId: chatId }).catch((error) => {
-            console.warn("Unable to clear stopped sandbox state.", error)
+          await saveRunState({
+            sandboxId: liveRunState.sandboxId,
+            sandboxState: "stopped",
+            threadId: chatId,
+          }).catch((error) => {
+            console.warn("Unable to save stopped sandbox state.", error)
           })
         } else if (liveRunState?.sandboxId) {
           await saveRunState({
@@ -1017,216 +858,22 @@ function ChatInner() {
     }
   }
 
-  async function killActiveSandbox() {
-    if (!active) return
-    const sandboxId =
-      threadRunStateRef.current[active.id as string]?.sandboxId ??
-      active.sandboxId
-    if (!sandboxId) return
-    const previousSnapshotIds = threadSnapshotCleanupIds(active.id)
-    setTerminalOpen(false)
-    closeBrowserTerminalSession(sandboxId)
-    mergeThreadRunState(active.id, {
-      sandboxId: undefined,
-      sandboxState: "killed",
-    })
-
-    let sandboxSnapshotId: string | undefined
-    try {
-      const response = await fetch("/api/sandbox/kill", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ previousSnapshotIds, sandboxId }),
-      })
-      const data = (await response.json().catch(() => undefined)) as
-        | { previousSnapshotDeferredIds?: unknown; sandboxSnapshotId?: unknown }
-        | undefined
-      if (typeof data?.sandboxSnapshotId === "string") {
-        sandboxSnapshotId = data.sandboxSnapshotId
-      }
-      const sandboxSnapshotIdsToDelete = stringArrayValue(
-        data?.previousSnapshotDeferredIds
-      )
-      mergeThreadRunState(active.id, { sandboxSnapshotIdsToDelete })
-    } catch (error) {
-      console.warn("Failed to kill sandbox.", error)
-    }
-
-    mergeThreadRunState(active.id, {
-      sandboxId: undefined,
-      sandboxState: "killed",
-      ...(sandboxSnapshotId ? { sandboxSnapshotId } : {}),
-    })
-
-    try {
-      if (sandboxSnapshotId) {
-        await saveRunState({
-          sandboxState: "killed",
-          sandboxSnapshotId,
-          sandboxSnapshotIdsToDelete:
-            threadRunStateRef.current[active.id as string]
-              ?.sandboxSnapshotIdsToDelete ?? [],
-          threadId: active.id,
-        })
-      }
-      await clearSandbox({ threadId: active.id })
-    } catch (error) {
-      console.warn("Failed to clear sandbox state.", error)
-    }
-  }
-
-  async function deleteActiveSnapshot() {
-    if (!active || deletingSnapshot) return
-    const snapshotId =
-      threadRunStateRef.current[active.id as string]?.sandboxSnapshotId ??
-      active.sandboxSnapshotId
-    if (!snapshotId) return
-
-    setThreadDeletingSnapshot(active.id, true)
-    try {
-      const response = await fetch("/api/sandbox/snapshot", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ snapshotId }),
-      })
-      const data = (await response.json().catch(() => undefined)) as
-        | { deferredIds?: unknown; error?: unknown }
-        | undefined
-
-      if (!response.ok) {
-        throw new Error(
-          typeof data?.error === "string"
-            ? data.error
-            : "Failed to delete sandbox snapshot."
-        )
-      }
-
-      const deferredIds = stringArrayValue(data?.deferredIds)
-
-      mergeThreadRunState(active.id, {
-        sandboxState: undefined,
-        sandboxSnapshotId: undefined,
-        sandboxSnapshotIdsToDelete: deferredIds,
-      })
-      setDeletedSnapshotIds((current) => new Set(current).add(snapshotId))
-      setActiveFilePath(null)
-      await clearSandboxSnapshot({
-        sandboxSnapshotIdsToDelete: deferredIds,
-        threadId: active.id,
-      })
-    } catch (error) {
-      console.warn("Failed to delete sandbox snapshot.", error)
-    } finally {
-      setThreadDeletingSnapshot(active.id, false)
-    }
-  }
-
-  async function saveActiveSandbox() {
-    if (!active) return
-    const sandboxId =
-      threadRunStateRef.current[active.id as string]?.sandboxId ??
-      active.sandboxId
-    if (!sandboxId) return
-    const previousSnapshotIds = threadSnapshotCleanupIds(active.id)
-
-    const response = await fetch("/api/sandbox/snapshot", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ previousSnapshotIds, sandboxId }),
-    })
-    const data = (await response.json().catch(() => undefined)) as
-      | {
-          error?: unknown
-          previousSnapshotDeferredIds?: unknown
-          sandboxSnapshotId?: unknown
-        }
-      | undefined
-
-    if (!response.ok || typeof data?.sandboxSnapshotId !== "string") {
-      throw new Error(
-        typeof data?.error === "string" ? data.error : "Failed to save sandbox."
-      )
-    }
-
-    mergeThreadRunState(active.id, {
-      sandboxSnapshotId: data.sandboxSnapshotId,
-      sandboxSnapshotIdsToDelete: stringArrayValue(
-        data.previousSnapshotDeferredIds
-      ),
-    })
-
-    await saveRunState({
-      sandboxSnapshotId: data.sandboxSnapshotId,
-      sandboxSnapshotIdsToDelete:
-        threadRunStateRef.current[active.id as string]
-          ?.sandboxSnapshotIdsToDelete ?? [],
-      threadId: active.id,
-    })
-  }
-
-  async function pauseActiveSandbox() {
-    if (!active) return
-    const sandboxId =
-      threadRunStateRef.current[active.id as string]?.sandboxId ??
-      active.sandboxId
-    if (!sandboxId) return
-    const previousSnapshotIds = threadSnapshotCleanupIds(active.id)
-    setTerminalOpen(false)
-    closeBrowserTerminalSession(sandboxId)
-    mergeThreadRunState(active.id, { sandboxState: "paused" })
-
-    const response = await fetch("/api/sandbox/pause", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ previousSnapshotIds, sandboxId }),
-    })
-    const data = (await response.json().catch(() => undefined)) as
-      | {
-          error?: unknown
-          previousSnapshotDeferredIds?: unknown
-          sandboxSnapshotId?: unknown
-        }
-      | undefined
-
-    if (!response.ok) {
-      throw new Error(
-        typeof data?.error === "string"
-          ? data.error
-          : "Failed to pause sandbox."
-      )
-    }
-
-    if (typeof data?.sandboxSnapshotId === "string") {
-      mergeThreadRunState(active.id, {
-        sandboxState: "paused",
-        sandboxSnapshotId: data.sandboxSnapshotId,
-        sandboxSnapshotIdsToDelete: stringArrayValue(
-          data.previousSnapshotDeferredIds
-        ),
-      })
-      await saveRunState({
-        sandboxState: "paused",
-        sandboxSnapshotId: data.sandboxSnapshotId,
-        sandboxSnapshotIdsToDelete:
-          threadRunStateRef.current[active.id as string]
-            ?.sandboxSnapshotIdsToDelete ?? [],
-        threadId: active.id,
-      })
-    }
-  }
-
   function stopActiveRun() {
     const runKey = active ? (active.id as string) : DRAFT_RUN_KEY
     runControllersRef.current[runKey]?.abort()
     if (!active || !activeSandboxId) return
     mergeThreadRunState(active.id, {
-      sandboxId: undefined,
-      sandboxState: "killed",
+      sandboxId: activeSandboxId,
+      sandboxState: "stopped",
     })
     closeBrowserTerminalSession(activeSandboxId)
     setTerminalOpen(false)
-    void clearSandbox({ threadId: active.id }).catch((error) => {
-      console.warn("Unable to clear stopped sandbox state.", error)
+    void saveRunState({
+      sandboxId: activeSandboxId,
+      sandboxState: "stopped",
+      threadId: active.id,
+    }).catch((error) => {
+      console.warn("Unable to save stopped sandbox state.", error)
     })
   }
 
@@ -1300,12 +947,6 @@ function ChatInner() {
               repoUrl={repoUrl}
               isNew={!active}
               sandboxId={activeSandboxId}
-              sandboxSnapshotId={activeSandboxSnapshotId}
-              onKillSandbox={killActiveSandbox}
-              onPauseSandbox={pauseActiveSandbox}
-              onSaveSandbox={saveActiveSandbox}
-              onDeleteSnapshot={deleteActiveSnapshot}
-              deletingSnapshot={deletingSnapshot}
               filesOpen={filesOpen}
               onToggleFiles={() => setFilesOpen((v) => !v)}
               terminalOpen={terminalVisible}
@@ -1316,7 +957,6 @@ function ChatInner() {
             {activeFilePath ? (
               <FileEditorPanel
                 sandboxId={activeSandboxId}
-                sandboxSnapshotId={activeSandboxSnapshotId}
                 activePath={activeFilePath}
                 diff={activeDiff ?? undefined}
                 mode={activeFileMode}
@@ -1483,9 +1123,8 @@ function ChatInner() {
       </div>
 
       <FileBrowser
-        open={filesOpen && Boolean(activeSandboxId || activeSandboxSnapshotId)}
+        open={filesOpen && Boolean(activeSandboxId)}
         sandboxId={activeSandboxId}
-        sandboxSnapshotId={activeSandboxSnapshotId}
         diff={activeDiff ?? undefined}
         activePath={activeFilePath}
         onClose={() => setFilesOpen(false)}
@@ -1521,16 +1160,10 @@ function SignedOutScreen() {
 }
 
 function TopBar({
-  deletingSnapshot,
   title,
   repoUrl,
   isNew,
   sandboxId,
-  sandboxSnapshotId,
-  onDeleteSnapshot,
-  onKillSandbox,
-  onPauseSandbox,
-  onSaveSandbox,
   filesOpen,
   onToggleFiles,
   terminalOpen,
@@ -1538,16 +1171,10 @@ function TopBar({
   sidebarOpen,
   onToggleSidebar,
 }: {
-  deletingSnapshot: boolean
   title: string | null
   repoUrl: string
   isNew: boolean
   sandboxId: string | null
-  sandboxSnapshotId: string | null
-  onDeleteSnapshot: () => void | Promise<void>
-  onKillSandbox: () => void | Promise<void>
-  onPauseSandbox: () => void | Promise<void>
-  onSaveSandbox: () => void | Promise<void>
   filesOpen: boolean
   onToggleFiles: () => void
   terminalOpen: boolean
@@ -1585,20 +1212,7 @@ function TopBar({
       ) : null}
       <div className="ml-auto flex items-center gap-6">
         {sandboxId ? (
-          <SandboxStatus
-            key={sandboxId}
-            sandboxId={sandboxId}
-            onKill={onKillSandbox}
-            onPause={onPauseSandbox}
-            onSave={onSaveSandbox}
-            hideActions={filesOpen}
-          />
-        ) : sandboxSnapshotId ? (
-          <SnapshotStatus
-            key={sandboxSnapshotId}
-            deleting={deletingSnapshot}
-            onDelete={onDeleteSnapshot}
-          />
+          <SandboxStatus key={sandboxId} sandboxId={sandboxId} />
         ) : null}
         <button
           type="button"
@@ -1620,7 +1234,7 @@ function TopBar({
           onClick={onToggleFiles}
           aria-label={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
           title={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
-          disabled={!sandboxId && !sandboxSnapshotId}
+          disabled={!sandboxId}
           className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
         >
           {filesOpen ? (

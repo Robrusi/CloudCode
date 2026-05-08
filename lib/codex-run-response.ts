@@ -19,8 +19,6 @@ export type CodexRunResult = {
   error?: unknown
   lastMessage?: unknown
   sandboxId?: unknown
-  sandboxSnapshotId?: unknown
-  sandboxSnapshotIdsToDelete?: unknown
   status?: unknown
   stderr?: unknown
   stdout?: unknown

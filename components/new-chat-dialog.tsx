@@ -162,7 +162,7 @@ export function NewChatDialog({
       >
         <div className="text-base font-medium text-foreground">New chat</div>
         <p className="mt-1.5 text-sm text-muted-foreground">
-          Pick a repo, base branch, and sandbox preset to start from.
+          Pick a repo, base branch, and Daytona preset to start from.
         </p>
 
         <div className="mt-5 space-y-4">
@@ -323,7 +323,7 @@ export function NewChatDialog({
             </div>
           </Field>
 
-          <Field label="Sandbox preset">
+          <Field label="Daytona preset">
             <div ref={presetRef} className="relative">
               <button
                 type="button"

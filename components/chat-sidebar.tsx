@@ -6,7 +6,7 @@ import {
   CircleDot,
   Folder,
   OctagonX,
-  Pause,
+  Power,
   Settings,
   SquarePen,
   User,
@@ -20,18 +20,19 @@ type SidebarChat = {
   id: Id<"threads">
   repoUrl: string
   sandboxId?: string
-  sandboxState?: SandboxState
-  sandboxSnapshotId?: string
+  sandboxState?: StoredSandboxState
   title: string
   updatedAt: number
 }
 
-type SandboxState = "running" | "paused" | "killed"
+type SandboxState = "running" | "stopped" | "deleted" | "error"
+type StoredSandboxState = SandboxState | "paused" | "killed"
 
 const SANDBOX_STATE_LABEL: Record<SandboxState, string> = {
-  killed: "Killed",
-  paused: "Paused",
+  deleted: "Deleted",
+  error: "Error",
   running: "Running",
+  stopped: "Stopped",
 }
 
 function repoLabel(url: string) {
@@ -303,10 +304,17 @@ function sandboxStateForChat(
   chat: SidebarChat,
   liveSandboxState?: SandboxState
 ) {
-  const state = liveSandboxState ?? chat.sandboxState
+  const state = liveSandboxState ?? normalizeStoredSandboxState(chat.sandboxState)
   if (chat.sandboxId) return state ?? "running"
-  if (chat.sandboxSnapshotId) return "killed"
   return undefined
+}
+
+function normalizeStoredSandboxState(
+  state?: StoredSandboxState
+): SandboxState | undefined {
+  if (state === "paused") return "stopped"
+  if (state === "killed") return "deleted"
+  return state
 }
 
 function useSidebarSandboxStates(chats: SidebarChat[]) {
@@ -336,11 +344,17 @@ function useSidebarSandboxStates(chats: SidebarChat[]) {
               `/api/sandbox/info?sandboxId=${encodeURIComponent(sandboxId)}`,
               { cache: "no-store" }
             )
-            if (!res.ok) return { state: "killed" as const, threadId }
+            if (!res.ok) return { state: "deleted" as const, threadId }
 
             const data = (await res.json()) as { state?: unknown }
+            const state =
+              data.state === "stopped" ||
+              data.state === "deleted" ||
+              data.state === "error"
+                ? data.state
+                : "running"
             return {
-              state: data.state === "paused" ? "paused" : "running",
+              state,
               threadId,
             } satisfies { state: SandboxState; threadId: string }
           } catch {
@@ -376,7 +390,7 @@ function useSidebarSandboxStates(chats: SidebarChat[]) {
 
 function SandboxStateIcon({ state }: { state: SandboxState }) {
   const Icon =
-    state === "running" ? CircleDot : state === "paused" ? Pause : OctagonX
+    state === "running" ? CircleDot : state === "stopped" ? Power : OctagonX
   const label = `Sandbox ${SANDBOX_STATE_LABEL[state].toLowerCase()}`
   return (
     <span
@@ -386,8 +400,8 @@ function SandboxStateIcon({ state }: { state: SandboxState }) {
       className={cn(
         "inline-flex shrink-0",
         state === "running" && "text-emerald-600 dark:text-emerald-400",
-        state === "paused" && "text-yellow-500 dark:text-yellow-400",
-        state === "killed" && "text-destructive"
+        state === "stopped" && "text-yellow-500 dark:text-yellow-400",
+        (state === "deleted" || state === "error") && "text-destructive"
       )}
     >
       <Icon className="size-3.5" />

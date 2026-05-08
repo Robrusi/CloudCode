@@ -109,7 +109,6 @@ const TREE_SCROLLBAR_CSS = `
 
 export function FileBrowser({
   sandboxId,
-  sandboxSnapshotId,
   open,
   diff,
   activePath,
@@ -117,7 +116,6 @@ export function FileBrowser({
   onOpenFile,
 }: {
   sandboxId: string | null
-  sandboxSnapshotId: string | null
   open: boolean
   diff?: string
   /**
@@ -307,12 +305,8 @@ export function FileBrowser({
   }, [activePath, model])
 
   const fetchList = useCallback(async () => {
-    const sourceKey = sandboxId
-      ? `sandbox:${sandboxId}`
-      : sandboxSnapshotId
-        ? `snapshot:${sandboxSnapshotId}`
-        : null
-    if (!sourceKey) return
+    if (!sandboxId) return
+    const sourceKey = `sandbox:${sandboxId}`
     const cached = fileListCache.get(sourceKey)
     if (cached) {
       setEntries(cached.entries)
@@ -323,8 +317,7 @@ export function FileBrowser({
     try {
       const res = await fetch(
         `/api/sandbox/files/list?${new URLSearchParams({
-          ...(sandboxId ? { sandboxId } : {}),
-          ...(sandboxSnapshotId ? { snapshotId: sandboxSnapshotId } : {}),
+          sandboxId,
         })}`,
         { cache: "no-store" }
       )
@@ -348,13 +341,13 @@ export function FileBrowser({
     } finally {
       setLoading(false)
     }
-  }, [sandboxId, sandboxSnapshotId])
+  }, [sandboxId])
 
   useEffect(() => {
-    if (!open || (!sandboxId && !sandboxSnapshotId)) return
+    if (!open || !sandboxId) return
     const id = window.setTimeout(() => void fetchList(), 0)
     return () => window.clearTimeout(id)
-  }, [open, sandboxId, sandboxSnapshotId, fetchList])
+  }, [open, sandboxId, fetchList])
 
   if (!open) return null
 
@@ -395,8 +388,8 @@ export function FileBrowser({
       </div>
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        {!sandboxId && !sandboxSnapshotId ? (
-          <EmptyState message="No sandbox snapshot." />
+        {!sandboxId ? (
+          <EmptyState message="No sandbox yet." />
         ) : error ? (
           <EmptyState
             message={error}

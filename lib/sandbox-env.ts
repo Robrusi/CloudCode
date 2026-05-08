@@ -1,18 +1,30 @@
-import type { Sandbox } from "e2b"
+import { shellQuote } from "./daytona-sandbox"
 
 export const CLOUDCODE_ENV_START = "# cloudcode:preset-env:start"
 export const CLOUDCODE_ENV_END = "# cloudcode:preset-env:end"
 export const CLOUDCODE_LEGACY_PRESET_ENV_PATH = "/tmp/cloudcode-preset-env.sh"
-export const CLOUDCODE_PRESET_ENV_PATH =
-  "/home/user/.codex/cloudcode-preset-env.sh"
 
 export type SandboxPresetEnvVar = {
   name: string
   value: string
 }
 
+export type SandboxEnvTarget = {
+  readTextFile: (path: string) => Promise<string>
+  runCommand: (command: string, options?: { timeoutMs?: number }) => Promise<{
+    exitCode: number
+    stderr: string
+    stdout: string
+  }>
+  writeTextFile: (path: string, content: string) => Promise<void>
+}
+
 function envLocalPath(repoPath: string) {
   return `${repoPath}/.env.local`
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
 function trimManagedBlock(content: string) {
@@ -27,10 +39,6 @@ function trimManagedBlock(content: string) {
     .replace(pattern, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trimEnd()
-}
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
 function dotenvValue(value: string) {
@@ -48,72 +56,82 @@ function managedEnvBlock(envVars: SandboxPresetEnvVar[]) {
   ].join("\n")
 }
 
-async function readEnvLocal(sandbox: Sandbox, repoPath: string) {
+async function readFile(target: SandboxEnvTarget, path: string) {
   try {
-    return await sandbox.files.read(envLocalPath(repoPath))
+    return await target.readTextFile(path)
   } catch {
     return null
   }
 }
 
+async function readEnvLocal(target: SandboxEnvTarget, repoPath: string) {
+  return await readFile(target, envLocalPath(repoPath))
+}
+
 async function writeEnvLocal(
-  sandbox: Sandbox,
+  target: SandboxEnvTarget,
   repoPath: string,
   content: string | null
 ) {
   if (content === null || content.length === 0) {
-    await sandbox.commands
-      .run(`rm -f ${shellQuote(envLocalPath(repoPath))}`, { timeoutMs: 10_000 })
+    await target
+      .runCommand(`rm -f ${shellQuote(envLocalPath(repoPath))}`, {
+        timeoutMs: 10_000,
+      })
       .catch(() => undefined)
     return
   }
 
-  await sandbox.files.write(
+  await target.writeTextFile(
     envLocalPath(repoPath),
     content.endsWith("\n") ? content : `${content}\n`
   )
 }
 
 export async function writeCloudcodeEnvLocal(
-  sandbox: Sandbox,
+  target: SandboxEnvTarget,
   repoPath: string,
   envVars: SandboxPresetEnvVar[]
 ) {
-  const original = await readEnvLocal(sandbox, repoPath)
+  const original = await readEnvLocal(target, repoPath)
   const cleaned = trimManagedBlock(original ?? "")
   const block = managedEnvBlock(envVars)
 
   if (!block) {
-    await writeEnvLocal(sandbox, repoPath, cleaned || null)
+    await writeEnvLocal(target, repoPath, cleaned || null)
     return
   }
 
   await writeEnvLocal(
-    sandbox,
+    target,
     repoPath,
     [cleaned, block].filter(Boolean).join("\n\n")
   )
 }
 
 export async function withoutCloudcodeEnvLocal<T>(
-  sandbox: Sandbox,
-  repoPath: string,
+  target: SandboxEnvTarget,
+  paths: {
+    legacyPresetEnvPath?: string
+    presetEnvPath: string
+    repoPath: string
+  },
   action: () => Promise<T>
 ) {
-  const original = await readEnvLocal(sandbox, repoPath)
+  const original = await readEnvLocal(target, paths.repoPath)
   const cleaned = original === null ? null : trimManagedBlock(original)
   const changed = original !== null && cleaned !== original.trimEnd()
-  const runtimeEnv = await readFile(sandbox, CLOUDCODE_PRESET_ENV_PATH)
+  const runtimeEnv = await readFile(target, paths.presetEnvPath)
+  const legacyPresetEnvPath =
+    paths.legacyPresetEnvPath ?? CLOUDCODE_LEGACY_PRESET_ENV_PATH
 
   if (changed) {
-    await writeEnvLocal(sandbox, repoPath, cleaned || null)
+    await writeEnvLocal(target, paths.repoPath, cleaned || null)
   }
-  await sandbox.commands
-    .run(
-      `rm -f ${shellQuote(CLOUDCODE_PRESET_ENV_PATH)} ${shellQuote(CLOUDCODE_LEGACY_PRESET_ENV_PATH)}`,
-      {
-        timeoutMs: 10_000,
-      }
+  await target
+    .runCommand(
+      `rm -f ${shellQuote(paths.presetEnvPath)} ${shellQuote(legacyPresetEnvPath)}`,
+      { timeoutMs: 10_000 }
     )
     .catch(() => undefined)
 
@@ -121,27 +139,15 @@ export async function withoutCloudcodeEnvLocal<T>(
     return await action()
   } finally {
     if (changed) {
-      await writeEnvLocal(sandbox, repoPath, original)
+      await writeEnvLocal(target, paths.repoPath, original)
     }
     if (runtimeEnv !== null) {
-      await sandbox.files.write(CLOUDCODE_PRESET_ENV_PATH, runtimeEnv)
-      await sandbox.commands
-        .run(`chmod 600 ${shellQuote(CLOUDCODE_PRESET_ENV_PATH)}`, {
+      await target.writeTextFile(paths.presetEnvPath, runtimeEnv)
+      await target
+        .runCommand(`chmod 600 ${shellQuote(paths.presetEnvPath)}`, {
           timeoutMs: 10_000,
         })
         .catch(() => undefined)
     }
   }
-}
-
-async function readFile(sandbox: Sandbox, path: string) {
-  try {
-    return await sandbox.files.read(path)
-  } catch {
-    return null
-  }
-}
-
-function shellQuote(value: string) {
-  return `'${value.replace(/'/g, "'\\''")}'`
 }
