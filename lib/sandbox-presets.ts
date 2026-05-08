@@ -6,21 +6,15 @@ import { getConvexAuthToken } from "@/lib/codex-auth"
 import { decryptSecret } from "@/lib/secret-crypto"
 
 export type SandboxPresetForRun = {
-  cpuCount: number
-  customToolingCommands: string[]
+  daytonaSnapshot?: string
   id: Id<"sandboxPresets">
   installScript?: string
-  memoryMB: number
   name: string
+  pathInstallScript?: string
   secrets: Array<{
     name: string
     value: string
   }>
-  toolVersions: Array<{
-    tool: string
-    version: string
-  }>
-  tools: string[]
 }
 
 function getConvexUrl() {
@@ -45,7 +39,7 @@ export async function getSandboxPresetForRun(presetId?: string) {
   })
 
   if (!preset) {
-    throw new Error("Sandbox preset not found.")
+    return undefined
   }
 
   return {

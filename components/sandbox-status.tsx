@@ -1,122 +1,34 @@
 "use client"
 
-import {
-  Check,
-  Loader2,
-  Pause,
-  Play,
-  Save,
-  Snowflake,
-  Trash2,
-} from "lucide-react"
-import { useCallback, useEffect, useState } from "react"
+import { CircleDot, Loader2, OctagonX, Power } from "lucide-react"
+import { useEffect, useState } from "react"
 
 type SandboxInfo = {
-  startedAt: number
-  endAt: number
-  state: "running" | "paused"
+  autoStopInterval: number | null
+  lastActivityAt: number | null
+  rawState?: string
+  state: "running" | "stopped" | "deleted" | "error"
 }
 
-export function SnapshotStatus({
-  deleting,
-  onDelete,
-}: {
-  deleting: boolean
-  onDelete: () => void | Promise<void>
-}) {
-  return (
-    <div className="flex items-center">
-      <button
-        type="button"
-        onClick={onDelete}
-        disabled={deleting}
-        aria-label="Delete sandbox snapshot"
-        title="Delete sandbox snapshot"
-        className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-destructive disabled:opacity-50"
-      >
-        {deleting ? (
-          <Loader2 className="size-3.5 animate-spin" />
-        ) : (
-          <Trash2 className="size-3.5" />
-        )}
-        <span>{deleting ? "Deleting" : "Delete snapshot"}</span>
-      </button>
-    </div>
-  )
+const STATE_LABEL: Record<SandboxInfo["state"], string> = {
+  deleted: "Deleted",
+  error: "Error",
+  running: "Running",
+  stopped: "Stopped",
 }
 
-function formatCountdown(ms: number) {
-  if (ms <= 0) return "0s"
-  const totalSeconds = Math.floor(ms / 1000)
-  const h = Math.floor(totalSeconds / 3600)
-  const m = Math.floor((totalSeconds % 3600) / 60)
-  const s = totalSeconds % 60
-  if (h > 0) return `${h}h ${m}m`
-  if (m > 0) return `${m}m ${s.toString().padStart(2, "0")}s`
-  return `${s}s`
+function formatMinutes(value: number | null) {
+  if (value === null) return "Daytona managed"
+  if (value === 0) return "No auto-stop"
+  if (value < 60) return `${value}m auto-stop`
+  const hours = Math.round((value / 60) * 10) / 10
+  return `${hours}h auto-stop`
 }
 
-function formatElapsed(ms: number) {
-  if (ms < 60_000) {
-    const s = Math.floor(ms / 1000)
-    return `${s} ${s === 1 ? "second" : "seconds"}`
-  }
-  if (ms < 3600_000) {
-    const m = Math.floor(ms / 60_000)
-    return `${m} ${m === 1 ? "minute" : "minutes"}`
-  }
-  const totalMinutes = Math.floor(ms / 60_000)
-  const h = Math.floor(totalMinutes / 60)
-  const m = totalMinutes % 60
-  if (m === 0) return `${h} ${h === 1 ? "hour" : "hours"}`
-  return `${h}h ${m}m`
-}
-
-export function SandboxStatus({
-  sandboxId,
-  onKill,
-  onPause,
-  onSave,
-  hideActions = false,
-}: {
-  sandboxId: string
-  onKill: () => void | Promise<void>
-  onPause: () => void | Promise<void>
-  onSave: () => void | Promise<void>
-  hideActions?: boolean
-}) {
+export function SandboxStatus({ sandboxId }: { sandboxId: string }) {
   const [info, setInfo] = useState<SandboxInfo | null>(null)
   const [missing, setMissing] = useState(false)
-  const [killing, setKilling] = useState(false)
-  const [pausing, setPausing] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
-  const [freezePending, setFreezePending] = useState(false)
-  const [timeoutFreeze, setTimeoutFreeze] = useState<{
-    remainingMs: number
-    sandboxId: string
-  } | null>(null)
-  const [now, setNow] = useState(() => Date.now())
-
-  const applySandboxTimeout = useCallback(
-    async (timeoutMs: number) => {
-      const res = await fetch("/api/sandbox/timeout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sandboxId, timeoutMs }),
-      })
-      const data = await res.json()
-      if (!res.ok) {
-        throw new Error(data.error ?? "Failed to update sandbox timeout")
-      }
-      return {
-        startedAt: data.startedAt,
-        endAt: data.endAt,
-        state: data.state === "paused" ? "paused" : "running",
-      } satisfies SandboxInfo
-    },
-    [sandboxId]
-  )
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     let cancelled = false
@@ -136,290 +48,80 @@ export function SandboxStatus({
         }
         setMissing(false)
         setInfo({
-          startedAt: data.startedAt,
-          endAt: data.endAt,
-          state: data.state === "paused" ? "paused" : "running",
+          autoStopInterval:
+            typeof data.autoStopInterval === "number"
+              ? data.autoStopInterval
+              : null,
+          lastActivityAt:
+            typeof data.lastActivityAt === "number"
+              ? data.lastActivityAt
+              : null,
+          rawState: typeof data.rawState === "string" ? data.rawState : "",
+          state:
+            data.state === "stopped" ||
+            data.state === "deleted" ||
+            data.state === "error"
+              ? data.state
+              : "running",
         })
       } catch {
         if (!cancelled) setMissing(true)
+      } finally {
+        if (!cancelled) setLoading(false)
       }
     }
 
     void load()
-    const id = window.setInterval(load, 15_000)
+    const id = window.setInterval(load, 20_000)
     return () => {
       cancelled = true
       window.clearInterval(id)
     }
   }, [sandboxId])
 
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 1000)
-    return () => window.clearInterval(id)
-  }, [])
-
-  const frozenRemainingMs =
-    timeoutFreeze?.sandboxId === sandboxId ? timeoutFreeze.remainingMs : null
-  const timeoutFrozen = frozenRemainingMs !== null
-
-  useEffect(() => {
-    if (frozenRemainingMs === null) return
-    if (info?.state !== "running") return
-
-    let cancelled = false
-    const frozenMs = frozenRemainingMs
-
-    async function keepTimeoutFrozen() {
-      try {
-        const nextInfo = await applySandboxTimeout(frozenMs)
-        if (!cancelled) setInfo(nextInfo)
-      } catch {
-        // The regular status poll will surface missing/paused sandboxes.
-      }
-    }
-
-    void keepTimeoutFrozen()
-    const refreshEveryMs = Math.min(30_000, Math.max(1_000, frozenMs / 3))
-    const id = window.setInterval(keepTimeoutFrozen, refreshEveryMs)
-    return () => {
-      cancelled = true
-      window.clearInterval(id)
-    }
-  }, [applySandboxTimeout, frozenRemainingMs, info?.state])
-
-  async function handleKill() {
-    if (killing || pausing || saving || freezePending) return
-    setKilling(true)
-    try {
-      await onKill()
-    } finally {
-      setKilling(false)
-    }
-  }
-
-  async function handlePause() {
-    if (
-      killing ||
-      pausing ||
-      saving ||
-      freezePending ||
-      info?.state === "paused"
-    ) {
-      return
-    }
-    setPausing(true)
-    try {
-      await onPause()
-      setTimeoutFreeze(null)
-      setInfo((current) =>
-        current
-          ? {
-              ...current,
-              state: "paused",
-              endAt: Date.now(),
-            }
-          : current
-      )
-    } finally {
-      setPausing(false)
-    }
-  }
-
-  async function handleFreezeToggle() {
-    if (
-      freezePending ||
-      killing ||
-      pausing ||
-      saving ||
-      !info ||
-      info.state === "paused"
-    ) {
-      return
-    }
-
-    const remainingAtClick =
-      frozenRemainingMs !== null
-        ? frozenRemainingMs
-        : Math.max(0, info.endAt - Date.now())
-    if (remainingAtClick <= 0) return
-
-    setFreezePending(true)
-    try {
-      const nextInfo = await applySandboxTimeout(remainingAtClick)
-      setInfo(nextInfo)
-      setNow(Date.now())
-      if (frozenRemainingMs !== null) {
-        setTimeoutFreeze(null)
-      } else {
-        setTimeoutFreeze({ remainingMs: remainingAtClick, sandboxId })
-      }
-    } finally {
-      setFreezePending(false)
-    }
-  }
-
-  async function handleSave() {
-    if (saving || killing || pausing || freezePending) return
-    setSaving(true)
-    setSaved(false)
-    try {
-      await onSave()
-      setSaved(true)
-      window.setTimeout(() => setSaved(false), 2500)
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  if (missing) {
+  if (loading && !info) {
     return (
-      <span className="text-xs text-muted-foreground">Sandbox not running</span>
+      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Loader2 className="size-3.5 animate-spin" />
+        Daytona
+      </span>
     )
   }
 
-  const elapsed = info
-    ? Math.max(0, (info.state === "paused" ? info.endAt : now) - info.startedAt)
-    : 0
-  const liveRemaining = info ? Math.max(0, info.endAt - now) : 0
-  const frozenRemaining =
-    timeoutFrozen && info?.state === "running" && frozenRemainingMs !== null
-      ? frozenRemainingMs
-      : null
-  const remaining = frozenRemaining ?? liveRemaining
-
-  const timeoutLabel =
-    info?.state === "paused"
-      ? "Paused"
-      : timeoutFrozen
-        ? "Frozen timeout"
-        : "Idle timeout"
-  const timeoutValue =
-    info?.state === "paused"
-      ? "Sleeping"
-      : info
-        ? formatCountdown(remaining)
-        : "-"
-  const tooltip = info
-    ? `Sandbox ${sandboxId}\nState ${info.state}\nStarted ${new Date(info.startedAt).toLocaleString()}\nIdles out ${new Date(info.endAt).toLocaleString()}${frozenRemaining === null ? "" : `\nFrozen at ${formatCountdown(frozenRemaining)}`}`
-    : `Sandbox ${sandboxId}`
-
-  return (
-    <div className="flex items-center gap-6">
-      <Stat label={timeoutLabel} value={timeoutValue} title={tooltip} />
-      {info?.state === "paused" ? null : (
-        <Stat
-          label="Running for"
-          value={info ? formatElapsed(elapsed) : "-"}
-          title={tooltip}
-        />
-      )}
-      <button
-        type="button"
-        onClick={handleFreezeToggle}
-        disabled={
-          freezePending ||
-          killing ||
-          pausing ||
-          saving ||
-          !info ||
-          info.state === "paused"
-        }
-        aria-label={timeoutFrozen ? "Unfreeze timeout" : "Freeze timeout"}
-        aria-pressed={timeoutFrozen}
-        title={timeoutFrozen ? "Unfreeze timeout" : "Freeze timeout"}
-        className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
-      >
-        {freezePending ? (
-          <Loader2 className="size-3.5 animate-spin" />
-        ) : timeoutFrozen ? (
-          <Play className="size-3.5" />
-        ) : (
-          <Snowflake className="size-3.5" />
-        )}
-        {hideActions ? null : (
-          <span>
-            {freezePending ? "Updating" : timeoutFrozen ? "Unfreeze" : "Freeze"}
-          </span>
-        )}
-      </button>
-      <button
-        type="button"
-        onClick={handleSave}
-        disabled={saving || killing || pausing || freezePending}
-        aria-label="Save sandbox"
-        title="Save sandbox"
-        className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
-      >
-        {saving ? (
-          <Loader2 className="size-3.5 animate-spin" />
-        ) : saved ? (
-          <Check className="size-3.5" />
-        ) : (
-          <Save className="size-3.5" />
-        )}
-        {hideActions ? null : (
-          <span>{saving ? "Saving" : saved ? "Saved" : "Save sandbox"}</span>
-        )}
-      </button>
-      <button
-        type="button"
-        onClick={handlePause}
-        disabled={
-          pausing ||
-          saving ||
-          killing ||
-          freezePending ||
-          info?.state === "paused"
-        }
-        aria-label="Pause sandbox"
-        title="Pause sandbox"
-        className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
-      >
-        {pausing ? (
-          <Loader2 className="size-3.5 animate-spin" />
-        ) : (
-          <Pause className="size-3.5" />
-        )}
-        {hideActions ? null : (
-          <span>{pausing ? "Pausing" : "Pause sandbox"}</span>
-        )}
-      </button>
-      <button
-        type="button"
-        onClick={handleKill}
-        disabled={killing || saving || pausing || freezePending}
-        aria-label="Kill sandbox"
-        title="Kill sandbox"
-        className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-destructive disabled:opacity-50"
-      >
-        {killing ? (
-          <Loader2 className="size-3.5 animate-spin" />
-        ) : (
-          <Trash2 className="size-3.5" />
-        )}
-        {hideActions ? null : (
-          <span>{killing ? "Killing" : "Kill sandbox"}</span>
-        )}
-      </button>
-    </div>
-  )
-}
-
-function Stat({
-  label,
-  value,
-  title,
-}: {
-  label: string
-  value: string
-  title?: string
-}) {
-  return (
-    <div className="flex flex-col gap-0.5 leading-none" title={title}>
-      <span className="text-[9px] font-medium tracking-wider text-muted-foreground uppercase">
-        {label}
+  if (missing || !info) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+        <OctagonX className="size-3.5" />
+        Sandbox missing
       </span>
-      <span className="text-[13px] text-foreground tabular-nums">{value}</span>
-    </div>
+    )
+  }
+
+  const Icon = info.state === "running" ? CircleDot : Power
+  const title = [
+    `Daytona sandbox ${sandboxId}`,
+    info.rawState ? `State ${info.rawState}` : "",
+    info.lastActivityAt
+      ? `Last active ${new Date(info.lastActivityAt).toLocaleString()}`
+      : "",
+    formatMinutes(info.autoStopInterval),
+  ]
+    .filter(Boolean)
+    .join("\n")
+
+  return (
+    <span
+      title={title}
+      className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground"
+    >
+      <Icon
+        className={
+          info.state === "running"
+            ? "size-3.5 text-emerald-600 dark:text-emerald-400"
+            : "size-3.5"
+        }
+      />
+      <span>{STATE_LABEL[info.state]}</span>
+    </span>
   )
 }

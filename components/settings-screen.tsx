@@ -4,9 +4,10 @@ import { useMutation } from "convex/react"
 import {
   ChevronRight,
   KeyRound,
-  Package,
+  Layers3,
   PanelLeft,
   Plus,
+  Terminal,
   Trash2,
   X,
 } from "lucide-react"
@@ -14,13 +15,6 @@ import { useState } from "react"
 
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import {
-  DEFAULT_SANDBOX_CPU_COUNT,
-  DEFAULT_SANDBOX_MEMORY_MB,
-  memoryLabel,
-  PRESET_TOOLS,
-  SANDBOX_SIZE_OPTIONS,
-} from "@/lib/chat-options"
 import { cn } from "@/lib/utils"
 
 type AuthStatus = {
@@ -33,15 +27,14 @@ type SandboxPresetSecretRecord = {
 }
 
 type SandboxPresetRecord = {
-  cpuCount: number
-  customToolingCommands: string[]
+  createdAt: number
+  daytonaSnapshot?: string
   id: Id<"sandboxPresets">
   installScript?: string
-  memoryMB: number
   name: string
+  pathInstallScript?: string
   secrets: SandboxPresetSecretRecord[]
-  toolVersions: Array<{ tool: string; version: string }>
-  tools: string[]
+  updatedAt: number
 }
 
 export function SettingsScreen({
@@ -80,7 +73,7 @@ export function SettingsScreen({
             Settings
           </h1>
           <p className="mt-1.5 text-sm text-muted-foreground">
-            Manage connected accounts, sandbox presets, and preset secrets.
+            Manage connected accounts, Daytona presets, and preset secrets.
           </p>
 
           <div className="mt-8">
@@ -144,11 +137,7 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
   )
   const selected = presets.find((preset) => preset.id === selectedId) ?? null
   const [name, setName] = useState("")
-  const [tools, setTools] = useState<string[]>([])
-  const [toolVersions, setToolVersions] = useState<Record<string, string>>({})
-  const [cpuCount, setCpuCount] = useState(DEFAULT_SANDBOX_CPU_COUNT)
-  const [memoryMB, setMemoryMB] = useState(DEFAULT_SANDBOX_MEMORY_MB)
-  const [customToolingCommands, setCustomToolingCommands] = useState("")
+  const [pathInstallScript, setPathInstallScript] = useState("")
   const [installScript, setInstallScript] = useState("")
   const [secretName, setSecretName] = useState("")
   const [secretValue, setSecretValue] = useState("")
@@ -156,119 +145,49 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
   const [error, setError] = useState("")
   const [creating, setCreating] = useState(false)
 
-  function normalizeToolsForEditor(items: string[]) {
-    return [
-      ...new Set(
-        items.flatMap((item) =>
-          item === "node-pnpm" ? ["node", "pnpm"] : [item]
-        )
-      ),
-    ]
-  }
-
-  function startNewPreset() {
-    setSelectedId(null)
-    setCreating(true)
-    setName("")
-    setTools([])
-    setToolVersions({})
-    setCpuCount(DEFAULT_SANDBOX_CPU_COUNT)
-    setMemoryMB(DEFAULT_SANDBOX_MEMORY_MB)
-    setCustomToolingCommands("")
-    setInstallScript("")
-    setSecretName("")
-    setSecretValue("")
-    setError("")
-  }
-
-  function closeEditor() {
+  function resetEditor() {
     setSelectedId(null)
     setCreating(false)
     setName("")
-    setTools([])
-    setToolVersions({})
-    setCpuCount(DEFAULT_SANDBOX_CPU_COUNT)
-    setMemoryMB(DEFAULT_SANDBOX_MEMORY_MB)
-    setCustomToolingCommands("")
+    setPathInstallScript("")
     setInstallScript("")
     setSecretName("")
     setSecretValue("")
     setError("")
+  }
+
+  function startNewPreset() {
+    resetEditor()
+    setCreating(true)
   }
 
   function selectPreset(preset: SandboxPresetRecord) {
     setSelectedId(preset.id)
     setCreating(false)
     setName(preset.name)
-    setTools(normalizeToolsForEditor(preset.tools))
-    setToolVersions(
-      Object.fromEntries(
-        (preset.toolVersions ?? []).map((item) => [
-          item.tool === "node-pnpm" ? "node" : item.tool,
-          item.version,
-        ])
-      )
-    )
-    setCpuCount(preset.cpuCount)
-    setMemoryMB(preset.memoryMB)
-    setCustomToolingCommands(preset.customToolingCommands.join("\n"))
+    setPathInstallScript(preset.pathInstallScript ?? "")
     setInstallScript(preset.installScript ?? "")
     setSecretName("")
     setSecretValue("")
     setError("")
   }
 
-  function toggleTool(tool: string) {
-    setTools((current) =>
-      current.includes(tool)
-        ? current.filter((item) => item !== tool)
-        : [...current, tool]
-    )
-  }
-
-  function setToolVersion(tool: string, version: string) {
-    setToolVersions((current) => ({ ...current, [tool]: version }))
-  }
-
-  function selectedToolVersions(selectedTools: string[]) {
-    return selectedTools
-      .map((tool) => ({
-        tool,
-        version: toolVersions[tool]?.trim() ?? "",
-      }))
-      .filter((item) => item.version)
-  }
-
   async function savePreset() {
-    const selectedTools = normalizeToolsForEditor(tools)
-    const customCommands = customToolingCommands
-      .split("\n")
-      .map((command) => command.trim())
-      .filter(Boolean)
-    const versions = selectedToolVersions(selectedTools)
     setSaving(true)
     setError("")
     try {
       if (selected) {
         await updatePreset({
-          cpuCount,
-          customToolingCommands: customCommands,
           installScript: installScript.trim() || undefined,
-          memoryMB,
           name,
+          pathInstallScript: pathInstallScript.trim() || undefined,
           presetId: selected.id,
-          toolVersions: versions,
-          tools: selectedTools,
         })
       } else {
         const id = await createPreset({
-          cpuCount,
-          customToolingCommands: customCommands,
           installScript: installScript.trim() || undefined,
-          memoryMB,
           name,
-          toolVersions: versions,
-          tools: selectedTools,
+          pathInstallScript: pathInstallScript.trim() || undefined,
         })
         setSelectedId(id)
         setCreating(false)
@@ -286,7 +205,7 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
     setError("")
     try {
       await removePreset({ presetId: selected.id })
-      closeEditor()
+      resetEditor()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to delete preset.")
     } finally {
@@ -295,12 +214,6 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
   }
 
   async function saveSecret() {
-    const selectedTools = normalizeToolsForEditor(tools)
-    const customCommands = customToolingCommands
-      .split("\n")
-      .map((command) => command.trim())
-      .filter(Boolean)
-    const versions = selectedToolVersions(selectedTools)
     setSaving(true)
     setError("")
     try {
@@ -311,13 +224,9 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
           return
         }
         presetId = await createPreset({
-          cpuCount,
-          customToolingCommands: customCommands,
           installScript: installScript.trim() || undefined,
-          memoryMB,
           name,
-          toolVersions: versions,
-          tools: selectedTools,
+          pathInstallScript: pathInstallScript.trim() || undefined,
         })
         setSelectedId(presetId)
         setCreating(false)
@@ -364,25 +273,12 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
   }
 
   const isEditing = selected !== null || creating
-  const sizeId =
-    SANDBOX_SIZE_OPTIONS.find(
-      (option) =>
-        option.cpuCount === cpuCount && option.memoryMB === memoryMB
-    )?.id ?? "normal"
-
-  function selectSize(size: string) {
-    const option =
-      SANDBOX_SIZE_OPTIONS.find((item) => item.id === size) ??
-      SANDBOX_SIZE_OPTIONS[0]
-    setCpuCount(option.cpuCount)
-    setMemoryMB(option.memoryMB)
-  }
 
   return (
     <div className="mt-8">
       <div className="flex items-center justify-between px-1">
         <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-          Presets
+          Daytona Presets
         </h2>
         <button
           type="button"
@@ -397,26 +293,11 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
       <div className="mt-2 overflow-hidden rounded-xl border border-border/60 bg-background">
         {presets.length === 0 ? (
           <div className="px-3.5 py-8 text-center text-xs leading-5 text-muted-foreground">
-            No presets yet. Create one to preinstall tools and inject secrets
-            into new sandboxes.
+            No presets yet. Create one to set up tools, installs, and secrets.
           </div>
         ) : (
           presets.map((preset) => {
             const active = selected?.id === preset.id
-            const meta = [
-              preset.tools.length
-                ? `${preset.tools.length} tool${preset.tools.length === 1 ? "" : "s"}`
-                : null,
-              `${preset.cpuCount} CPU`,
-              memoryLabel(preset.memoryMB),
-              preset.customToolingCommands.length
-                ? `${preset.customToolingCommands.length} custom command${preset.customToolingCommands.length === 1 ? "" : "s"}`
-                : null,
-              preset.toolVersions.length
-                ? `${preset.toolVersions.length} pinned`
-                : null,
-              preset.installScript ? "install script" : null,
-            ].filter(Boolean) as string[]
             return (
               <button
                 key={preset.id}
@@ -427,15 +308,32 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                   active && "bg-muted"
                 )}
               >
-                <Package className="size-4 shrink-0 text-muted-foreground" />
+                <Layers3 className="size-4 shrink-0 text-muted-foreground" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-foreground/85">
                     {preset.name}
                   </div>
                   <div className="truncate text-xs text-muted-foreground">
-                    {meta.length ? meta.join(" · ") : "No setup commands"}
+                    {[
+                      preset.pathInstallScript ? "PATH tools" : "",
+                      preset.installScript ? "repo install" : "",
+                      preset.secrets.length
+                        ? `${preset.secrets.length} secret${preset.secrets.length === 1 ? "" : "s"}`
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || "Cloudcode default environment"}
                   </div>
                 </div>
+                {preset.pathInstallScript ? (
+                  <span
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                    title="Runs a PATH setup script from the sandbox home"
+                  >
+                    <Terminal className="size-2.5" />
+                    PATH
+                  </span>
+                ) : null}
                 {preset.secrets.length ? (
                   <span
                     className="inline-flex shrink-0 items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
@@ -443,6 +341,15 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                   >
                     <KeyRound className="size-2.5" />
                     {preset.secrets.length}
+                  </span>
+                ) : null}
+                {preset.installScript ? (
+                  <span
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                    title="Runs an install script from the repo root"
+                  >
+                    <Terminal className="size-2.5" />
+                    script
                   </span>
                 ) : null}
                 <ChevronRight
@@ -465,7 +372,7 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
             </div>
             <button
               type="button"
-              onClick={closeEditor}
+              onClick={resetEditor}
               aria-label="Close editor"
               className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
@@ -479,125 +386,40 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
               <input
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                placeholder="Flutter + Bun"
+                placeholder="Node 22 workspace"
                 className="h-9 rounded-md border border-border/70 bg-transparent px-3 text-sm font-normal transition-colors outline-none focus:border-foreground/30"
               />
             </label>
 
-            <div>
-              <div className="mb-2 text-xs font-medium text-foreground/80">
-                Tools
-              </div>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {PRESET_TOOLS.map((tool) => {
-                  const checked = tools.includes(tool.id)
-                  return (
-                    <div
-                      key={tool.id}
-                      title={tool.description}
-                      className={cn(
-                        "grid min-h-10 gap-2 rounded-md border px-2.5 py-2 text-xs transition-colors",
-                        checked
-                          ? "border-foreground/25 bg-muted text-foreground"
-                          : "border-border/60 text-foreground/80 hover:bg-muted"
-                      )}
-                    >
-                      <label className="flex cursor-pointer items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => toggleTool(tool.id)}
-                          className="size-3.5 accent-foreground"
-                        />
-                        <span className="min-w-0 flex-1 truncate">
-                          {tool.label}
-                        </span>
-                      </label>
-                      {checked && "versionPlaceholder" in tool ? (
-                        <input
-                          value={toolVersions[tool.id] ?? ""}
-                          onChange={(event) =>
-                            setToolVersion(tool.id, event.target.value)
-                          }
-                          aria-label={`${tool.label} version`}
-                          placeholder={tool.versionPlaceholder}
-                          spellCheck={false}
-                          className="h-8 rounded-md border border-border/70 bg-background/80 px-2.5 font-mono text-[11px] text-foreground outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-foreground/30"
-                        />
-                      ) : null}
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-
-            <div>
-              <div className="mb-2 text-xs font-medium text-foreground/80">
-                Resources
-              </div>
-              <div className="grid gap-2 sm:grid-cols-3">
-                {SANDBOX_SIZE_OPTIONS.map((option) => {
-                  const active = sizeId === option.id
-                  return (
-                    <button
-                      key={option.id}
-                      type="button"
-                      onClick={() => selectSize(option.id)}
-                      aria-pressed={active}
-                      className={cn(
-                        "rounded-md border px-2.5 py-2 text-left transition-colors",
-                        active
-                          ? "border-foreground/25 bg-muted text-foreground"
-                          : "border-border/60 text-foreground/80 hover:bg-muted"
-                      )}
-                    >
-                      <span className="block text-xs font-medium">
-                        {option.label}
-                      </span>
-                      <span className="mt-0.5 block text-[11px] text-muted-foreground">
-                        {option.cpuCount} CPU · {memoryLabel(option.memoryMB)}
-                      </span>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
             <label className="grid gap-1.5 text-xs font-medium text-foreground/80">
-              Custom tooling
+              PATH setup script
               <textarea
-                value={customToolingCommands}
-                onChange={(event) =>
-                  setCustomToolingCommands(event.target.value)
-                }
-                rows={4}
-                spellCheck={false}
+                value={pathInstallScript}
+                onChange={(event) => setPathInstallScript(event.target.value)}
                 placeholder={
-                  "mise use --global node@22\ndart pub global activate fvm\nfvm install stable"
+                  "curl -fsSL https://vite.plus | bash\nnpm install -g vercel"
                 }
-                className="min-h-24 resize-y rounded-md border border-border/70 bg-transparent px-3 py-2 font-mono text-xs leading-5 font-normal transition-colors outline-none focus:border-foreground/30"
+                spellCheck={false}
+                className="min-h-24 resize-y rounded-md border border-border/70 bg-transparent px-3 py-2 font-mono text-xs font-normal leading-5 transition-colors outline-none focus:border-foreground/30"
               />
               <span className="text-[11px] leading-4 font-normal text-muted-foreground">
-                One command per line. Runs from /home/user for global runtimes
-                and CLIs, after selected tools and before the custom script.
+                Runs from the sandbox home before repo setup. Use it for CLIs
+                and language tools that should be available on PATH.
               </span>
             </label>
 
             <label className="grid gap-1.5 text-xs font-medium text-foreground/80">
-              Custom install script
+              Repo install script
               <textarea
                 value={installScript}
                 onChange={(event) => setInstallScript(event.target.value)}
-                rows={5}
+                placeholder={"pnpm install\npnpm test -- --runInBand"}
                 spellCheck={false}
-                placeholder={
-                  "npm install -g firebase-tools\nfirebase --version"
-                }
-                className="min-h-28 resize-y rounded-md border border-border/70 bg-transparent px-3 py-2 font-mono text-xs leading-5 font-normal transition-colors outline-none focus:border-foreground/30"
+                className="min-h-28 resize-y rounded-md border border-border/70 bg-transparent px-3 py-2 font-mono text-xs font-normal leading-5 transition-colors outline-none focus:border-foreground/30"
               />
               <span className="text-[11px] leading-4 font-normal text-muted-foreground">
-                Runs from /home/user/repo. Use this only when setup needs the
-                checked-out project.
+                Runs from the cloned repo root before Codex starts. Leave blank
+                when the base environment already has everything.
               </span>
             </label>
 

@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server"
-import { Sandbox } from "e2b"
 
 import { getCodexAuthJson, saveCodexAuthJson } from "@/lib/codex-auth"
 import {
@@ -7,7 +6,8 @@ import {
   type ReasoningEffort,
   type RunCodexLog,
   runCodexInSandbox,
-} from "@/lib/e2b-codex-agent"
+} from "@/lib/daytona-codex-agent"
+import { stopDaytonaSandboxQuietly } from "@/lib/daytona-sandbox"
 import { getSandboxPresetForRun } from "@/lib/sandbox-presets"
 
 export const runtime = "nodejs"
@@ -46,7 +46,7 @@ function streamEvent(
 async function killSandboxQuietly(sandboxId?: string) {
   if (!sandboxId) return
 
-  await Sandbox.kill(sandboxId).catch(() => undefined)
+  await stopDaytonaSandboxQuietly(sandboxId)
 }
 
 export async function POST(request: Request) {
@@ -58,7 +58,6 @@ export async function POST(request: Request) {
       githubToken?: unknown
       model?: unknown
       previousDiff?: unknown
-      previousSandboxSnapshotId?: unknown
       profile?: unknown
       prompt?: unknown
       reasoningEffort?: unknown
@@ -172,10 +171,6 @@ export async function POST(request: Request) {
                 typeof body.previousDiff === "string"
                   ? body.previousDiff
                   : undefined,
-              previousSandboxSnapshotId:
-                typeof body.previousSandboxSnapshotId === "string"
-                  ? body.previousSandboxSnapshotId
-                  : undefined,
               prompt,
               reasoningEffort: parseReasoningEffort(body.reasoningEffort),
               resumeContext:
@@ -220,8 +215,8 @@ export async function POST(request: Request) {
         })()
       },
       cancel() {
-        // The browser closed the response stream. Kill the active sandbox
-        // server-side so a stopped run cannot become an orphaned E2B sandbox.
+        // The browser closed the response stream. Stop the Daytona sandbox to
+        // terminate the active command while keeping its filesystem durable.
         void cancelRun()
       },
     })

@@ -17,7 +17,10 @@ const thinking = v.union(
 const sandboxState = v.union(
   v.literal("running"),
   v.literal("paused"),
-  v.literal("killed")
+  v.literal("killed"),
+  v.literal("stopped"),
+  v.literal("deleted"),
+  v.literal("error")
 )
 
 const runLog = v.object({
@@ -86,9 +89,11 @@ export default defineSchema({
     cpuCount: v.optional(v.number()),
     createdAt: v.number(),
     customToolingCommands: v.optional(v.array(v.string())),
+    daytonaSnapshot: v.optional(v.string()),
     installScript: v.optional(v.string()),
     memoryMB: v.optional(v.number()),
     name: v.string(),
+    pathInstallScript: v.optional(v.string()),
     toolVersions: v.optional(
       v.array(
         v.object({
@@ -97,7 +102,7 @@ export default defineSchema({
         })
       )
     ),
-    tools: v.array(v.string()),
+    tools: v.optional(v.array(v.string())),
     updatedAt: v.number(),
     userId: v.id("users"),
   }).index("by_user_updated", ["userId", "updatedAt"]),
@@ -109,10 +114,10 @@ export default defineSchema({
     model,
     repoUrl: v.string(),
     sandboxPresetId: v.optional(v.id("sandboxPresets")),
-    sandboxId: v.optional(v.string()),
-    sandboxState: v.optional(sandboxState),
     sandboxSnapshotId: v.optional(v.string()),
     sandboxSnapshotIdsToDelete: v.optional(v.array(v.string())),
+    sandboxId: v.optional(v.string()),
+    sandboxState: v.optional(sandboxState),
     title: v.string(),
     updatedAt: v.number(),
     userId: v.id("users"),

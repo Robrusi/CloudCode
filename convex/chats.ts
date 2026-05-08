@@ -21,7 +21,10 @@ const thinking = v.union(
 const sandboxState = v.union(
   v.literal("running"),
   v.literal("paused"),
-  v.literal("killed")
+  v.literal("killed"),
+  v.literal("stopped"),
+  v.literal("deleted"),
+  v.literal("error")
 )
 
 const runLog = v.object({
@@ -117,8 +120,6 @@ export const list = query({
             : undefined,
           sandboxId: thread.sandboxId,
           sandboxState: thread.sandboxState,
-          sandboxSnapshotId: thread.sandboxSnapshotId,
-          sandboxSnapshotIdsToDelete: thread.sandboxSnapshotIdsToDelete,
           title: thread.title,
           updatedAt: thread.updatedAt,
         }
@@ -222,8 +223,6 @@ export const completeAssistantMessage = mutation({
     meta: v.optional(messageMeta),
     sandboxId: v.optional(v.string()),
     sandboxState: v.optional(sandboxState),
-    sandboxSnapshotId: v.optional(v.string()),
-    sandboxSnapshotIdsToDelete: v.optional(v.array(v.string())),
     threadId: v.id("threads"),
   },
   handler: async (ctx, args) => {
@@ -252,16 +251,6 @@ export const completeAssistantMessage = mutation({
         : args.sandboxId
           ? { sandboxState: "running" as const }
           : {}),
-      ...(args.sandboxSnapshotId
-        ? { sandboxSnapshotId: args.sandboxSnapshotId }
-        : {}),
-      ...(args.sandboxSnapshotIdsToDelete
-        ? {
-            sandboxSnapshotIdsToDelete: [
-              ...new Set(args.sandboxSnapshotIdsToDelete),
-            ],
-          }
-        : {}),
       updatedAt: Date.now(),
     })
   },
@@ -272,8 +261,6 @@ export const saveRunState = mutation({
     codexThreadId: v.optional(v.string()),
     sandboxId: v.optional(v.string()),
     sandboxState: v.optional(sandboxState),
-    sandboxSnapshotId: v.optional(v.string()),
-    sandboxSnapshotIdsToDelete: v.optional(v.array(v.string())),
     threadId: v.id("threads"),
   },
   handler: async (ctx, args) => {
@@ -292,16 +279,6 @@ export const saveRunState = mutation({
         : args.sandboxId
           ? { sandboxState: "running" as const }
           : {}),
-      ...(args.sandboxSnapshotId
-        ? { sandboxSnapshotId: args.sandboxSnapshotId }
-        : {}),
-      ...(args.sandboxSnapshotIdsToDelete
-        ? {
-            sandboxSnapshotIdsToDelete: [
-              ...new Set(args.sandboxSnapshotIdsToDelete),
-            ],
-          }
-        : {}),
       updatedAt: Date.now(),
     })
     return { saved: true }
@@ -318,28 +295,7 @@ export const clearSandbox = mutation({
 
     await ctx.db.patch(args.threadId, {
       sandboxId: undefined,
-      sandboxState: "killed",
-      updatedAt: Date.now(),
-    })
-  },
-})
-
-export const clearSandboxSnapshot = mutation({
-  args: {
-    sandboxSnapshotIdsToDelete: v.optional(v.array(v.string())),
-    threadId: v.id("threads"),
-  },
-  handler: async (ctx, args) => {
-    const userId = await ensureCurrentUser(ctx)
-    await requireOwnedThread(ctx, args.threadId, userId)
-
-    await ctx.db.patch(args.threadId, {
-      sandboxState: undefined,
-      sandboxSnapshotId: undefined,
-      sandboxSnapshotIdsToDelete:
-        args.sandboxSnapshotIdsToDelete === undefined
-          ? undefined
-          : [...new Set(args.sandboxSnapshotIdsToDelete)],
+      sandboxState: "deleted",
       updatedAt: Date.now(),
     })
   },
