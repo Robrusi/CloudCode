@@ -2,11 +2,12 @@
 
 import { FitAddon } from "@xterm/addon-fit"
 import { Terminal } from "@xterm/xterm"
-import { ExternalLink, Loader2, RefreshCw, X } from "lucide-react"
+import { CircleDot, Loader2, OctagonX, RefreshCw, X } from "lucide-react"
+import { useTheme } from "next-themes"
 import {
   type MouseEvent as ReactMouseEvent,
-  useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react"
@@ -14,6 +15,81 @@ import {
 import { cn } from "@/lib/utils"
 
 type TerminalStatus = "connecting" | "ready" | "reconnecting" | "error"
+
+type TerminalPalette = {
+  background: string
+  black: string
+  blue: string
+  brightBlack: string
+  brightBlue: string
+  brightCyan: string
+  brightGreen: string
+  brightMagenta: string
+  brightRed: string
+  brightWhite: string
+  brightYellow: string
+  cursor: string
+  cursorAccent: string
+  cyan: string
+  foreground: string
+  green: string
+  magenta: string
+  red: string
+  selectionBackground: string
+  selectionForeground: string
+  white: string
+  yellow: string
+}
+
+const darkPalette: TerminalPalette = {
+  background: "#0b0d10",
+  black: "#15181d",
+  blue: "#7aa2f7",
+  brightBlack: "#5b6172",
+  brightBlue: "#9ab8ff",
+  brightCyan: "#7dd3fc",
+  brightGreen: "#9ee6a3",
+  brightMagenta: "#d8b4fe",
+  brightRed: "#ffa39e",
+  brightWhite: "#ffffff",
+  brightYellow: "#fbd38d",
+  cursor: "#e6e8eb",
+  cursorAccent: "#0b0d10",
+  cyan: "#67e8f9",
+  foreground: "#e6e8eb",
+  green: "#73d13d",
+  magenta: "#c084fc",
+  red: "#ff7373",
+  selectionBackground: "rgba(122, 162, 247, 0.28)",
+  selectionForeground: "#ffffff",
+  white: "#d7d7d7",
+  yellow: "#f4bf75",
+}
+
+const lightPalette: TerminalPalette = {
+  background: "#fbfbfa",
+  black: "#1f2328",
+  blue: "#0969da",
+  brightBlack: "#6e7781",
+  brightBlue: "#218bff",
+  brightCyan: "#179299",
+  brightGreen: "#1a7f37",
+  brightMagenta: "#a475f9",
+  brightRed: "#cf222e",
+  brightWhite: "#1f2328",
+  brightYellow: "#9a6700",
+  cursor: "#1f2328",
+  cursorAccent: "#fbfbfa",
+  cyan: "#0e7490",
+  foreground: "#1f2328",
+  green: "#1f883d",
+  magenta: "#8250df",
+  red: "#d1242f",
+  selectionBackground: "rgba(9, 105, 218, 0.18)",
+  selectionForeground: "#1f2328",
+  white: "#57606a",
+  yellow: "#bf8700",
+}
 
 const terminalClosers = new Map<string, Set<() => void>>()
 
@@ -51,16 +127,25 @@ export function SandboxTerminalPanel({
   height: number
   onHeightChange: (height: number) => void
 }) {
-  const [externalUrlState, setExternalUrlState] = useState<{
-    sandboxId: string
-    url: string
-  } | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [externalLoading, setExternalLoading] = useState(false)
   const [status, setStatus] = useState<TerminalStatus>("connecting")
   const [sessionVersion, setSessionVersion] = useState(0)
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const terminalRef = useRef<Terminal | null>(null)
   const dragStartRef = useRef<{ h: number; y: number } | null>(null)
+
+  const { resolvedTheme } = useTheme()
+  const isDark = resolvedTheme !== "light"
+  const palette = useMemo<TerminalPalette>(
+    () => (isDark ? darkPalette : lightPalette),
+    [isDark]
+  )
+
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.options.theme = palette
+    }
+  }, [palette])
 
   useEffect(() => {
     if (!open || !sandboxId || !containerRef.current) return
@@ -73,37 +158,22 @@ export function SandboxTerminalPanel({
       allowProposedApi: false,
       convertEol: false,
       cursorBlink: true,
-      cursorStyle: "block",
+      cursorStyle: "bar",
+      cursorWidth: 2,
       fontFamily:
-        '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+        '"JetBrains Mono", "SFMono-Regular", "SF Mono", Consolas, "Liberation Mono", Menlo, monospace',
       fontSize: 13,
-      letterSpacing: 0,
-      lineHeight: 1.22,
+      fontWeight: "400",
+      fontWeightBold: "600",
+      letterSpacing: 0.2,
+      lineHeight: 1.35,
       macOptionIsMeta: true,
+      minimumContrastRatio: 4,
       scrollback: 10_000,
-      theme: {
-        background: "#090909",
-        black: "#111111",
-        blue: "#7aa2f7",
-        brightBlack: "#5c6370",
-        brightBlue: "#9ab8ff",
-        brightCyan: "#7dd3fc",
-        brightGreen: "#8ce99a",
-        brightMagenta: "#d8b4fe",
-        brightRed: "#ff9b9b",
-        brightWhite: "#ffffff",
-        brightYellow: "#f8d66d",
-        cursor: "#f5f5f5",
-        cyan: "#67e8f9",
-        foreground: "#ededed",
-        green: "#73d13d",
-        magenta: "#c084fc",
-        red: "#ff6b6b",
-        selectionBackground: "#3b3b3b",
-        white: "#d7d7d7",
-        yellow: "#f4bf75",
-      },
+      smoothScrollDuration: 80,
+      theme: palette,
     })
+    terminalRef.current = terminal
     const fitAddon = new FitAddon()
     const node = containerRef.current
     let disposed = false
@@ -177,13 +247,50 @@ export function SandboxTerminalPanel({
     }
 
     const unregisterCloser = registerTerminalCloser(sandboxId, killTerminal)
-    const dataDisposable = terminal.onData((data) => {
+
+    function queueInput(data: string) {
       pendingInput += data
       if (inputFlushTimer) return
       inputFlushTimer = setTimeout(() => {
         inputFlushTimer = undefined
         flushInput()
       }, 10)
+    }
+
+    const dataDisposable = terminal.onData(queueInput)
+
+    // xterm.js doesn't translate Option/Cmd + Arrow/Backspace to readline word/line edits.
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type !== "keydown") return true
+      const { altKey, ctrlKey, metaKey, shiftKey } = event
+
+      if (altKey && !ctrlKey && !metaKey) {
+        let seq: string | undefined
+        if (event.key === "ArrowLeft") seq = "\x1bb"
+        else if (event.key === "ArrowRight") seq = "\x1bf"
+        else if (event.key === "Backspace") seq = "\x1b\x7f"
+        else if (event.key === "Delete") seq = "\x1bd"
+        if (seq) {
+          event.preventDefault()
+          queueInput(seq)
+          return false
+        }
+      }
+
+      if (metaKey && !ctrlKey && !altKey && !shiftKey) {
+        let seq: string | undefined
+        if (event.key === "ArrowLeft") seq = "\x01"
+        else if (event.key === "ArrowRight") seq = "\x05"
+        else if (event.key === "Backspace") seq = "\x15"
+        else if (event.key === "Delete") seq = "\x0b"
+        if (seq) {
+          event.preventDefault()
+          queueInput(seq)
+          return false
+        }
+      }
+
+      return true
     })
     const resizeObserver =
       typeof ResizeObserver === "undefined"
@@ -271,47 +378,13 @@ export function SandboxTerminalPanel({
       window.removeEventListener("resize", scheduleResize)
       eventSource?.close()
       terminal.dispose()
+      if (terminalRef.current === terminal) terminalRef.current = null
       killTerminal()
     }
+    // palette is applied via a separate effect; we intentionally don't recreate
+    // the terminal when the theme changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, sandboxId, sessionVersion])
-
-  const externalUrl =
-    externalUrlState?.sandboxId === sandboxId ? externalUrlState.url : null
-
-  const openExternalTerminal = useCallback(async () => {
-    if (!sandboxId) return
-    if (externalUrl) {
-      window.open(externalUrl, "_blank", "noopener,noreferrer")
-      return
-    }
-
-    setExternalLoading(true)
-    try {
-      const res = await fetch(
-        `/api/sandbox/terminal/url?sandboxId=${encodeURIComponent(sandboxId)}`,
-        { cache: "no-store" }
-      )
-      const data = (await res.json().catch(() => undefined)) as
-        | { error?: unknown; url?: unknown }
-        | undefined
-      if (!res.ok || typeof data?.url !== "string") {
-        throw new Error(
-          typeof data?.error === "string"
-            ? data.error
-            : "Unable to open Daytona terminal."
-        )
-      }
-      setExternalUrlState({ sandboxId, url: data.url })
-      window.open(data.url, "_blank", "noopener,noreferrer")
-    } catch (err) {
-      setStatus("error")
-      setError(
-        err instanceof Error ? err.message : "Unable to open Daytona terminal."
-      )
-    } finally {
-      setExternalLoading(false)
-    }
-  }, [externalUrl, sandboxId])
 
   function handleResizeStart(e: ReactMouseEvent<HTMLDivElement>) {
     e.preventDefault()
@@ -349,80 +422,75 @@ export function SandboxTerminalPanel({
       : status === "reconnecting"
         ? "Reconnecting"
         : status === "error"
-          ? "Connection issue"
+          ? error ?? "Connection issue"
           : "Connecting"
+
+  const surfaceBg = palette.background
 
   return (
     <section
-      className="absolute inset-x-0 bottom-0 z-20 flex min-h-0 flex-col overflow-hidden border-t border-border/60 bg-[#090909] text-white shadow-[0_-16px_40px_-32px_rgba(0,0,0,0.9)]"
-      style={{ height }}
+      className="absolute inset-x-0 bottom-0 z-20 flex min-h-0 flex-col overflow-hidden border-t border-border/70"
+      style={{ height, background: surfaceBg, color: palette.foreground }}
     >
       <div
         role="separator"
         aria-orientation="horizontal"
         aria-label="Resize terminal"
         onMouseDown={handleResizeStart}
-        className="absolute top-0 right-0 left-0 z-10 h-2 -translate-y-1 cursor-row-resize"
-      />
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-white/10 bg-[#0d0d0d] px-3">
-        <span className="text-xs font-medium tracking-wide text-white/72 uppercase">
-          Daytona PTY
-        </span>
+        className="group absolute top-0 right-0 left-0 z-30 h-2 -translate-y-1 cursor-row-resize"
+      >
+        <span
+          aria-hidden
+          className="pointer-events-none absolute top-1 right-0 left-0 h-px bg-border/50 transition-colors group-hover:bg-primary/40"
+        />
+      </div>
+      <div
+        className="absolute top-2 right-2 z-20 flex items-center gap-1"
+        aria-live="polite"
+      >
         <span
           className={cn(
-            "size-1.5 rounded-full",
-            status === "ready" && "bg-emerald-400",
-            status === "reconnecting" && "bg-amber-300",
-            status === "connecting" && "bg-white/45",
-            status === "error" && "bg-red-400"
+            "pointer-events-none inline-flex items-center gap-1.5 px-1.5 text-xs font-medium",
+            status === "error" ? "text-red-500/90" : "text-muted-foreground"
           )}
-          aria-hidden
-        />
-        <span className="text-xs text-white/45">{statusLabel}</span>
-        {status === "connecting" || status === "reconnecting" ? (
-          <Loader2 className="size-3.5 animate-spin text-white/45" />
-        ) : null}
-        {error ? (
-          <span className="min-w-0 truncate text-xs text-red-300/90">
-            {error}
-          </span>
-        ) : null}
+          title={error ?? undefined}
+        >
+          {status === "ready" ? (
+            <CircleDot className="size-3.5 text-emerald-600 dark:text-emerald-400" />
+          ) : status === "error" ? (
+            <OctagonX className="size-3.5" />
+          ) : (
+            <Loader2 className="size-3.5 animate-spin" />
+          )}
+          <span>{statusLabel}</span>
+        </span>
         <button
           type="button"
-          onClick={() => setSessionVersion((version) => version + 1)}
+          onClick={() => setSessionVersion((v) => v + 1)}
           aria-label="Reconnect terminal"
           title="Reconnect terminal"
-          className="ml-auto grid size-7 place-items-center rounded-md text-white/52 transition-colors hover:bg-white/10 hover:text-white"
+          className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           <RefreshCw className="size-3.5" />
-        </button>
-        <button
-          type="button"
-          onClick={openExternalTerminal}
-          aria-label="Open Daytona terminal in a new tab"
-          title="Open Daytona terminal in a new tab"
-          className="grid size-7 place-items-center rounded-md text-white/52 transition-colors hover:bg-white/10 hover:text-white"
-        >
-          {externalLoading ? (
-            <Loader2 className="size-3.5 animate-spin" />
-          ) : (
-            <ExternalLink className="size-3.5" />
-          )}
         </button>
         <button
           type="button"
           onClick={onClose}
           aria-label="Close terminal"
           title="Close terminal"
-          className="grid size-7 place-items-center rounded-md text-white/52 transition-colors hover:bg-white/10 hover:text-white"
+          className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           <X className="size-4" />
         </button>
-      </header>
-      <div className="min-h-0 flex-1 overflow-hidden bg-[#090909] p-2">
+      </div>
+      <div
+        className="min-h-0 flex-1 overflow-hidden px-3 pt-3 pb-1"
+        style={{ background: surfaceBg }}
+      >
         <div
           ref={containerRef}
-          className="h-full w-full overflow-hidden rounded-[6px] bg-[#090909] [&_.xterm-screen]:outline-none [&_.xterm-viewport]:bg-[#090909]"
+          className="h-full w-full overflow-hidden [&_.xterm]:!bg-transparent [&_.xterm-screen]:outline-none [&_.xterm-viewport]:!bg-transparent"
+          style={{ background: surfaceBg }}
         />
       </div>
     </section>

@@ -48,11 +48,16 @@ import type { FileBrowserOpenMode } from "@/components/file-browser"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { useStoreUserEffect } from "@/hooks/use-store-user-effect"
+import { getDiffStats } from "@/lib/diff-metadata"
 import {
   readCodexRunResponse,
   type CodexRunLog,
 } from "@/lib/codex-run-response"
 import { buildResumeHandoff } from "@/lib/chat-resume-handoff"
+import {
+  diffCacheKey,
+  fetchSandboxTextFileIntoCache,
+} from "@/lib/sandbox-file-cache"
 import {
   MODEL_LABEL,
   MODELS,
@@ -88,17 +93,20 @@ type Message = {
   meta?: {
     branch?: string
     diff?: string
-    logs?: RunLog[]
+    logs?: StoredRunLog[]
     status?: string
   }
   speed?: Speed
   thinking?: Thinking
 }
 
-type RunLog = CodexRunLog & {
+type StoredRunLog = CodexRunLog & {
   detail?: string
-  id: string
   time: number
+}
+
+type RunLog = StoredRunLog & {
+  id: string
 }
 
 type CachedRunState = {
@@ -182,6 +190,38 @@ function repoLabel(url: string) {
     .replace(/\.git$/, "")
 }
 
+function inlineToolMarker(log: { kind: string; detail?: string }) {
+  if (log.kind !== "command" || !log.detail) return null
+  let parsed: { kind?: string } | null = null
+  try {
+    parsed = JSON.parse(log.detail) as { kind?: string }
+  } catch {
+    return null
+  }
+  if (parsed?.kind !== "command_execution" && parsed?.kind !== "tool_call") {
+    return null
+  }
+  const encoded = encodeURIComponent(log.detail)
+  return `\n\n<codex-tool>${encoded}</codex-tool>\n\n`
+}
+
+const PREFETCH_IMAGE_EXTENSIONS = new Set([
+  "avif",
+  "bmp",
+  "gif",
+  "ico",
+  "jpeg",
+  "jpg",
+  "png",
+  "svg",
+  "webp",
+])
+
+function canPrefetchAsText(path: string) {
+  const ext = path.split(".").pop()?.toLowerCase()
+  return !ext || !PREFETCH_IMAGE_EXTENSIONS.has(ext)
+}
+
 export function Chat() {
   return (
     <>
@@ -206,9 +246,11 @@ function ChatInner() {
   )
   const createThread = useMutation(api.chats.createThread)
   const appendRunMessages = useMutation(api.chats.appendRunMessages)
+  const appendAssistantLogs = useMutation(api.chats.appendAssistantLogs)
   const completeAssistantMessage = useMutation(
     api.chats.completeAssistantMessage
   )
+  const updateAssistantContent = useMutation(api.chats.updateAssistantContent)
   const saveRunState = useMutation(api.chats.saveRunState)
   const deleteThreadMutation = useMutation(api.chats.deleteThread)
   const updateThread = useMutation(api.chats.updateThread)
@@ -275,6 +317,9 @@ function ChatInner() {
   const [view, setView] = useState<"chat" | "settings">("chat")
   const [runningRunKeys, setRunningRunKeys] = useState<Record<string, true>>({})
   const [runLogs, setRunLogs] = useState<Record<string, RunLog[]>>({})
+  const [streamedMessageContent, setStreamedMessageContent] = useState<
+    Record<string, string>
+  >({})
   const [liveRunStates, setLiveRunStates] = useState<
     Record<string, CachedRunState>
   >({})
@@ -334,6 +379,13 @@ function ChatInner() {
       : hasCachedRunKey(activeRunState, "sandboxId")
       ? (activeRunState?.sandboxId ?? null)
       : (active?.sandboxId ?? null)
+  const activeFileCacheScope = activeId
+    ? `thread:${activeId as string}`
+    : activeSandboxId
+      ? `sandbox:${activeSandboxId}`
+      : null
+  const activeSandboxState =
+    activeRunState?.sandboxState ?? active?.sandboxState
   const serverMessages = active?.messages ?? []
   const optimisticRun = optimisticRuns[activeRunKey]
   const optimisticMessages =
@@ -363,6 +415,20 @@ function ChatInner() {
           null)
         : null,
     [active]
+  )
+  const activeDiffKey = useMemo(
+    () => diffCacheKey(activeDiff ?? undefined),
+    [activeDiff]
+  )
+  const activeChangedTextPaths = useMemo(
+    () =>
+      getDiffStats(activeDiff ?? undefined)
+        .files.filter(
+          (file) => file.type !== "deleted" && canPrefetchAsText(file.path)
+        )
+        .map((file) => file.path)
+        .slice(0, 30),
+    [activeDiff]
   )
   const editorDiff = activeFileDiff ?? activeDiff
   const activeRepoName = useMemo(() => {
@@ -458,6 +524,45 @@ function ChatInner() {
     return () => observer.disconnect()
   }, [activeFilePath])
 
+  useEffect(() => {
+    if (
+      !activeFileCacheScope ||
+      !activeSandboxId ||
+      activeChangedTextPaths.length === 0
+    ) {
+      return
+    }
+
+    let cancelled = false
+    const queue = [...new Set(activeChangedTextPaths)]
+
+    async function worker() {
+      while (!cancelled) {
+        const path = queue.shift()
+        if (!path) return
+        await fetchSandboxTextFileIntoCache({
+          diffKey: activeDiffKey,
+          path,
+          sandboxId: activeSandboxId!,
+          scope: activeFileCacheScope!,
+        }).catch(() => undefined)
+      }
+    }
+
+    for (let i = 0; i < Math.min(4, queue.length); i += 1) {
+      void worker()
+    }
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    activeChangedTextPaths,
+    activeDiffKey,
+    activeFileCacheScope,
+    activeSandboxId,
+  ])
+
   useLayoutEffect(() => {
     isAtBottomRef.current = true
     setActiveFileDiff(null)
@@ -479,21 +584,30 @@ function ChatInner() {
     return () => observer.disconnect()
   }, [activeId, activeFilePath])
 
-  function appendRunLog(
-    messageId: Id<"messages">,
-    log: Omit<RunLog, "id" | "time">,
-    time?: number
-  ) {
+  function appendRunLog(messageId: Id<"messages">, log: RunLog) {
     setRunLogs((current) => {
       const key = messageId as string
-      const nextLog = {
-        ...log,
-        id: `${time ?? Date.now()}-${Math.random().toString(36).slice(2)}`,
-        time: time ?? Date.now(),
-      }
-      const logs = [...(current[key] ?? []), nextLog].slice(-500)
+      const logs = [...(current[key] ?? []), log].slice(-500)
       return { ...current, [key]: logs }
     })
+  }
+
+  function renderLogs(message: Message) {
+    const liveLogs = runLogs[message.id as string]
+    if (liveLogs) return liveLogs
+
+    return (
+      message.meta?.logs?.map((log, index) => ({
+        ...log,
+        id: `${message.id}-${log.time}-${index}`,
+      })) ?? EMPTY_LOGS
+    )
+  }
+
+  function renderMessage(message: Message) {
+    const streamedContent = streamedMessageContent[message.id as string]
+    if (streamedContent === undefined) return message
+    return { ...message, content: streamedContent }
   }
 
   function mergeThreadRunState(threadId: Id<"threads">, patch: CachedRunState) {
@@ -872,29 +986,152 @@ function ChatInner() {
         signal: controller.signal,
       })
       const runMessageId = assistantMessageId
-      const data = await readCodexRunResponse(res, (log, time) => {
-        appendRunLog(runMessageId, log, time)
+      let pendingLogWrites: StoredRunLog[] = []
+      let logWriteTimer: ReturnType<typeof setTimeout> | undefined
+      let streamedContent = ""
+      let contentWriteTimer: ReturnType<typeof setTimeout> | undefined
+      let tokenWriteTimer: ReturnType<typeof setTimeout> | undefined
+      const tokenQueue: string[] = []
+      const tokenDrainResolvers = new Set<() => void>()
 
-        if (
-          chatId &&
-          log.kind === "setup" &&
-          log.detail &&
-          /sandbox/i.test(log.message)
-        ) {
-          mergeThreadRunState(chatId, {
-            sandboxId: log.detail,
-            sandboxState: "running",
-          })
-          void saveRunState({
-            sandboxId: log.detail,
-            sandboxState: "running",
-            threadId: chatId,
-          }).catch((error) => {
-            console.warn("Unable to save live sandbox id.", error)
+      function splitStreamingTokens(delta: string) {
+        return delta.match(/\s+|[^\s]+/g) ?? [delta]
+      }
+
+      async function flushLogWrites() {
+        if (logWriteTimer) clearTimeout(logWriteTimer)
+        logWriteTimer = undefined
+        if (!chatId || pendingLogWrites.length === 0) return
+
+        const logs = pendingLogWrites
+        pendingLogWrites = []
+        await appendAssistantLogs({
+          logs,
+          messageId: runMessageId,
+          threadId: chatId,
+        }).catch((error) => {
+          console.warn("Unable to persist Codex run logs.", error)
+          pendingLogWrites = [...logs, ...pendingLogWrites].slice(-500)
+        })
+      }
+
+      function scheduleLogWrite(log: StoredRunLog) {
+        pendingLogWrites = [...pendingLogWrites, log].slice(-500)
+        if (logWriteTimer) return
+        logWriteTimer = setTimeout(() => {
+          void flushLogWrites()
+        }, 350)
+      }
+
+      async function flushContentWrite() {
+        if (contentWriteTimer) clearTimeout(contentWriteTimer)
+        contentWriteTimer = undefined
+        if (!chatId) return
+
+        await updateAssistantContent({
+          content: streamedContent,
+          messageId: runMessageId,
+          threadId: chatId,
+        }).catch((error) => {
+          console.warn("Unable to persist streaming assistant content.", error)
+        })
+      }
+
+      function scheduleContentWrite() {
+        if (contentWriteTimer) return
+        contentWriteTimer = setTimeout(() => {
+          void flushContentWrite()
+        }, 250)
+      }
+
+      function revealNextToken() {
+        const token = tokenQueue.shift()
+        if (token === undefined) {
+          tokenWriteTimer = undefined
+          for (const resolve of tokenDrainResolvers) resolve()
+          tokenDrainResolvers.clear()
+          return
+        }
+
+        streamedContent += token
+        setStreamedMessageContent((current) => ({
+          ...current,
+          [runMessageId as string]: streamedContent,
+        }))
+        scheduleContentWrite()
+
+        const delay = token.trim() ? 16 : 4
+        tokenWriteTimer = setTimeout(revealNextToken, delay)
+      }
+
+      function scheduleTokenReveal(delta: string) {
+        tokenQueue.push(...splitStreamingTokens(delta))
+        if (tokenWriteTimer) return
+        tokenWriteTimer = setTimeout(revealNextToken, 0)
+      }
+
+      async function waitForTokenReveal() {
+        if (tokenQueue.length > 0 || tokenWriteTimer) {
+          await new Promise<void>((resolve) => {
+            tokenDrainResolvers.add(resolve)
           })
         }
-      })
+
+        if (streamedContent) await flushContentWrite()
+      }
+
+      const data = await readCodexRunResponse(
+        res,
+        (log, time) => {
+          const stampedLog: RunLog = {
+            ...log,
+            id: `${time ?? Date.now()}-${Math.random().toString(36).slice(2)}`,
+            time: time ?? Date.now(),
+          }
+          appendRunLog(runMessageId, stampedLog)
+          scheduleLogWrite({
+            detail: stampedLog.detail,
+            kind: stampedLog.kind,
+            message: stampedLog.message,
+            time: stampedLog.time,
+          })
+
+          const inlineMarker = inlineToolMarker(log)
+          if (inlineMarker) {
+            tokenQueue.push(inlineMarker)
+            if (!tokenWriteTimer) {
+              tokenWriteTimer = setTimeout(revealNextToken, 0)
+            }
+          }
+
+          if (
+            chatId &&
+            log.kind === "setup" &&
+            log.detail &&
+            /sandbox/i.test(log.message)
+          ) {
+            mergeThreadRunState(chatId, {
+              sandboxId: log.detail,
+              sandboxState: "running",
+            })
+            void saveRunState({
+              sandboxId: log.detail,
+              sandboxState: "running",
+              threadId: chatId,
+            }).catch((error) => {
+              console.warn("Unable to save live sandbox id.", error)
+            })
+          }
+        },
+        (delta) => {
+          if (!delta) return
+          scheduleTokenReveal(delta)
+        }
+      )
+      await flushLogWrites()
+      await waitForTokenReveal()
       const content =
+        streamedContent.trim() ||
         (typeof data.lastMessage === "string" && data.lastMessage.trim()) ||
         (typeof data.stdout === "string" && data.stdout.trim()) ||
         (typeof data.stderr === "string" && data.stderr.trim()) ||
@@ -1060,31 +1297,33 @@ function ChatInner() {
       ) : null}
 
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <TopBar
+          title={view === "settings" ? "Settings" : (active?.title ?? null)}
+          repoUrl={view === "settings" ? "" : repoUrl}
+          isNew={view !== "settings" && !active}
+          sandboxId={view === "settings" ? null : activeSandboxId}
+          sandboxPending={view !== "settings" && activeRunPending}
+          sandboxState={activeSandboxState}
+          filesOpen={filesOpen}
+          canOpenFiles={view !== "settings" && Boolean(activeFileCacheScope)}
+          onToggleFiles={() => setFilesOpen((v) => !v)}
+          terminalOpen={terminalVisible}
+          onToggleTerminal={() => setTerminalOpen((v) => !v)}
+          sidebarOpen={sidebarOpen}
+          onToggleSidebar={() => setSidebarOpen((v) => !v)}
+        />
         {view === "settings" ? (
           <SettingsScreen
             authStatus={authStatus}
             authError={authError}
             sandboxPresets={sandboxPresets}
-            sidebarOpen={sidebarOpen}
-            onToggleSidebar={() => setSidebarOpen((v) => !v)}
           />
         ) : (
           <>
-            <TopBar
-              title={active?.title ?? null}
-              repoUrl={repoUrl}
-              isNew={!active}
-              sandboxId={activeSandboxId}
-              filesOpen={filesOpen}
-              onToggleFiles={() => setFilesOpen((v) => !v)}
-              terminalOpen={terminalVisible}
-              onToggleTerminal={() => setTerminalOpen((v) => !v)}
-              sidebarOpen={sidebarOpen}
-              onToggleSidebar={() => setSidebarOpen((v) => !v)}
-            />
             {activeFilePath ? (
               <FileEditorPanel
                 sandboxId={activeSandboxId}
+                cacheScope={activeFileCacheScope}
                 activePath={activeFilePath}
                 diff={editorDiff ?? undefined}
                 mode={activeFileMode}
@@ -1122,8 +1361,8 @@ function ChatInner() {
                       {messages.map((m) => (
                         <MessageBlock
                           key={m.id}
-                          message={m}
-                          logs={runLogs[m.id as string] ?? EMPTY_LOGS}
+                          message={renderMessage(m)}
+                          logs={renderLogs(m)}
                           repoName={activeRepoName}
                           onOpenFile={openFile}
                           onOpenFileDiff={openFileDiff}
@@ -1262,8 +1501,9 @@ function ChatInner() {
       </div>
 
       <FileBrowser
-        open={filesOpen && Boolean(activeSandboxId)}
+        open={filesOpen && Boolean(activeFileCacheScope)}
         sandboxId={activeSandboxId}
+        cacheScope={activeFileCacheScope}
         diff={activeDiff ?? undefined}
         activePath={activeFilePath}
         activeMode={activeFileMode}
@@ -1305,7 +1545,10 @@ function TopBar({
   repoUrl,
   isNew,
   sandboxId,
+  sandboxPending,
+  sandboxState,
   filesOpen,
+  canOpenFiles,
   onToggleFiles,
   terminalOpen,
   onToggleTerminal,
@@ -1316,7 +1559,10 @@ function TopBar({
   repoUrl: string
   isNew: boolean
   sandboxId: string | null
+  sandboxPending: boolean
+  sandboxState?: SandboxState
   filesOpen: boolean
+  canOpenFiles: boolean
   onToggleFiles: () => void
   terminalOpen: boolean
   onToggleTerminal: () => void
@@ -1352,8 +1598,13 @@ function TopBar({
         </>
       ) : null}
       <div className="ml-auto flex items-center gap-6">
-        {sandboxId ? (
-          <SandboxStatus key={sandboxId} sandboxId={sandboxId} />
+        {sandboxId || sandboxPending ? (
+          <SandboxStatus
+            key={sandboxId ?? "pending"}
+            runPending={sandboxPending}
+            sandboxId={sandboxId}
+            sandboxState={sandboxState}
+          />
         ) : null}
         <button
           type="button"
@@ -1375,7 +1626,7 @@ function TopBar({
           onClick={onToggleFiles}
           aria-label={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
           title={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
-          disabled={!sandboxId}
+          disabled={!canOpenFiles}
           className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
         >
           {filesOpen ? (

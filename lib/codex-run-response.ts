@@ -26,6 +26,10 @@ export type CodexRunResult = {
 
 type CodexRunStreamEvent =
   | {
+      delta?: string
+      type: "assistant_delta"
+    }
+  | {
       log?: CodexRunLog
       time?: number
       type: "progress"
@@ -56,7 +60,8 @@ async function readJsonError(res: Response) {
 
 export async function readCodexRunResponse(
   res: Response,
-  onLog: (log: CodexRunLog, time?: number) => void
+  onLog: (log: CodexRunLog, time?: number) => void,
+  onContentDelta?: (delta: string) => void
 ) {
   const contentType = res.headers.get("content-type") ?? ""
 
@@ -78,7 +83,9 @@ export async function readCodexRunResponse(
     if (!trimmed) return
 
     const event = JSON.parse(trimmed) as CodexRunStreamEvent
-    if (event.type === "progress" && event.log) {
+    if (event.type === "assistant_delta" && typeof event.delta === "string") {
+      onContentDelta?.(event.delta)
+    } else if (event.type === "progress" && event.log) {
       onLog(event.log, event.time)
     } else if (event.type === "done") {
       result = event.result ?? {}

@@ -25,15 +25,12 @@ import {
 
 import { cn } from "@/lib/utils"
 import { findDiffForPath } from "@/lib/diff-metadata"
-
-type ReadResponse = {
-  path: string
-  content: string
-  size: number
-  modifiedTime: string | null
-  error?: string
-  tooLarge?: boolean
-}
+import {
+  diffCacheKey,
+  fetchSandboxTextFileIntoCache,
+  readCachedTextFile,
+  writeCachedTextFile,
+} from "@/lib/sandbox-file-cache"
 
 const IMAGE_EXTENSIONS = new Set([
   "avif",
@@ -136,12 +133,66 @@ function reconstructOldContent(
   return oldLines.join("")
 }
 
+function contentFromAdditionLines(fileDiff: FileDiffMetadata) {
+  const lines: string[] = []
+
+  for (const hunk of fileDiff.hunks) {
+    for (const block of hunk.hunkContent) {
+      if (block.type === "context") {
+        for (let j = 0; j < block.lines; j += 1) {
+          lines.push(fileDiff.additionLines[block.additionLineIndex + j])
+        }
+      } else {
+        for (let j = 0; j < block.additions; j += 1) {
+          lines.push(fileDiff.additionLines[block.additionLineIndex + j])
+        }
+      }
+    }
+  }
+
+  return lines.join("")
+}
+
+function applyDiffToOldContent(
+  oldContent: string,
+  fileDiff: FileDiffMetadata
+): string | null {
+  if (fileDiff.type === "deleted") return null
+  if (fileDiff.type === "new") return contentFromAdditionLines(fileDiff)
+  if (fileDiff.hunks.length === 0) return oldContent
+
+  const nextLines = oldContent.split(SPLIT_KEEP_NEWLINES)
+
+  for (let i = fileDiff.hunks.length - 1; i >= 0; i -= 1) {
+    const hunk = fileDiff.hunks[i]
+    const newHunkLines: string[] = []
+
+    for (const block of hunk.hunkContent) {
+      if (block.type === "context") {
+        for (let j = 0; j < block.lines; j += 1) {
+          newHunkLines.push(fileDiff.additionLines[block.additionLineIndex + j])
+        }
+      } else {
+        for (let j = 0; j < block.additions; j += 1) {
+          newHunkLines.push(fileDiff.additionLines[block.additionLineIndex + j])
+        }
+      }
+    }
+
+    const start = Math.max(0, hunk.deletionStart - 1)
+    nextLines.splice(start, hunk.deletionCount, ...newHunkLines)
+  }
+
+  return nextLines.join("")
+}
+
 const MIN_PANEL_WIDTH = 280
 const DEFAULT_PANEL_WIDTH = 640
 type FileViewMode = "diff" | "file"
 
 export function FileEditorPanel({
   sandboxId,
+  cacheScope,
   activePath,
   diff,
   mode = "file",
@@ -149,6 +200,7 @@ export function FileEditorPanel({
   placement = "side",
 }: {
   sandboxId: string | null
+  cacheScope: string | null
   activePath: string | null
   diff?: string
   mode?: FileViewMode
@@ -196,6 +248,7 @@ export function FileEditorPanel({
     () => (activePath ? findDiffForPath(diff, activePath) : undefined),
     [activePath, diff]
   )
+  const activeDiffKey = useMemo(() => diffCacheKey(diff), [diff])
   const diffStat = useMemo(() => {
     if (!fileDiff) return null
     return fileDiff.hunks.reduce(
@@ -282,6 +335,8 @@ export function FileEditorPanel({
           // effect-driven state resets.
           key={`${mode}:${sandboxId ?? ""}:${activePath}`}
           fileDiff={fileDiff}
+          cacheScope={cacheScope}
+          diffKey={activeDiffKey}
           mode={mode}
           sandboxId={sandboxId}
           path={activePath}
@@ -293,11 +348,15 @@ export function FileEditorPanel({
 
 function FileViewer({
   fileDiff,
+  cacheScope,
+  diffKey,
   mode,
   sandboxId,
   path,
 }: {
   fileDiff?: FileDiffMetadata
+  cacheScope: string | null
+  diffKey: string
   mode: FileViewMode
   sandboxId: string | null
   path: string
@@ -311,29 +370,80 @@ function FileViewer({
   const themeType: ThemeTypes = resolvedTheme === "dark" ? "dark" : "light"
 
   useEffect(() => {
-    if (mode === "diff" || !sandboxId || imagePreview) {
+    if (mode === "diff" || imagePreview) {
       return
     }
     let cancelled = false
     void (async () => {
+      const cached = cacheScope
+        ? await readCachedTextFile(cacheScope, path)
+        : null
+      if (cancelled) return
+
+      if (cached) {
+        let displayedContent = cached.content
+        if (fileDiff && cached.diffKey !== diffKey) {
+          const patchedContent = applyDiffToOldContent(cached.content, fileDiff)
+          if (patchedContent !== null) {
+            displayedContent = patchedContent
+            void writeCachedTextFile(cacheScope!, path, {
+              content: patchedContent,
+              diffKey,
+              modifiedTime: cached.modifiedTime,
+              sandboxId: sandboxId ?? cached.sandboxId,
+              size: new Blob([patchedContent]).size,
+            })
+          }
+        }
+        setContent(displayedContent)
+        setLoading(false)
+        setError(null)
+      }
+
+      if (!cached && fileDiff?.type === "new") {
+        const newFileContent = contentFromAdditionLines(fileDiff)
+        setContent(newFileContent)
+        setLoading(false)
+        setError(null)
+        if (cacheScope) {
+          void writeCachedTextFile(cacheScope, path, {
+            content: newFileContent,
+            diffKey,
+            modifiedTime: null,
+            sandboxId: sandboxId ?? undefined,
+            size: new Blob([newFileContent]).size,
+          })
+        }
+        return
+      }
+
+      const changedInCurrentDiff = Boolean(fileDiff)
+      const cacheIsCurrent =
+        cached && (!changedInCurrentDiff || cached.diffKey === diffKey)
+      if (cacheIsCurrent) return
+
+      if (!sandboxId) {
+        if (!cached) {
+          setLoading(false)
+          setError("No sandbox yet.")
+        }
+        return
+      }
+
       try {
-        const params = new URLSearchParams({
+        const fresh = await fetchSandboxTextFileIntoCache({
+          diffKey,
           path,
           sandboxId,
+          scope: cacheScope ?? `sandbox:${sandboxId}`,
         })
-        const res = await fetch(
-          `/api/sandbox/files/read?${params}`,
-          { cache: "no-store" }
-        )
-        const data: ReadResponse = await res.json()
         if (cancelled) return
-        if (!res.ok) {
-          throw new Error(data.error ?? `Request failed (${res.status})`)
-        }
-        setContent(data.content)
+        setContent(fresh.content)
       } catch (err) {
         if (cancelled) return
-        setError(err instanceof Error ? err.message : "Failed to read file")
+        if (!cached) {
+          setError(err instanceof Error ? err.message : "Failed to read file")
+        }
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -341,7 +451,7 @@ function FileViewer({
     return () => {
       cancelled = true
     }
-  }, [imagePreview, mode, sandboxId, path])
+  }, [cacheScope, diffKey, fileDiff, imagePreview, mode, sandboxId, path])
 
   const language = useMemo(() => getPierreLanguageFromPath(path), [path])
 
@@ -458,10 +568,12 @@ function FileViewer({
     )
   }
 
-  if (!sandboxId) {
+  if (!sandboxId && content === null) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 bg-background px-6 text-center">
-        <p className="text-xs text-destructive">No sandbox yet.</p>
+        <p className="text-xs text-destructive">
+          {error ?? "No sandbox yet."}
+        </p>
       </div>
     )
   }

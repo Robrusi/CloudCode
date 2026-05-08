@@ -5,7 +5,6 @@ import {
   ChevronRight,
   KeyRound,
   Layers3,
-  PanelLeft,
   Plus,
   Terminal,
   Trash2,
@@ -41,32 +40,14 @@ export function SettingsScreen({
   authStatus,
   authError,
   sandboxPresets,
-  sidebarOpen,
-  onToggleSidebar,
 }: {
   authStatus: AuthStatus | null
   authError: string
   sandboxPresets: SandboxPresetRecord[]
-  sidebarOpen: boolean
-  onToggleSidebar: () => void
 }) {
   const connected = Boolean(authStatus?.exists)
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <header className="flex h-[3.25rem] shrink-0 items-center gap-2.5 border-b border-border/60 bg-background/80 pr-4 pl-2 backdrop-blur-xl">
-        <button
-          type="button"
-          onClick={onToggleSidebar}
-          aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
-          title={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
-          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        >
-          <PanelLeft className="size-3.5" />
-        </button>
-        <span className="min-w-0 truncate text-sm font-medium text-foreground/85">
-          Settings
-        </span>
-      </header>
       <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         <div className="mx-auto w-full max-w-2xl px-6 pt-10 pb-20">
           <h1 className="text-2xl font-medium tracking-tight text-foreground/90">

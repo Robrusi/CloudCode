@@ -25,7 +25,15 @@ function formatMinutes(value: number | null) {
   return `${hours}h auto-stop`
 }
 
-export function SandboxStatus({ sandboxId }: { sandboxId: string }) {
+export function SandboxStatus({
+  runPending = false,
+  sandboxId,
+  sandboxState,
+}: {
+  runPending?: boolean
+  sandboxId: string | null
+  sandboxState?: SandboxInfo["state"]
+}) {
   const [info, setInfo] = useState<SandboxInfo | null>(null)
   const [missing, setMissing] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -34,6 +42,13 @@ export function SandboxStatus({ sandboxId }: { sandboxId: string }) {
     let cancelled = false
 
     async function load() {
+      if (!sandboxId) {
+        setInfo(null)
+        setMissing(false)
+        setLoading(false)
+        return
+      }
+
       try {
         const res = await fetch(
           `/api/sandbox/info?sandboxId=${encodeURIComponent(sandboxId)}`,
@@ -77,6 +92,27 @@ export function SandboxStatus({ sandboxId }: { sandboxId: string }) {
       window.clearInterval(id)
     }
   }, [sandboxId])
+
+  if (runPending && sandboxId && sandboxState === "running" && !info) {
+    return (
+      <span
+        title={`Daytona sandbox ${sandboxId}\nRun is active; checking Daytona status`}
+        className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground"
+      >
+        <CircleDot className="size-3.5 text-emerald-600 dark:text-emerald-400" />
+        <span>Running</span>
+      </span>
+    )
+  }
+
+  if (runPending && !sandboxId) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Loader2 className="size-3.5 animate-spin" />
+        Starting
+      </span>
+    )
+  }
 
   if (loading && !info) {
     return (
