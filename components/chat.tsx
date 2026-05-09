@@ -1,6 +1,6 @@
 "use client"
 
-import { Show, SignInButton } from "@clerk/nextjs"
+import { Show, SignInButton, useUser } from "@clerk/nextjs"
 import { useMutation, useQuery } from "convex/react"
 import {
   ArrowUp,
@@ -236,6 +236,7 @@ export function Chat() {
 }
 
 function ChatInner() {
+  const { user } = useUser()
   const { isLoading: userLoading } = useStoreUserEffect()
   const rawChats = useQuery(api.chats.list)
   const chats = useMemo(() => (rawChats ?? []) as ChatRecord[], [rawChats])
@@ -435,6 +436,13 @@ function ChatInner() {
     const label = repoLabel(repoUrl)
     return label.split("/").pop() || null
   }, [repoUrl])
+  const userFirstName = useMemo(() => {
+    const name =
+      user?.firstName ??
+      user?.fullName ??
+      user?.primaryEmailAddress?.emailAddress?.split("@")[0]
+    return name?.trim().split(/\s+/)[0] || null
+  }, [user])
 
   const openFile = useCallback((path: string) => {
     setActiveFilePath(path)
@@ -1349,12 +1357,10 @@ function ChatInner() {
                   {empty ? (
                     <div className="flex flex-1 flex-col items-center justify-center text-center">
                       <h1 className="text-3xl font-medium tracking-tight text-foreground/90">
-                        What should we build?
+                        {userFirstName
+                          ? `What are we building, ${userFirstName}?`
+                          : "What are we building?"}
                       </h1>
-                      <p className="mt-3 text-sm text-muted-foreground">
-                        Describe a change. It runs in a sandbox against your
-                        repo.
-                      </p>
                     </div>
                   ) : (
                     <div className="space-y-8">
