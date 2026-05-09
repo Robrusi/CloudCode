@@ -179,28 +179,59 @@ const AssistantBody = memo(function AssistantBody({
   }
   flushToolBuf()
 
-  return (
-    <div className="space-y-3">
-      {grouped.map((seg, i) => {
-        if (seg.kind === "tools") {
-          return <ToolGroup key={i} details={seg.details} />
-        }
-        if (!seg.text.trim()) return null
-        return (
-          <Markdown
-            key={i}
-            text={seg.text}
-            className={cn(
-              "text-[15px] leading-7",
-              error && "text-destructive"
-            )}
-            repoName={repoName}
-            onOpenFile={onOpenFile}
-          />
-        )
-      })}
-    </div>
-  )
+  let lastTextIndex = -1
+  for (let i = grouped.length - 1; i >= 0; i--) {
+    const seg = grouped[i]
+    if (seg.kind === "text" && seg.text.trim()) {
+      lastTextIndex = i
+      break
+    }
+  }
+  const hasEarlierContent = grouped
+    .slice(0, lastTextIndex)
+    .some(
+      (seg) =>
+        seg.kind === "tools" || (seg.kind === "text" && seg.text.trim())
+    )
+  const showFinalSeparator = lastTextIndex > 0 && hasEarlierContent
+
+  const rendered: React.ReactNode[] = []
+  grouped.forEach((seg, i) => {
+    if (showFinalSeparator && i === lastTextIndex) {
+      rendered.push(
+        <div
+          key={`sep-${i}`}
+          role="separator"
+          aria-label="Response"
+          className="flex items-center gap-4 py-4"
+        >
+          <div className="h-px flex-1 bg-border" />
+          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
+            Response
+          </span>
+          <div className="h-px flex-1 bg-border" />
+        </div>
+      )
+    }
+    if (seg.kind === "tools") {
+      rendered.push(<ToolGroup key={i} details={seg.details} />)
+    } else if (seg.text.trim()) {
+      rendered.push(
+        <Markdown
+          key={i}
+          text={seg.text}
+          className={cn(
+            "text-[15px] leading-7",
+            error && "text-destructive"
+          )}
+          repoName={repoName}
+          onOpenFile={onOpenFile}
+        />
+      )
+    }
+  })
+
+  return <div className="space-y-3">{rendered}</div>
 })
 
 const RunSetupSummary = memo(function RunSetupSummary({
