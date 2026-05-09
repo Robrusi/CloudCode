@@ -197,6 +197,7 @@ export function FileEditorPanel({
   diff,
   mode = "file",
   onClose,
+  onModeChange,
   placement = "side",
 }: {
   sandboxId: string | null
@@ -205,6 +206,7 @@ export function FileEditorPanel({
   diff?: string
   mode?: FileViewMode
   onClose: () => void
+  onModeChange?: (mode: FileViewMode) => void
   placement?: "main" | "side"
 }) {
   // Panel width persists across mounts so the user's preferred size sticks
@@ -304,9 +306,18 @@ export function FileEditorPanel({
             path={activePath}
           />
         ) : null}
-        <span className="mr-[7px] shrink-0 text-[11px] tracking-wide text-muted-foreground uppercase">
-          {mode === "diff" ? "Diff" : "File"}
-        </span>
+        <div className="flex shrink-0 items-center rounded-md border border-border/70 bg-background p-0.5">
+          <ModeButton
+            active={mode === "file"}
+            label="File"
+            onClick={() => onModeChange?.("file")}
+          />
+          <ModeButton
+            active={mode === "diff"}
+            label="Diff"
+            onClick={() => onModeChange?.("diff")}
+          />
+        </div>
         {diffStat ? (
           <span
             className="shrink-0 font-mono text-[11px] tabular-nums"
@@ -343,6 +354,32 @@ export function FileEditorPanel({
         />
       </div>
     </section>
+  )
+}
+
+function ModeButton({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "inline-flex h-6 min-w-11 items-center justify-center rounded px-2 text-[11px] font-medium transition-colors",
+        active
+          ? "bg-accent text-foreground"
+          : "text-muted-foreground hover:text-foreground"
+      )}
+    >
+      {label}
+    </button>
   )
 }
 

@@ -180,6 +180,8 @@ const SPEED_KEY = "cloudcode:speed"
 const THINKING_KEY = "cloudcode:thinking"
 const ACTIVE_KEY = "cloudcode:activeChatId"
 const DRAFT_RUN_KEY = "__draft__"
+const DEFAULT_COMPOSER_HEIGHT = 144
+const THREAD_BOTTOM_CLEARANCE = 32
 const EMPTY_LOGS: RunLog[] = []
 const EMPTY_MESSAGES: Message[] = []
 
@@ -336,15 +338,25 @@ function ChatInner() {
   const composerRef = useRef<HTMLDivElement>(null)
   const threadRef = useRef<HTMLDivElement | null>(null)
   const isAtBottomRef = useRef(true)
-  const [composerHeight, setComposerHeight] = useState(144)
+  const [composerHeight, setComposerHeight] = useState(DEFAULT_COMPOSER_HEIGHT)
 
-  function scrollThreadToBottom() {
+  const scrollThreadToBottom = useCallback(() => {
     const el = threadRef.current
     if (!el) return
     el.style.scrollBehavior = "auto"
     el.scrollTop = el.scrollHeight
     isAtBottomRef.current = true
-  }
+  }, [])
+
+  const settleThreadAtBottom = useCallback(() => {
+    isAtBottomRef.current = true
+    scrollThreadToBottom()
+
+    requestAnimationFrame(() => {
+      scrollThreadToBottom()
+      requestAnimationFrame(scrollThreadToBottom)
+    })
+  }, [scrollThreadToBottom])
 
   function onThreadScroll(event: ReactUIEvent<HTMLDivElement>) {
     const el = event.currentTarget
@@ -352,13 +364,12 @@ function ChatInner() {
       el.scrollHeight - el.scrollTop - el.clientHeight < 80
   }
 
-  function setThreadElement(el: HTMLDivElement | null) {
+  const setThreadElement = useCallback((el: HTMLDivElement | null) => {
     threadRef.current = el
     if (el) {
-      isAtBottomRef.current = true
-      scrollThreadToBottom()
+      settleThreadAtBottom()
     }
-  }
+  }, [settleThreadAtBottom])
 
   const active = useMemo(
     () => chats.find((c) => c.id === activeId) ?? null,
@@ -401,6 +412,10 @@ function ChatInner() {
   const activeRunPending = activeLocalRunPending || activeMessagePending
   const canStopActiveRun = Boolean(runControllersRef.current[activeRunKey])
   const terminalVisible = terminalOpen && Boolean(activeSandboxId)
+  const threadBottomInset =
+    Math.max(composerHeight, DEFAULT_COMPOSER_HEIGHT) +
+    THREAD_BOTTOM_CLEARANCE +
+    (terminalVisible ? terminalHeight : 0)
 
   const repoUrl = active ? active.repoUrl : draftRepo
   const baseBranch = active ? (active.baseBranch ?? "") : draftBaseBranch
@@ -572,10 +587,14 @@ function ChatInner() {
   ])
 
   useLayoutEffect(() => {
-    isAtBottomRef.current = true
     setActiveFileDiff(null)
-    scrollThreadToBottom()
-  }, [activeId])
+    settleThreadAtBottom()
+  }, [activeId, settleThreadAtBottom])
+
+  useLayoutEffect(() => {
+    if (!isAtBottomRef.current) return
+    settleThreadAtBottom()
+  }, [threadBottomInset, settleThreadAtBottom])
 
   useEffect(() => {
     const el = threadRef.current
@@ -583,14 +602,13 @@ function ChatInner() {
 
     const observer = new ResizeObserver(() => {
       if (!isAtBottomRef.current) return
-      el.style.scrollBehavior = "auto"
-      el.scrollTop = el.scrollHeight
+      scrollThreadToBottom()
     })
     observer.observe(el)
     if (el.firstElementChild) observer.observe(el.firstElementChild)
 
     return () => observer.disconnect()
-  }, [activeId, activeFilePath])
+  }, [activeId, activeFilePath, scrollThreadToBottom])
 
   function appendRunLog(messageId: Id<"messages">, log: RunLog) {
     setRunLogs((current) => {
@@ -1335,6 +1353,7 @@ function ChatInner() {
                 activePath={activeFilePath}
                 diff={editorDiff ?? undefined}
                 mode={activeFileMode}
+                onModeChange={setActiveFileMode}
                 onClose={() => {
                   setActiveFilePath(null)
                   setActiveFileDiff(null)
@@ -1343,16 +1362,14 @@ function ChatInner() {
               />
             ) : (
               <div
+                key={activeRunKey}
                 ref={setThreadElement}
                 onScroll={onThreadScroll}
                 className="min-h-0 flex-1 overflow-y-auto [contain:paint]"
+                style={{ scrollPaddingBottom: threadBottomInset }}
               >
                 <div
                   className="mx-auto flex min-h-full w-full max-w-2xl flex-col px-6 pt-16"
-                  style={{
-                    paddingBottom:
-                      composerHeight + (terminalVisible ? terminalHeight : 0),
-                  }}
                 >
                   {empty ? (
                     <div className="flex flex-1 flex-col items-center justify-center text-center">
@@ -1376,6 +1393,11 @@ function ChatInner() {
                       ))}
                     </div>
                   )}
+                  <div
+                    aria-hidden="true"
+                    className="shrink-0"
+                    style={{ height: threadBottomInset }}
+                  />
                 </div>
               </div>
             )}
