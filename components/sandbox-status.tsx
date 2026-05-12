@@ -98,14 +98,6 @@ export function useSandboxInfo({
         if (cancelled) return
         if (!res.ok) {
           setMissing(Boolean(data?.notFound))
-          if (data?.notFound) {
-            onStateChangeRef.current?.("deleted", sandboxId, {
-              autoStopInterval: null,
-              lastActivityAt: null,
-              sandboxId,
-              state: "deleted",
-            })
-          }
           return
         }
         applyInfo(parseSandboxInfo(data))
@@ -132,12 +124,6 @@ export function useSandboxInfo({
           setInfo(null)
           setMissing(true)
           setLoading(false)
-          onStateChangeRef.current?.("deleted", sandboxId, {
-            autoStopInterval: null,
-            lastActivityAt: null,
-            sandboxId,
-            state: "deleted",
-          })
           source.close()
           return
         }

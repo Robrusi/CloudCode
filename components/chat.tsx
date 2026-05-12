@@ -417,18 +417,20 @@ function ChatInner() {
     ? liveRunStates[activeId as string]
     : undefined
   const activeSandboxId =
-    activeRunState?.sandboxState === "deleted"
-      ? null
-      : hasCachedRunKey(activeRunState, "sandboxId")
-        ? (activeRunState?.sandboxId ?? null)
-        : (active?.sandboxId ?? null)
+    hasCachedRunKey(activeRunState, "sandboxId")
+      ? (activeRunState?.sandboxId ?? null)
+      : (active?.sandboxId ?? null)
   const activeFileCacheScope = activeId
     ? `thread:${activeId as string}`
     : activeSandboxId
       ? `sandbox:${activeSandboxId}`
       : null
-  const activeSandboxState =
+  const rawActiveSandboxState =
     activeRunState?.sandboxState ?? active?.sandboxState
+  const activeSandboxState =
+    activeSandboxId && rawActiveSandboxState === "deleted"
+      ? undefined
+      : rawActiveSandboxState
   const serverMessages = active?.messages ?? []
   const optimisticRun = optimisticRuns[activeRunKey]
   const optimisticMessages =
@@ -1270,6 +1272,9 @@ function ChatInner() {
     const runKey = active ? (active.id as string) : DRAFT_RUN_KEY
     runControllersRef.current[runKey]?.abort()
     if (!activeSandboxId) return
+    if (active) {
+      void persistSandboxState(active.id, activeSandboxId, "running")
+    }
     closeBrowserTerminalSession(activeSandboxId)
     setTerminalOpen(false)
   }
@@ -1388,10 +1393,7 @@ function ChatInner() {
         if (!res.ok) throw new Error("Failed to delete sandbox.")
 
         await clearSandbox({ threadId })
-        mergeThreadRunState(threadId, {
-          sandboxId,
-          sandboxState: "deleted",
-        })
+        removeThreadRunState(threadId)
         setActiveFilePath(null)
         setFilesOpen(false)
       } catch (error) {
@@ -1971,12 +1973,12 @@ function SandboxMenu({
   }
 
   let display: DisplayState
-  if (sandboxPending && sandboxId && sandboxState === "running" && !info) {
+  if (sandboxPending && sandboxId && !info) {
     display = "running"
   } else if (sandboxPending && !sandboxId) {
     display = "starting"
   } else if (missing) {
-    display = "missing"
+    display = "deleted"
   } else if (info) {
     display = info.state
   } else if (sandboxState === "deleted") {
@@ -1993,8 +1995,7 @@ function SandboxMenu({
   const canAct =
     Boolean(sandboxId) &&
     display !== "deleted" &&
-    display !== "idle" &&
-    display !== "missing"
+    display !== "idle"
 
   const showSpinner = busy || display === "starting" || display === "checking"
   const title =
