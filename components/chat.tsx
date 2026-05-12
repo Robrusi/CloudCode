@@ -805,6 +805,11 @@ function ChatInner() {
     setNewChatOpen(true)
   }
 
+  function startNewChatInRepo(repoUrl: string) {
+    persistDraftRepo(repoUrl)
+    setNewChatOpen(true)
+  }
+
   function confirmNewChat({
     repoUrl: nextRepo,
     baseBranch: nextBaseBranch,
@@ -1288,6 +1293,7 @@ function ChatInner() {
           activeId={activeId}
           currentView={view}
           onNewChat={startNewChat}
+          onNewChatInRepo={startNewChatInRepo}
           onSelect={selectChat}
           onDelete={deleteChat}
           onRename={renameChat}
@@ -1353,6 +1359,7 @@ function ChatInner() {
                 activePath={activeFilePath}
                 diff={editorDiff ?? undefined}
                 mode={activeFileMode}
+                onOpenFile={openFile}
                 onModeChange={setActiveFileMode}
                 onClose={() => {
                   setActiveFilePath(null)

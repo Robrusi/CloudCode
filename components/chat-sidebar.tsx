@@ -3,7 +3,7 @@
 import { useClerk } from "@clerk/nextjs"
 import {
   ChevronRight,
-  Folder,
+  Plus,
   Settings,
   SquarePen,
   User,
@@ -27,11 +27,28 @@ function repoLabel(url: string) {
     .replace(/\.git$/, "")
 }
 
+function relativeTime(ts: number) {
+  const diff = Math.max(0, Date.now() - ts)
+  const sec = Math.floor(diff / 1000)
+  if (sec < 60) return sec <= 1 ? "just now" : `${sec} seconds ago`
+  const min = Math.floor(sec / 60)
+  if (min < 60) return min === 1 ? "1 minute ago" : `${min} minutes ago`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return hr === 1 ? "1 hour ago" : `${hr} hours ago`
+  const day = Math.floor(hr / 24)
+  if (day < 30) return day === 1 ? "1 day ago" : `${day} days ago`
+  const mo = Math.floor(day / 30)
+  if (mo < 12) return mo === 1 ? "1 month ago" : `${mo} months ago`
+  const yr = Math.floor(day / 365)
+  return yr === 1 ? "1 year ago" : `${yr} years ago`
+}
+
 export function Sidebar({
   chats,
   activeId,
   currentView,
   onNewChat,
+  onNewChatInRepo,
   onSelect,
   onDelete,
   onRename,
@@ -42,6 +59,7 @@ export function Sidebar({
   activeId: Id<"threads"> | null
   currentView: "chat" | "settings"
   onNewChat: () => void
+  onNewChatInRepo: (repoUrl: string) => void
   onSelect: (id: Id<"threads">) => void
   onDelete: (id: Id<"threads">) => void
   onRename: (id: Id<"threads">, title: string) => void
@@ -100,11 +118,13 @@ export function Sidebar({
               <FolderGroup
                 key={g.repo || "untitled"}
                 label={repoLabel(g.repo)}
+                repoUrl={g.repo}
                 items={g.items}
                 activeId={activeId}
                 onSelect={onSelect}
                 onDelete={onDelete}
                 onRename={onRename}
+                onNewChatInRepo={onNewChatInRepo}
               />
             ))}
           </div>
@@ -140,37 +160,50 @@ export function Sidebar({
 
 function FolderGroup({
   label,
+  repoUrl,
   items,
   activeId,
   onSelect,
   onDelete,
   onRename,
+  onNewChatInRepo,
 }: {
   label: string
+  repoUrl: string
   items: SidebarChat[]
   activeId: Id<"threads"> | null
   onSelect: (id: Id<"threads">) => void
   onDelete: (id: Id<"threads">) => void
   onRename: (id: Id<"threads">, title: string) => void
+  onNewChatInRepo: (repoUrl: string) => void
 }) {
   const [open, setOpen] = useState(true)
 
   return (
     <div>
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <Folder className="size-3.5 shrink-0" />
-        <span className="flex-1 truncate text-left">{label}</span>
-        <ChevronRight
-          className={cn(
-            "size-3.5 shrink-0 transition-transform",
-            open && "rotate-90"
-          )}
-        />
-      </button>
+      <div className="group/folder flex w-full items-center gap-1 px-2.5 py-1.5 text-sm text-muted-foreground">
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left transition-colors hover:text-foreground"
+        >
+          <ChevronRight
+            className={cn(
+              "size-3.5 shrink-0 transition-transform",
+              open && "rotate-90"
+            )}
+          />
+          <span className="flex-1 truncate">{label}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onNewChatInRepo(repoUrl)}
+          aria-label={`New chat in ${label}`}
+          className="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition group-hover/folder:opacity-100 hover:bg-muted hover:text-foreground"
+        >
+          <Plus className="size-3.5" />
+        </button>
+      </div>
       {open && (
         <div>
           {items.map((c) => (
@@ -253,10 +286,13 @@ function SidebarItem({
         <button
           type="button"
           onClick={onSelect}
-          className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5 text-left text-sm text-foreground/85"
+          className="flex min-w-0 flex-1 flex-col gap-0.5 px-2.5 py-2 text-left"
         >
-          <span className="min-w-0 flex-1 truncate">
+          <span className="min-w-0 truncate text-sm text-foreground">
             {chat.title || "Untitled"}
+          </span>
+          <span className="min-w-0 truncate text-xs text-muted-foreground">
+            {relativeTime(chat.updatedAt)}
           </span>
         </button>
       )}

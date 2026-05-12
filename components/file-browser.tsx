@@ -28,7 +28,7 @@ import {
 } from "@/lib/sandbox-file-cache"
 
 type FileEntry = { path: string; type: "file" | "dir" }
-export type FileBrowserOpenMode = "diff" | "file"
+export type FileBrowserOpenMode = "diff" | "file" | "preview"
 type BrowserView = "diffs" | "files"
 
 type ListResponse = {

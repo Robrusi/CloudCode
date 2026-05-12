@@ -23,7 +23,7 @@ import {
   useState,
 } from "react"
 
-import { cn } from "@/lib/utils"
+import { Markdown } from "@/components/chat-markdown"
 import { findDiffForPath } from "@/lib/diff-metadata"
 import {
   diffCacheKey,
@@ -31,6 +31,7 @@ import {
   readCachedTextFile,
   writeCachedTextFile,
 } from "@/lib/sandbox-file-cache"
+import { cn } from "@/lib/utils"
 
 const IMAGE_EXTENSIONS = new Set([
   "avif",
@@ -84,6 +85,11 @@ function basename(path: string): string {
 function isImagePath(path: string): boolean {
   const ext = path.split(".").pop()?.toLowerCase()
   return ext ? IMAGE_EXTENSIONS.has(ext) : false
+}
+
+function isMarkdownPath(path: string): boolean {
+  const ext = path.split(".").pop()?.toLowerCase()
+  return ext === "md" || ext === "mdx" || ext === "markdown"
 }
 
 /**
@@ -188,7 +194,7 @@ function applyDiffToOldContent(
 
 const MIN_PANEL_WIDTH = 280
 const DEFAULT_PANEL_WIDTH = 640
-type FileViewMode = "diff" | "file"
+type FileViewMode = "diff" | "file" | "preview"
 
 export function FileEditorPanel({
   sandboxId,
@@ -197,6 +203,7 @@ export function FileEditorPanel({
   diff,
   mode = "file",
   onClose,
+  onOpenFile,
   onModeChange,
   placement = "side",
 }: {
@@ -206,6 +213,7 @@ export function FileEditorPanel({
   diff?: string
   mode?: FileViewMode
   onClose: () => void
+  onOpenFile?: (path: string) => void
   onModeChange?: (mode: FileViewMode) => void
   placement?: "main" | "side"
 }) {
@@ -265,6 +273,7 @@ export function FileEditorPanel({
   if (!activePath) return null
 
   const sidePlacement = placement === "side"
+  const markdownPreview = isMarkdownPath(activePath)
 
   return (
     <section
@@ -317,6 +326,13 @@ export function FileEditorPanel({
             label="Diff"
             onClick={() => onModeChange?.("diff")}
           />
+          {markdownPreview ? (
+            <ModeButton
+              active={mode === "preview"}
+              label="Preview"
+              onClick={() => onModeChange?.("preview")}
+            />
+          ) : null}
         </div>
         {diffStat ? (
           <span
@@ -349,6 +365,7 @@ export function FileEditorPanel({
           cacheScope={cacheScope}
           diffKey={activeDiffKey}
           mode={mode}
+          onOpenFile={onOpenFile}
           sandboxId={sandboxId}
           path={activePath}
         />
@@ -388,6 +405,7 @@ function FileViewer({
   cacheScope,
   diffKey,
   mode,
+  onOpenFile,
   sandboxId,
   path,
 }: {
@@ -395,10 +413,12 @@ function FileViewer({
   cacheScope: string | null
   diffKey: string
   mode: FileViewMode
+  onOpenFile?: (path: string) => void
   sandboxId: string | null
   path: string
 }) {
   const imagePreview = useMemo(() => isImagePath(path), [path])
+  const markdownPreview = useMemo(() => isMarkdownPath(path), [path])
   const [content, setContent] = useState<string | null>(null)
   const [loading, setLoading] = useState(!imagePreview)
   const [error, setError] = useState<string | null>(null)
@@ -632,6 +652,19 @@ function FileViewer({
   }
 
   if (!file) return null
+
+  if (mode === "preview" && markdownPreview) {
+    return (
+      <div className="h-full min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-background">
+        <Markdown
+          text={content ?? ""}
+          repoName={null}
+          onOpenFile={onOpenFile ?? (() => undefined)}
+          className="mx-auto max-w-3xl px-6 py-5 text-sm leading-6"
+        />
+      </div>
+    )
+  }
 
   // File has changes — render the full file as a diff (same component the
   // Diffs view uses) so removals/additions look identical. `expandUnchanged`
