@@ -4,18 +4,22 @@ import { Show, SignInButton, useUser } from "@clerk/nextjs"
 import { useMutation, useQuery } from "convex/react"
 import {
   ArrowUp,
+  ChevronDown,
   Folder,
   FolderOpen,
+  Loader2,
   PanelLeft,
   Plus,
   SquareTerminal,
   Square,
 } from "lucide-react"
 import dynamic from "next/dynamic"
+import { createPortal } from "react-dom"
 import {
   type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
+  type ReactNode,
   type UIEvent as ReactUIEvent,
   useCallback,
   useEffect,
@@ -35,7 +39,12 @@ import {
 import { SettingsScreen } from "@/components/settings-screen"
 import { Sidebar } from "@/components/chat-sidebar"
 import { NewChatDialog } from "@/components/new-chat-dialog"
-import { SandboxStatus } from "@/components/sandbox-status"
+import {
+  SANDBOX_STATE_LABEL,
+  formatSandboxAutoStop,
+  useSandboxInfo,
+  type SandboxInfo,
+} from "@/components/sandbox-status"
 import {
   BranchChip,
   IconButton,
@@ -89,6 +98,7 @@ type Message = {
   id: Id<"messages">
   role: Role
   content: string
+  createdAt?: number
   pending?: boolean
   error?: boolean
   meta?: {
@@ -119,6 +129,7 @@ type CachedRunState = {
 }
 
 type SandboxState = "running" | "stopped" | "deleted" | "error"
+type SandboxAction = "pause" | "resume" | "delete"
 
 type AuthStatus = {
   accountId?: string | null
@@ -256,6 +267,7 @@ function ChatInner() {
   )
   const updateAssistantContent = useMutation(api.chats.updateAssistantContent)
   const saveRunState = useMutation(api.chats.saveRunState)
+  const clearSandbox = useMutation(api.chats.clearSandbox)
   const deleteThreadMutation = useMutation(api.chats.deleteThread)
   const updateThread = useMutation(api.chats.updateThread)
   const [activeId, setActiveId] = useState<Id<"threads"> | null>(() =>
@@ -266,6 +278,8 @@ function ChatInner() {
   const [pendingDeleteId, setPendingDeleteId] = useState<Id<"threads"> | null>(
     null
   )
+  const [pendingSandboxDelete, setPendingSandboxDelete] = useState(false)
+  const [sandboxAction, setSandboxAction] = useState<SandboxAction | null>(null)
   const [input, setInput] = useState("")
   const [draftRepo, setDraftRepo] = useState(() =>
     typeof window === "undefined" ? "" : (localStorage.getItem(REPO_KEY) ?? "")
@@ -365,12 +379,15 @@ function ChatInner() {
       el.scrollHeight - el.scrollTop - el.clientHeight < 80
   }
 
-  const setThreadElement = useCallback((el: HTMLDivElement | null) => {
-    threadRef.current = el
-    if (el) {
-      settleThreadAtBottom()
-    }
-  }, [settleThreadAtBottom])
+  const setThreadElement = useCallback(
+    (el: HTMLDivElement | null) => {
+      threadRef.current = el
+      if (el) {
+        settleThreadAtBottom()
+      }
+    },
+    [settleThreadAtBottom]
+  )
 
   const active = useMemo(
     () => chats.find((c) => c.id === activeId) ?? null,
@@ -378,23 +395,33 @@ function ChatInner() {
   )
   const sidebarChats = useMemo(
     () =>
-      chats.map((chat) => ({
-        ...chat,
-        ...(liveRunStates[chat.id as string] ?? {}),
-        pending:
-          Boolean(runningRunKeys[chat.id as string]) ||
-          chat.messages.some((m) => m.pending),
-      })),
+      chats.map((chat) => {
+        const lastUserMessageAt = chat.messages.reduce((max, m) => {
+          if (m.role !== "user") return max
+          const t = m.createdAt ?? 0
+          return t > max ? t : max
+        }, 0)
+        return {
+          ...chat,
+          ...(liveRunStates[chat.id as string] ?? {}),
+          pending:
+            Boolean(runningRunKeys[chat.id as string]) ||
+            chat.messages.some((m) => m.pending),
+          lastUserMessageAt: lastUserMessageAt || chat.updatedAt,
+        }
+      }),
     [chats, liveRunStates, runningRunKeys]
   )
   const activeRunKey = activeId ? (activeId as string) : DRAFT_RUN_KEY
-  const activeRunState = activeId ? liveRunStates[activeId as string] : undefined
+  const activeRunState = activeId
+    ? liveRunStates[activeId as string]
+    : undefined
   const activeSandboxId =
     activeRunState?.sandboxState === "deleted"
       ? null
       : hasCachedRunKey(activeRunState, "sandboxId")
-      ? (activeRunState?.sandboxId ?? null)
-      : (active?.sandboxId ?? null)
+        ? (activeRunState?.sandboxId ?? null)
+        : (active?.sandboxId ?? null)
   const activeFileCacheScope = activeId
     ? `thread:${activeId as string}`
     : activeSandboxId
@@ -974,11 +1001,7 @@ function ChatInner() {
 
       const previousAssistant = active?.messages
         .toReversed()
-        .find(
-          (m) =>
-            m.role === "assistant" &&
-            (m.meta?.branch || m.meta?.diff)
-        )
+        .find((m) => m.role === "assistant" && (m.meta?.branch || m.meta?.diff))
       const cachedRunState = threadRunStateRef.current[chatId as string]
       const branchName =
         cachedRunState?.branch ?? previousAssistant?.meta?.branch
@@ -1198,10 +1221,7 @@ function ChatInner() {
         sandboxState: nextRunState.sandboxState,
         threadId: chatId,
       })
-      if (
-        nextRunState.codexThreadId ||
-        nextRunState.sandboxId
-      ) {
+      if (nextRunState.codexThreadId || nextRunState.sandboxId) {
         try {
           await saveRunState({
             codexThreadId: nextRunState.codexThreadId,
@@ -1229,19 +1249,7 @@ function ChatInner() {
           sandboxId: liveRunState?.sandboxId,
           threadId: chatId,
         })
-        if (aborted && liveRunState?.sandboxId) {
-          mergeThreadRunState(chatId, {
-            sandboxId: liveRunState.sandboxId,
-            sandboxState: "stopped",
-          })
-          await saveRunState({
-            sandboxId: liveRunState.sandboxId,
-            sandboxState: "stopped",
-            threadId: chatId,
-          }).catch((error) => {
-            console.warn("Unable to save stopped sandbox state.", error)
-          })
-        } else if (liveRunState?.sandboxId) {
+        if (liveRunState?.sandboxId) {
           await saveRunState({
             sandboxId: liveRunState.sandboxId,
             sandboxState: "running",
@@ -1261,19 +1269,159 @@ function ChatInner() {
   function stopActiveRun() {
     const runKey = active ? (active.id as string) : DRAFT_RUN_KEY
     runControllersRef.current[runKey]?.abort()
-    if (!active || !activeSandboxId) return
-    mergeThreadRunState(active.id, {
-      sandboxId: activeSandboxId,
-      sandboxState: "stopped",
-    })
+    if (!activeSandboxId) return
     closeBrowserTerminalSession(activeSandboxId)
     setTerminalOpen(false)
+  }
+
+  function normalizeSandboxActionState(
+    value: unknown,
+    fallback: SandboxState
+  ): SandboxState {
+    return value === "running" ||
+      value === "stopped" ||
+      value === "deleted" ||
+      value === "error"
+      ? value
+      : fallback
+  }
+
+  async function persistSandboxState(
+    threadId: Id<"threads">,
+    sandboxId: string,
+    sandboxState: SandboxState
+  ) {
+    mergeThreadRunState(threadId, {
+      sandboxId,
+      sandboxState,
+    })
+    await saveRunState({
+      sandboxId,
+      sandboxState,
+      threadId,
+    }).catch((error) => {
+      console.warn("Unable to save sandbox state.", error)
+    })
+  }
+
+  async function runSandboxAction(
+    action: Exclude<SandboxAction, "delete">,
+    endpoint: string,
+    fallbackState: SandboxState
+  ) {
+    if (!active || !activeSandboxId || sandboxAction) return
+
+    const threadId = active.id
+    const sandboxId = activeSandboxId
+    setSandboxAction(action)
+    if (action === "pause") {
+      runControllersRef.current[threadId as string]?.abort()
+      closeBrowserTerminalSession(sandboxId)
+      setTerminalOpen(false)
+    }
+
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sandboxId }),
+      })
+      const data = (await res.json()) as {
+        sandboxId?: unknown
+        state?: unknown
+      }
+      if (!res.ok) {
+        throw new Error(
+          typeof data === "object" &&
+            data &&
+            "error" in data &&
+            typeof data.error === "string"
+            ? data.error
+            : `Failed to ${action} sandbox.`
+        )
+      }
+
+      await persistSandboxState(
+        threadId,
+        typeof data.sandboxId === "string" ? data.sandboxId : sandboxId,
+        normalizeSandboxActionState(data.state, fallbackState)
+      )
+    } catch (error) {
+      console.warn(`Failed to ${action} sandbox.`, error)
+    } finally {
+      setSandboxAction(null)
+    }
+  }
+
+  function pauseActiveSandbox() {
+    void runSandboxAction("pause", "/api/sandbox/pause", "stopped")
+  }
+
+  function resumeActiveSandbox() {
+    void runSandboxAction("resume", "/api/sandbox/resume", "running")
+  }
+
+  function requestDeleteActiveSandbox() {
+    if (!activeSandboxId) return
+    setPendingSandboxDelete(true)
+  }
+
+  function confirmDeleteActiveSandbox() {
+    const threadId = active?.id
+    const sandboxId = activeSandboxId
+    setPendingSandboxDelete(false)
+    if (!threadId || !sandboxId || sandboxAction) return
+
+    setSandboxAction("delete")
+    runControllersRef.current[threadId as string]?.abort()
+    clearRunKey(threadId as string)
+    closeBrowserTerminalSession(sandboxId)
+    setTerminalOpen(false)
+
+    void (async () => {
+      try {
+        const res = await fetch("/api/sandbox/kill", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sandboxId }),
+        })
+        if (!res.ok) throw new Error("Failed to delete sandbox.")
+
+        await clearSandbox({ threadId })
+        mergeThreadRunState(threadId, {
+          sandboxId,
+          sandboxState: "deleted",
+        })
+        setActiveFilePath(null)
+        setFilesOpen(false)
+      } catch (error) {
+        console.warn("Failed to delete sandbox.", error)
+      } finally {
+        setSandboxAction(null)
+      }
+    })()
+  }
+
+  function handleSandboxStateChange(state: SandboxState, sandboxId: string) {
+    if (!active) return
+
+    const key = active.id as string
+    const currentState =
+      threadRunStateRef.current[key]?.sandboxState ?? active.sandboxState
+    const currentSandboxId =
+      threadRunStateRef.current[key]?.sandboxId ?? active.sandboxId
+    if (currentState === state && currentSandboxId === sandboxId) return
+
+    mergeThreadRunState(active.id, {
+      sandboxId,
+      sandboxState: state,
+    })
     void saveRunState({
-      sandboxId: activeSandboxId,
-      sandboxState: "stopped",
+      sandboxId,
+      sandboxState: state,
       threadId: active.id,
     }).catch((error) => {
-      console.warn("Unable to save stopped sandbox state.", error)
+      console.warn("Unable to save confirmed sandbox state.", error)
     })
   }
 
@@ -1332,12 +1480,27 @@ function ChatInner() {
         />
       ) : null}
 
+      {pendingSandboxDelete ? (
+        <ConfirmDialog
+          title="Delete sandbox?"
+          description="The Daytona sandbox and its filesystem will be permanently deleted. The chat history will stay."
+          confirmLabel="Delete sandbox"
+          destructive
+          onCancel={() => setPendingSandboxDelete(false)}
+          onConfirm={confirmDeleteActiveSandbox}
+        />
+      ) : null}
+
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <TopBar
           title={view === "settings" ? "Settings" : (active?.title ?? null)}
           repoUrl={view === "settings" ? "" : repoUrl}
           isNew={view !== "settings" && !active}
           sandboxId={view === "settings" ? null : activeSandboxId}
+          showSandboxControls={
+            view !== "settings" &&
+            (Boolean(active) || activeRunPending || Boolean(activeSandboxId))
+          }
           sandboxPending={view !== "settings" && activeRunPending}
           sandboxState={activeSandboxState}
           filesOpen={filesOpen}
@@ -1345,6 +1508,11 @@ function ChatInner() {
           onToggleFiles={() => setFilesOpen((v) => !v)}
           terminalOpen={terminalVisible}
           onToggleTerminal={() => setTerminalOpen((v) => !v)}
+          onSandboxStateChange={handleSandboxStateChange}
+          sandboxAction={sandboxAction}
+          onDeleteSandbox={requestDeleteActiveSandbox}
+          onPauseSandbox={pauseActiveSandbox}
+          onResumeSandbox={resumeActiveSandbox}
           sidebarOpen={sidebarOpen}
           onToggleSidebar={() => setSidebarOpen((v) => !v)}
         />
@@ -1379,9 +1547,7 @@ function ChatInner() {
                 className="min-h-0 flex-1 overflow-y-auto [contain:paint]"
                 style={{ scrollPaddingBottom: threadBottomInset }}
               >
-                <div
-                  className="mx-auto flex min-h-full w-full max-w-2xl flex-col px-6 pt-16"
-                >
+                <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col px-6 pt-16">
                   {empty ? (
                     <div className="flex flex-1 flex-col items-center justify-center text-center">
                       <h1 className="text-3xl font-medium tracking-tight text-foreground/90">
@@ -1584,11 +1750,17 @@ function TopBar({
   repoUrl,
   isNew,
   sandboxId,
+  showSandboxControls,
   sandboxPending,
   sandboxState,
   filesOpen,
   canOpenFiles,
   onToggleFiles,
+  onSandboxStateChange,
+  sandboxAction,
+  onDeleteSandbox,
+  onPauseSandbox,
+  onResumeSandbox,
   terminalOpen,
   onToggleTerminal,
   sidebarOpen,
@@ -1598,11 +1770,17 @@ function TopBar({
   repoUrl: string
   isNew: boolean
   sandboxId: string | null
+  showSandboxControls: boolean
   sandboxPending: boolean
   sandboxState?: SandboxState
   filesOpen: boolean
   canOpenFiles: boolean
   onToggleFiles: () => void
+  onSandboxStateChange: (state: SandboxState, sandboxId: string) => void
+  sandboxAction: SandboxAction | null
+  onDeleteSandbox: () => void
+  onPauseSandbox: () => void
+  onResumeSandbox: () => void
   terminalOpen: boolean
   onToggleTerminal: () => void
   sidebarOpen: boolean
@@ -1610,9 +1788,13 @@ function TopBar({
 }) {
   const displayTitle = title?.trim() || (isNew ? "New chat" : "Untitled")
   const repo = repoUrl ? repoLabel(repoUrl) : ""
+  const showSandboxSection =
+    showSandboxControls || Boolean(sandboxId || sandboxPending)
+  const showToolsSection =
+    showSandboxSection || Boolean(sandboxId || canOpenFiles)
 
   return (
-    <header className="flex h-[3.25rem] shrink-0 items-center gap-2.5 border-b border-border/60 bg-background/80 pr-4 pl-2 backdrop-blur-xl">
+    <header className="flex h-[3.25rem] shrink-0 items-center gap-2.5 border-b border-border/60 bg-background/80 pr-3 pl-2 backdrop-blur-xl">
       <button
         type="button"
         onClick={onToggleSidebar}
@@ -1636,46 +1818,273 @@ function TopBar({
           </div>
         </>
       ) : null}
-      <div className="ml-auto flex items-center gap-6">
-        {sandboxId || sandboxPending ? (
-          <SandboxStatus
+      <div className="ml-auto flex items-center gap-1">
+        {showSandboxSection ? (
+          <SandboxMenu
             key={sandboxId ?? "pending"}
-            runPending={sandboxPending}
             sandboxId={sandboxId}
+            sandboxPending={sandboxPending}
             sandboxState={sandboxState}
+            sandboxAction={sandboxAction}
+            onSandboxStateChange={onSandboxStateChange}
+            onPauseSandbox={onPauseSandbox}
+            onResumeSandbox={onResumeSandbox}
+            onDeleteSandbox={onDeleteSandbox}
           />
         ) : null}
-        <button
-          type="button"
-          onClick={onToggleTerminal}
-          onPointerEnter={() => warmBrowserTerminal(sandboxId)}
-          aria-label={
-            terminalOpen ? "Hide sandbox terminal" : "Show sandbox terminal"
-          }
-          title={
-            terminalOpen ? "Hide sandbox terminal" : "Show sandbox terminal"
-          }
-          disabled={!sandboxId}
-          className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
-        >
-          <SquareTerminal className="size-3.5" />
-        </button>
-        <button
-          type="button"
-          onClick={onToggleFiles}
-          aria-label={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
-          title={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
-          disabled={!canOpenFiles}
-          className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
-        >
-          {filesOpen ? (
-            <FolderOpen className="size-3.5" />
-          ) : (
-            <Folder className="size-3.5" />
-          )}
-        </button>
+
+        {showSandboxSection && showToolsSection ? (
+          <span aria-hidden className="mx-1 h-5 w-px bg-border/70" />
+        ) : null}
+
+        {showToolsSection ? (
+          <div className="flex items-center gap-0.5">
+            <TopBarIconButton
+              onClick={onToggleTerminal}
+              onPointerEnter={() => warmBrowserTerminal(sandboxId)}
+              active={terminalOpen}
+              disabled={!sandboxId}
+              label={
+                terminalOpen ? "Hide sandbox terminal" : "Show sandbox terminal"
+              }
+            >
+              <SquareTerminal className="size-3.5" />
+            </TopBarIconButton>
+            <TopBarIconButton
+              onClick={onToggleFiles}
+              active={filesOpen}
+              disabled={!canOpenFiles}
+              label={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
+            >
+              {filesOpen ? (
+                <FolderOpen className="size-3.5" />
+              ) : (
+                <Folder className="size-3.5" />
+              )}
+            </TopBarIconButton>
+          </div>
+        ) : null}
       </div>
     </header>
+  )
+}
+
+function TopBarIconButton({
+  active,
+  children,
+  disabled,
+  label,
+  onClick,
+  onPointerEnter,
+}: {
+  active?: boolean
+  children: ReactNode
+  disabled?: boolean
+  label: string
+  onClick: () => void
+  onPointerEnter?: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onPointerEnter={onPointerEnter}
+      aria-label={label}
+      title={label}
+      aria-pressed={active}
+      disabled={disabled}
+      className={cn(
+        "inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
+        active && "bg-accent text-foreground"
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
+type DisplayState =
+  | SandboxInfo["state"]
+  | "checking"
+  | "idle"
+  | "missing"
+  | "starting"
+
+function sandboxDisplayLabel(state: DisplayState) {
+  if (state === "starting") return "Running"
+  if (state === "checking") return "Checking"
+  if (state === "idle") return "Idle"
+  if (state === "missing") return "Missing"
+  return SANDBOX_STATE_LABEL[state]
+}
+
+function SandboxMenu({
+  sandboxId,
+  sandboxPending,
+  sandboxState,
+  sandboxAction,
+  onSandboxStateChange,
+  onPauseSandbox,
+  onResumeSandbox,
+  onDeleteSandbox,
+}: {
+  sandboxId: string | null
+  sandboxPending: boolean
+  sandboxState?: SandboxState
+  sandboxAction: SandboxAction | null
+  onSandboxStateChange: (state: SandboxState, sandboxId: string) => void
+  onPauseSandbox: () => void
+  onResumeSandbox: () => void
+  onDeleteSandbox: () => void
+}) {
+  const { info, loading, missing } = useSandboxInfo({
+    onStateChange: onSandboxStateChange,
+    sandboxId,
+  })
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(
+    null
+  )
+  const open = menuPos !== null
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const busy = sandboxAction !== null
+
+  useEffect(() => {
+    if (!open) return
+    function onKey(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") setMenuPos(null)
+    }
+    document.addEventListener("keydown", onKey)
+    return () => document.removeEventListener("keydown", onKey)
+  }, [open])
+
+  function openMenu() {
+    const rect = triggerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    setMenuPos({
+      top: rect.bottom + 6,
+      right: Math.max(8, window.innerWidth - rect.right),
+    })
+  }
+
+  function closeMenu() {
+    setMenuPos(null)
+  }
+
+  let display: DisplayState
+  if (sandboxPending && sandboxId && sandboxState === "running" && !info) {
+    display = "running"
+  } else if (sandboxPending && !sandboxId) {
+    display = "starting"
+  } else if (missing) {
+    display = "missing"
+  } else if (info) {
+    display = info.state
+  } else if (sandboxState === "deleted") {
+    display = "deleted"
+  } else if (!sandboxId && !sandboxPending) {
+    display = "idle"
+  } else if (loading) {
+    display = "checking"
+  } else {
+    display = "checking"
+  }
+
+  const stopped = display === "stopped"
+  const canAct =
+    Boolean(sandboxId) &&
+    display !== "deleted" &&
+    display !== "idle" &&
+    display !== "missing"
+
+  const showSpinner = busy || display === "starting" || display === "checking"
+  const title =
+    [
+      sandboxId ? `Daytona sandbox ${sandboxId}` : "",
+      info?.rawState ? `State ${info.rawState}` : "",
+      info?.lastActivityAt
+        ? `Last active ${new Date(info.lastActivityAt).toLocaleString()}`
+        : "",
+      info ? formatSandboxAutoStop(info.autoStopInterval) : "",
+    ]
+      .filter(Boolean)
+      .join("\n") || "Sandbox"
+
+  function handle(action: () => void) {
+    closeMenu()
+    action()
+  }
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => (open ? closeMenu() : openMenu())}
+        title={title}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={!canAct}
+        className={cn(
+          "flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs transition-colors hover:bg-muted disabled:opacity-60",
+          open && "bg-muted"
+        )}
+      >
+        <span className="font-medium text-foreground/85">Sandbox</span>
+        <span aria-hidden className="text-muted-foreground/40">
+          ·
+        </span>
+        <span className="text-muted-foreground">
+          {sandboxDisplayLabel(display)}
+        </span>
+        {showSpinner ? (
+          <Loader2 className="ml-0.5 size-3 animate-spin text-muted-foreground" />
+        ) : canAct ? (
+          <ChevronDown className="ml-0.5 size-3 text-muted-foreground/70" />
+        ) : null}
+      </button>
+      {open && canAct && menuPos && typeof document !== "undefined"
+        ? createPortal(
+            <>
+              <div
+                className="fixed inset-0 z-[60]"
+                onClick={closeMenu}
+                onContextMenu={(event) => {
+                  event.preventDefault()
+                  closeMenu()
+                }}
+              />
+              <div
+                role="menu"
+                style={{ top: menuPos.top, right: menuPos.right }}
+                className="fixed z-[61] min-w-44 overflow-hidden rounded-2xl border border-black/[0.06] bg-popover p-1.5 text-popover-foreground shadow-[0_10px_30px_-12px_rgba(0,0,0,0.18)] dark:border-white/10"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={busy}
+                  onClick={() =>
+                    handle(stopped ? onResumeSandbox : onPauseSandbox)
+                  }
+                  className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+                >
+                  {stopped ? "Resume sandbox" : "Pause sandbox"}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={busy}
+                  onClick={() => handle(onDeleteSandbox)}
+                  className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-left text-sm text-destructive transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                >
+                  Delete sandbox
+                </button>
+              </div>
+            </>,
+            document.body
+          )
+        : null}
+    </>
   )
 }
 

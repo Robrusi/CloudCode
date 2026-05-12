@@ -7,7 +7,6 @@ import {
   type RunCodexLog,
   runCodexInSandbox,
 } from "@/lib/daytona-codex-agent"
-import { stopDaytonaSandboxQuietly } from "@/lib/daytona-sandbox"
 import { getSandboxPresetForRun } from "@/lib/sandbox-presets"
 
 export const runtime = "nodejs"
@@ -41,12 +40,6 @@ function streamEvent(
 ) {
   const encoder = new TextEncoder()
   controller.enqueue(encoder.encode(`${JSON.stringify(value)}\n`))
-}
-
-async function killSandboxQuietly(sandboxId?: string) {
-  if (!sandboxId) return
-
-  await stopDaytonaSandboxQuietly(sandboxId)
 }
 
 export async function POST(request: Request) {
@@ -93,17 +86,15 @@ export async function POST(request: Request) {
         : undefined
     )
 
-    let activeSandboxId: string | undefined
     let cancelled = false
     let closed = false
 
-    async function cancelRun() {
+    function cancelRun() {
       cancelled = true
-      await killSandboxQuietly(activeSandboxId)
     }
 
     request.signal.addEventListener("abort", () => {
-      void cancelRun()
+      cancelRun()
     })
 
     const stream = new ReadableStream({
@@ -156,17 +147,6 @@ export async function POST(request: Request) {
                 })
               },
               onLog: (log: RunCodexLog) => {
-                if (
-                  log.kind === "setup" &&
-                  typeof log.detail === "string" &&
-                  /sandbox/i.test(log.message)
-                ) {
-                  activeSandboxId = log.detail
-                  if (request.signal.aborted || cancelled) {
-                    void killSandboxQuietly(activeSandboxId)
-                  }
-                }
-
                 safeStreamEvent({
                   log,
                   time: Date.now(),
@@ -221,9 +201,7 @@ export async function POST(request: Request) {
         })()
       },
       cancel() {
-        // The browser closed the response stream. Stop the Daytona sandbox to
-        // terminate the active command while keeping its filesystem durable.
-        void cancelRun()
+        cancelRun()
       },
     })
 

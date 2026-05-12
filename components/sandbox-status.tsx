@@ -1,23 +1,23 @@
 "use client"
 
-import { CircleDot, Loader2, OctagonX, Power } from "lucide-react"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
-type SandboxInfo = {
+export type SandboxInfo = {
   autoStopInterval: number | null
   lastActivityAt: number | null
+  sandboxId?: string
   rawState?: string
   state: "running" | "stopped" | "deleted" | "error"
 }
 
-const STATE_LABEL: Record<SandboxInfo["state"], string> = {
+export const SANDBOX_STATE_LABEL: Record<SandboxInfo["state"], string> = {
   deleted: "Deleted",
   error: "Error",
   running: "Running",
-  stopped: "Stopped",
+  stopped: "Idle",
 }
 
-function formatMinutes(value: number | null) {
+export function formatSandboxAutoStop(value: number | null) {
   if (value === null) return "Daytona managed"
   if (value === 0) return "No auto-stop"
   if (value < 60) return `${value}m auto-stop`
@@ -25,21 +25,61 @@ function formatMinutes(value: number | null) {
   return `${hours}h auto-stop`
 }
 
-export function SandboxStatus({
-  runPending = false,
+function parseSandboxInfo(data: Record<string, unknown>): SandboxInfo {
+  return {
+    autoStopInterval:
+      typeof data.autoStopInterval === "number" ? data.autoStopInterval : null,
+    lastActivityAt:
+      typeof data.lastActivityAt === "number" ? data.lastActivityAt : null,
+    rawState: typeof data.rawState === "string" ? data.rawState : "",
+    sandboxId: typeof data.sandboxId === "string" ? data.sandboxId : undefined,
+    state:
+      data.state === "stopped" ||
+      data.state === "deleted" ||
+      data.state === "error"
+        ? data.state
+        : "running",
+  }
+}
+
+export type UseSandboxInfoResult = {
+  info: SandboxInfo | null
+  loading: boolean
+  missing: boolean
+}
+
+export function useSandboxInfo({
+  onStateChange,
   sandboxId,
-  sandboxState,
 }: {
-  runPending?: boolean
+  onStateChange?: (
+    state: SandboxInfo["state"],
+    sandboxId: string,
+    info: SandboxInfo
+  ) => void
   sandboxId: string | null
-  sandboxState?: SandboxInfo["state"]
-}) {
+}): UseSandboxInfoResult {
   const [info, setInfo] = useState<SandboxInfo | null>(null)
   const [missing, setMissing] = useState(false)
   const [loading, setLoading] = useState(true)
+  const onStateChangeRef = useRef(onStateChange)
+
+  useEffect(() => {
+    onStateChangeRef.current = onStateChange
+  }, [onStateChange])
 
   useEffect(() => {
     let cancelled = false
+    let fallbackInterval: number | undefined
+
+    function applyInfo(nextInfo: SandboxInfo) {
+      setMissing(false)
+      setInfo(nextInfo)
+      setLoading(false)
+      if (nextInfo.sandboxId) {
+        onStateChangeRef.current?.(nextInfo.state, nextInfo.sandboxId, nextInfo)
+      }
+    }
 
     async function load() {
       if (!sandboxId) {
@@ -58,26 +98,17 @@ export function SandboxStatus({
         if (cancelled) return
         if (!res.ok) {
           setMissing(Boolean(data?.notFound))
+          if (data?.notFound) {
+            onStateChangeRef.current?.("deleted", sandboxId, {
+              autoStopInterval: null,
+              lastActivityAt: null,
+              sandboxId,
+              state: "deleted",
+            })
+          }
           return
         }
-        setMissing(false)
-        setInfo({
-          autoStopInterval:
-            typeof data.autoStopInterval === "number"
-              ? data.autoStopInterval
-              : null,
-          lastActivityAt:
-            typeof data.lastActivityAt === "number"
-              ? data.lastActivityAt
-              : null,
-          rawState: typeof data.rawState === "string" ? data.rawState : "",
-          state:
-            data.state === "stopped" ||
-            data.state === "deleted" ||
-            data.state === "error"
-              ? data.state
-              : "running",
-        })
+        applyInfo(parseSandboxInfo(data))
       } catch {
         if (!cancelled) setMissing(false)
       } finally {
@@ -85,87 +116,50 @@ export function SandboxStatus({
       }
     }
 
-    void load()
-    const id = window.setInterval(load, 20_000)
+    if (!sandboxId) {
+      return
+    }
+
+    const source = new EventSource(
+      `/api/sandbox/status?sandboxId=${encodeURIComponent(sandboxId)}`
+    )
+
+    source.onmessage = (event) => {
+      if (cancelled) return
+      try {
+        const data = JSON.parse(event.data) as Record<string, unknown>
+        if (data.notFound) {
+          setInfo(null)
+          setMissing(true)
+          setLoading(false)
+          onStateChangeRef.current?.("deleted", sandboxId, {
+            autoStopInterval: null,
+            lastActivityAt: null,
+            sandboxId,
+            state: "deleted",
+          })
+          source.close()
+          return
+        }
+        applyInfo(parseSandboxInfo(data))
+      } catch {
+        // Ignore malformed stream events and let the next status event repair it.
+      }
+    }
+
+    source.onerror = () => {
+      if (cancelled || fallbackInterval) return
+      source.close()
+      void load()
+      fallbackInterval = window.setInterval(load, 2_000)
+    }
+
     return () => {
       cancelled = true
-      window.clearInterval(id)
+      source.close()
+      if (fallbackInterval) window.clearInterval(fallbackInterval)
     }
   }, [sandboxId])
 
-  if (runPending && sandboxId && sandboxState === "running" && !info) {
-    return (
-      <span
-        title={`Daytona sandbox ${sandboxId}\nRun is active; checking Daytona status`}
-        className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground"
-      >
-        <CircleDot className="size-3.5 text-emerald-600 dark:text-emerald-400" />
-        <span>Running</span>
-      </span>
-    )
-  }
-
-  if (runPending && !sandboxId) {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Loader2 className="size-3.5 animate-spin" />
-        Starting
-      </span>
-    )
-  }
-
-  if (loading && !info) {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Loader2 className="size-3.5 animate-spin" />
-        Daytona
-      </span>
-    )
-  }
-
-  if (missing) {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-        <OctagonX className="size-3.5" />
-        Sandbox missing
-      </span>
-    )
-  }
-
-  if (!info) {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Loader2 className="size-3.5 animate-spin" />
-        Checking
-      </span>
-    )
-  }
-
-  const Icon = info.state === "running" ? CircleDot : Power
-  const title = [
-    `Daytona sandbox ${sandboxId}`,
-    info.rawState ? `State ${info.rawState}` : "",
-    info.lastActivityAt
-      ? `Last active ${new Date(info.lastActivityAt).toLocaleString()}`
-      : "",
-    formatMinutes(info.autoStopInterval),
-  ]
-    .filter(Boolean)
-    .join("\n")
-
-  return (
-    <span
-      title={title}
-      className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground"
-    >
-      <Icon
-        className={
-          info.state === "running"
-            ? "size-3.5 text-emerald-600 dark:text-emerald-400"
-            : "size-3.5"
-        }
-      />
-      <span>{STATE_LABEL[info.state]}</span>
-    </span>
-  )
+  return { info, loading, missing }
 }

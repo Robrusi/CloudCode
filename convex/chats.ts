@@ -104,6 +104,7 @@ export const list = query({
           id: thread._id,
           messages: messages.map((message) => ({
             content: message.content,
+            createdAt: message._creationTime,
             error: message.error,
             id: message._id,
             meta: message.meta,

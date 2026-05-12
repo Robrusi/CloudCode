@@ -63,6 +63,18 @@ const DAYTONA_SYSTEM_PATH_ENTRIES = [
 
 export type DaytonaUiState = "running" | "stopped" | "deleted" | "error"
 
+export type DaytonaSandboxInfo = {
+  autoArchiveInterval: number | null
+  autoDeleteInterval: number | null
+  autoStopInterval: number | null
+  createdAt: number | null
+  lastActivityAt: number | null
+  rawState?: string
+  sandboxId: string
+  state: DaytonaUiState
+  updatedAt: number | null
+}
+
 export type DaytonaCommandResult = {
   exitCode: number
   stderr: string
@@ -263,6 +275,29 @@ export function normalizeDaytonaState(state?: string): DaytonaUiState {
   return "running"
 }
 
+function timeValue(value?: string) {
+  return value ? new Date(value).getTime() : null
+}
+
+export async function readDaytonaSandboxInfo(
+  sandboxId: string
+): Promise<DaytonaSandboxInfo> {
+  const sandbox = await getDaytonaSandbox(sandboxId)
+  await sandbox.refreshData().catch(() => undefined)
+
+  return {
+    autoArchiveInterval: sandbox.autoArchiveInterval ?? null,
+    autoDeleteInterval: sandbox.autoDeleteInterval ?? null,
+    autoStopInterval: sandbox.autoStopInterval ?? null,
+    createdAt: timeValue(sandbox.createdAt),
+    lastActivityAt: timeValue(sandbox.lastActivityAt),
+    rawState: sandbox.state,
+    sandboxId: sandbox.id,
+    state: normalizeDaytonaState(sandbox.state),
+    updatedAt: timeValue(sandbox.updatedAt),
+  }
+}
+
 export async function ensureDaytonaSandboxStarted(sandbox: Sandbox) {
   const timeout = defaultDaytonaCreateTimeoutSeconds()
   await sandbox.refreshData().catch(() => undefined)
@@ -344,14 +379,24 @@ export async function deleteDaytonaSandboxQuietly(sandboxId?: string) {
   }
 }
 
+export async function stopDaytonaSandbox(sandboxId: string) {
+  const sandbox = await getDaytonaSandbox(sandboxId)
+  await sandbox.stop(120, true)
+  return await readDaytonaSandboxInfo(sandboxId)
+}
+
 export async function stopDaytonaSandboxQuietly(sandboxId?: string) {
   if (!sandboxId) return
   try {
-    const sandbox = await getDaytonaSandbox(sandboxId)
-    await sandbox.stop(120, true)
+    await stopDaytonaSandbox(sandboxId)
   } catch {
     // A stopped/missing sandbox is good enough for cancellation cleanup.
   }
+}
+
+export async function resumeDaytonaSandbox(sandboxId: string) {
+  await getStartedDaytonaSandbox(sandboxId)
+  return await readDaytonaSandboxInfo(sandboxId)
 }
 
 export async function setDaytonaRunAutostop(

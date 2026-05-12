@@ -3,6 +3,7 @@
 import { useClerk } from "@clerk/nextjs"
 import {
   ChevronRight,
+  LaptopMinimal,
   Plus,
   Settings,
   SquarePen,
@@ -13,12 +14,16 @@ import { useEffect, useMemo, useState } from "react"
 import type { Id } from "@/convex/_generated/dataModel"
 import { cn } from "@/lib/utils"
 
+type SandboxState = "running" | "stopped" | "deleted" | "error"
+
 type SidebarChat = {
   id: Id<"threads">
   repoUrl: string
   title: string
   updatedAt: number
+  lastUserMessageAt: number
   pending: boolean
+  sandboxState?: SandboxState
 }
 
 function repoLabel(url: string) {
@@ -49,6 +54,29 @@ function BrailleSpinner({ className }: { className?: string }) {
     >
       {BRAILLE_FRAMES[frame]}
     </span>
+  )
+}
+
+function SandboxDot({
+  state,
+  starting,
+}: {
+  state?: SandboxState
+  starting?: boolean
+}) {
+  if (state === "deleted" || state === "error") return null
+  const running = state === "running" || starting
+  if (!running && state !== "stopped") return null
+  return (
+    <LaptopMinimal
+      aria-label={running ? "Sandbox running" : "Sandbox paused"}
+      className={cn(
+        "size-4 shrink-0",
+        running
+          ? "text-emerald-600 dark:text-emerald-400"
+          : "text-muted-foreground/70"
+      )}
+    />
   )
 }
 
@@ -103,8 +131,10 @@ export function Sidebar({
     return Array.from(map.entries())
       .map(([repo, items]) => ({
         repo,
-        items: items.sort((a, b) => b.updatedAt - a.updatedAt),
-        latest: Math.max(...items.map((i) => i.updatedAt)),
+        items: items.sort(
+          (a, b) => b.lastUserMessageAt - a.lastUserMessageAt
+        ),
+        latest: Math.max(...items.map((i) => i.lastUserMessageAt)),
       }))
       .sort((a, b) => b.latest - a.latest)
   }, [chats])
@@ -287,7 +317,7 @@ function SidebarItem({
         setMenu({ x: e.clientX, y: e.clientY })
       }}
       className={cn(
-        "group/item relative flex items-center rounded-lg pr-1 transition-colors",
+        "group/item relative flex items-center rounded-lg transition-colors",
         active ? "bg-muted" : "hover:bg-muted/60"
       )}
     >
@@ -321,17 +351,15 @@ function SidebarItem({
               {chat.title || "Untitled"}
             </span>
             <span className="min-w-0 truncate text-xs text-muted-foreground">
-              {relativeTime(chat.updatedAt)}
+              {relativeTime(chat.lastUserMessageAt)}
             </span>
           </div>
-          <span
-            aria-hidden={!pending}
-            className={cn(
-              "flex size-5 shrink-0 items-center justify-center",
-              !pending && "invisible"
+          <span className="flex size-5 shrink-0 items-center justify-center">
+            {pending ? (
+              <BrailleSpinner className="text-muted-foreground" />
+            ) : (
+              <SandboxDot state={chat.sandboxState} starting={false} />
             )}
-          >
-            <BrailleSpinner className="text-muted-foreground" />
           </span>
         </button>
       )}

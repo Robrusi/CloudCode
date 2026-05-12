@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 
-import { stopDaytonaSandbox } from "@/lib/daytona-sandbox"
+import { resumeDaytonaSandbox } from "@/lib/daytona-sandbox"
 
 export const runtime = "nodejs"
 export const maxDuration = 300
@@ -20,12 +20,12 @@ export async function POST(request: Request) {
   }
 
   try {
-    return NextResponse.json(await stopDaytonaSandbox(sandboxId))
+    return NextResponse.json(await resumeDaytonaSandbox(sandboxId))
   } catch (error) {
     return NextResponse.json(
       {
         error:
-          error instanceof Error ? error.message : "Failed to pause sandbox.",
+          error instanceof Error ? error.message : "Failed to resume sandbox.",
       },
       { status: 500 }
     )

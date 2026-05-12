@@ -1,15 +1,8 @@
 import { NextResponse } from "next/server"
 
-import {
-  getDaytonaSandbox,
-  normalizeDaytonaState,
-} from "@/lib/daytona-sandbox"
+import { readDaytonaSandboxInfo } from "@/lib/daytona-sandbox"
 
 export const runtime = "nodejs"
-
-function timeValue(value?: string) {
-  return value ? new Date(value).getTime() : null
-}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
@@ -20,20 +13,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const sandbox = await getDaytonaSandbox(sandboxId)
-    await sandbox.refreshData().catch(() => undefined)
-
-    return NextResponse.json({
-      autoArchiveInterval: sandbox.autoArchiveInterval ?? null,
-      autoDeleteInterval: sandbox.autoDeleteInterval ?? null,
-      autoStopInterval: sandbox.autoStopInterval ?? null,
-      createdAt: timeValue(sandbox.createdAt),
-      lastActivityAt: timeValue(sandbox.lastActivityAt),
-      rawState: sandbox.state,
-      sandboxId: sandbox.id,
-      state: normalizeDaytonaState(sandbox.state),
-      updatedAt: timeValue(sandbox.updatedAt),
-    })
+    return NextResponse.json(await readDaytonaSandboxInfo(sandboxId))
   } catch (error) {
     return NextResponse.json(
       {
