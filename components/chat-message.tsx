@@ -385,46 +385,99 @@ const ToolGroup = memo(function ToolGroup({
 })
 
 const ToolRow = memo(function ToolRow({ detail }: { detail: ParsedLogDetail }) {
+  const [open, setOpen] = useState(false)
   const failed =
     typeof detail.exitCode === "number" && detail.exitCode !== 0
   const { body, icon: Icon, label } = presentTool(detail)
 
+  const fullCommand =
+    detail.kind === "command_execution" ? detail.command?.trim() : undefined
+  const fullText = detail.text?.trim()
+  const output = detail.output?.trim()
+  const hasDetails = Boolean(fullCommand || fullText || output)
+
   return (
-    <div className="flex min-w-0 items-center gap-2 py-0.5 text-[11.5px] leading-5 text-muted-foreground/70">
-      <Icon
+    <div className="min-w-0">
+      <button
+        type="button"
+        onClick={() => hasDetails && setOpen((v) => !v)}
+        disabled={!hasDetails}
+        aria-expanded={open}
         className={cn(
-          "size-3 shrink-0",
-          failed ? "text-destructive/80" : "text-muted-foreground/50"
-        )}
-      />
-      <span
-        className={cn(
-          "shrink-0",
-          failed ? "text-destructive/80" : "text-muted-foreground/80"
+          "flex w-full min-w-0 items-center gap-2 py-0.5 text-left text-[11.5px] leading-5 text-muted-foreground/70",
+          hasDetails && "cursor-pointer hover:text-foreground"
         )}
       >
-        {label}
-      </span>
-      {body ? (
-        <>
-          <span
-            className="shrink-0 text-muted-foreground/40"
-            aria-hidden
-          >
-            –
-          </span>
-          <span
-            className="min-w-0 flex-1 truncate text-muted-foreground/60"
-            title={body}
-          >
-            {body}
-          </span>
-        </>
-      ) : null}
-      {failed ? (
-        <span className="shrink-0 font-mono text-[10.5px] text-destructive/80">
-          exit {detail.exitCode}
+        <Icon
+          className={cn(
+            "size-3 shrink-0",
+            failed ? "text-destructive/80" : "text-muted-foreground/50"
+          )}
+        />
+        <span
+          className={cn(
+            "shrink-0",
+            failed ? "text-destructive/80" : "text-muted-foreground/80"
+          )}
+        >
+          {label}
         </span>
+        {body ? (
+          <>
+            <span
+              className="shrink-0 text-muted-foreground/40"
+              aria-hidden
+            >
+              –
+            </span>
+            <span
+              className={cn(
+                "min-w-0 flex-1 text-muted-foreground/60",
+                !open && "truncate"
+              )}
+              title={!open ? body : undefined}
+            >
+              {body}
+            </span>
+          </>
+        ) : null}
+        {failed ? (
+          <span className="shrink-0 font-mono text-[10.5px] text-destructive/80">
+            exit {detail.exitCode}
+          </span>
+        ) : null}
+        {hasDetails ? (
+          <ChevronRight
+            className={cn(
+              "size-3 shrink-0 transition-transform text-muted-foreground/50",
+              open && "rotate-90"
+            )}
+          />
+        ) : null}
+      </button>
+      {open && hasDetails ? (
+        <div className="ml-5 mt-1 mb-1 space-y-2 border-l border-border/60 pl-3">
+          {fullCommand ? (
+            <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-muted-foreground/80">
+              {fullCommand}
+            </pre>
+          ) : null}
+          {fullText && !fullCommand ? (
+            <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-muted-foreground/80">
+              {fullText}
+            </pre>
+          ) : null}
+          {output ? (
+            <div>
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/50">
+                Output
+              </div>
+              <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-muted-foreground/70">
+                {output}
+              </pre>
+            </div>
+          ) : null}
+        </div>
       ) : null}
     </div>
   )

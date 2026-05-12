@@ -199,7 +199,7 @@ function FolderGroup({
           type="button"
           onClick={() => onNewChatInRepo(repoUrl)}
           aria-label={`New chat in ${label}`}
-          className="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition group-hover/folder:opacity-100 hover:bg-muted hover:text-foreground"
+          className="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           <Plus className="size-3.5" />
         </button>
