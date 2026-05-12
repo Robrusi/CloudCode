@@ -44,6 +44,7 @@ import {
   RepoChip,
 } from "@/components/chat-controls"
 import { MessageBlock } from "@/components/chat-message"
+import { Button } from "@/components/ui/button"
 import type { FileBrowserOpenMode } from "@/components/file-browser"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -1505,27 +1506,27 @@ function ChatInner() {
                     />
 
                     {activeRunPending ? (
-                      <button
+                      <Button
                         type="button"
+                        size="icon-sm"
                         onClick={stopActiveRun}
                         disabled={!canStopActiveRun}
-                        className="grid size-8 place-items-center rounded-full bg-foreground text-background transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
                         aria-label="Stop"
                         title={
                           canStopActiveRun ? "Stop" : "Run finishing elsewhere"
                         }
                       >
                         <Square className="size-3.5 fill-current" />
-                      </button>
+                      </Button>
                     ) : (
-                      <button
+                      <Button
                         type="submit"
+                        size="icon-sm"
                         disabled={!input.trim()}
-                        className="grid size-8 place-items-center rounded-full bg-foreground text-background transition-opacity hover:opacity-80 disabled:opacity-30"
                         aria-label="Send"
                       >
                         <ArrowUp className="size-4" strokeWidth={2.4} />
-                      </button>
+                      </Button>
                     )}
                   </div>
                 </div>

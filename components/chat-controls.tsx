@@ -12,6 +12,15 @@ import {
 import type { Id } from "@/convex/_generated/dataModel"
 import { cn } from "@/lib/utils"
 
+const chipTrigger =
+  "flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/30 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50"
+
+const popoverPanel =
+  "absolute z-10 min-w-44 overflow-hidden rounded-2xl border border-border bg-popover p-1.5 text-popover-foreground shadow-lg"
+
+const popoverItem =
+  "flex w-full items-center justify-between gap-6 rounded-xl px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-muted"
+
 type SandboxPresetOption = {
   id: Id<"sandboxPresets">
   name: string
@@ -92,7 +101,7 @@ export function RepoChip({
 
   if (editing) {
     return (
-      <div className="flex h-8 items-center gap-1.5 rounded-full border border-border/80 bg-background pr-1 pl-2.5 text-xs">
+      <div className="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background pr-1 pl-2.5 text-xs">
         <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
         <input
           ref={inputRef}
@@ -130,10 +139,9 @@ export function RepoChip({
       }}
       disabled={locked}
       className={cn(
-        "flex h-8 max-w-[14rem] items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors",
-        value
-          ? "text-foreground/80 hover:bg-muted disabled:hover:bg-transparent"
-          : "text-muted-foreground hover:bg-muted hover:text-foreground"
+        chipTrigger,
+        "max-w-[14rem]",
+        value ? "text-foreground/80" : "text-muted-foreground"
       )}
     >
       <GitBranch className="size-3.5 shrink-0" />
@@ -166,7 +174,7 @@ export function BranchChip({
 
   if (editing) {
     return (
-      <div className="flex h-8 items-center gap-1.5 rounded-full border border-border/80 bg-background pr-1 pl-2.5 text-xs">
+      <div className="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background pr-1 pl-2.5 text-xs">
         <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
         <input
           ref={inputRef}
@@ -207,10 +215,9 @@ export function BranchChip({
         locked ? "Base branch is locked once a chat starts" : "Base branch"
       }
       className={cn(
-        "flex h-8 max-w-[10rem] items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors disabled:hover:bg-transparent",
-        value
-          ? "text-foreground/80 hover:bg-muted"
-          : "text-muted-foreground hover:bg-muted hover:text-foreground"
+        chipTrigger,
+        "max-w-[10rem]",
+        value ? "text-foreground/80" : "text-muted-foreground"
       )}
     >
       <GitBranch className="size-3.5 shrink-0" />
@@ -260,14 +267,14 @@ export function PresetPill({
         title={
           locked ? "Preset is chosen when a chat starts" : "Sandbox preset"
         }
-        className="flex h-8 max-w-[11rem] items-center gap-1.5 rounded-full px-2.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:hover:bg-transparent"
+        className={cn(chipTrigger, "max-w-[11rem] text-muted-foreground")}
       >
         <Package className="size-3.5 shrink-0" />
         <span className="truncate">{label}</span>
         {locked ? null : <ChevronDown className="size-3 opacity-60" />}
       </button>
       {open && !locked ? (
-        <div className="absolute bottom-10 left-0 z-10 min-w-52 overflow-hidden rounded-2xl border border-black/[0.06] bg-popover p-1.5 shadow-[0_10px_30px_-12px_rgba(0,0,0,0.18)] dark:border-white/10">
+        <div className={cn(popoverPanel, "bottom-10 left-0 min-w-52")}>
           <div className="px-3 pt-1.5 pb-1 text-xs text-muted-foreground">
             Preset
           </div>
@@ -277,7 +284,7 @@ export function PresetPill({
               onSelect("")
               setOpen(false)
             }}
-            className="flex w-full items-center justify-between gap-6 rounded-xl px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-muted"
+            className={popoverItem}
           >
             <span>Default</span>
             {!value ? <Check className="size-4 shrink-0" /> : null}
@@ -290,7 +297,7 @@ export function PresetPill({
                 onSelect(preset.id)
                 setOpen(false)
               }}
-              className="flex w-full items-center justify-between gap-6 rounded-xl px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-muted"
+              className={popoverItem}
             >
               <span className="min-w-0 truncate">{preset.name}</span>
               {preset.id === value ? (
@@ -341,10 +348,7 @@ export function Pill<T extends string>({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className={cn(
-          "flex h-8 items-center gap-1 rounded-full px-2.5 text-xs text-foreground transition-colors hover:bg-muted",
-          triggerClassName
-        )}
+        className={cn(chipTrigger, "gap-1 text-foreground", triggerClassName)}
       >
         {formatTrigger(value)}
         <svg
@@ -364,7 +368,7 @@ export function Pill<T extends string>({
         </svg>
       </button>
       {open ? (
-        <div className="absolute right-0 bottom-10 min-w-44 overflow-hidden rounded-2xl border border-black/[0.06] bg-popover p-1.5 shadow-[0_10px_30px_-12px_rgba(0,0,0,0.18)] dark:border-white/10">
+        <div className={cn(popoverPanel, "right-0 bottom-10")}>
           <div className="px-3 pt-1.5 pb-1 text-xs text-muted-foreground">
             {header}
           </div>
@@ -378,7 +382,7 @@ export function Pill<T extends string>({
                   onSelect(opt)
                   setOpen(false)
                 }}
-                className="flex w-full items-center justify-between gap-6 rounded-xl px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-muted"
+                className={popoverItem}
               >
                 <span>{formatOption(opt)}</span>
                 {selected ? (
