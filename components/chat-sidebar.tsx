@@ -8,7 +8,7 @@ import {
   SquarePen,
   User,
 } from "lucide-react"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 
 import type { Id } from "@/convex/_generated/dataModel"
 import { cn } from "@/lib/utils"
@@ -18,6 +18,7 @@ type SidebarChat = {
   repoUrl: string
   title: string
   updatedAt: number
+  pending: boolean
 }
 
 function repoLabel(url: string) {
@@ -25,6 +26,30 @@ function repoLabel(url: string) {
   return url
     .replace(/^https?:\/\/(www\.)?github\.com\//, "")
     .replace(/\.git$/, "")
+}
+
+const BRAILLE_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+function BrailleSpinner({ className }: { className?: string }) {
+  const [frame, setFrame] = useState(0)
+  useEffect(() => {
+    const id = setInterval(
+      () => setFrame((f) => (f + 1) % BRAILLE_FRAMES.length),
+      80
+    )
+    return () => clearInterval(id)
+  }, [])
+  return (
+    <span
+      aria-label="Agent running"
+      className={cn(
+        "inline-flex size-5 shrink-0 items-center justify-center font-mono text-lg leading-none tabular-nums",
+        className
+      )}
+    >
+      {BRAILLE_FRAMES[frame]}
+    </span>
+  )
 }
 
 function relativeTime(ts: number) {
@@ -211,6 +236,7 @@ function FolderGroup({
               key={c.id}
               chat={c}
               active={c.id === activeId}
+              pending={c.pending}
               onSelect={() => onSelect(c.id)}
               onDelete={() => onDelete(c.id)}
               onRename={(title) => onRename(c.id, title)}
@@ -225,12 +251,14 @@ function FolderGroup({
 function SidebarItem({
   chat,
   active,
+  pending,
   onSelect,
   onDelete,
   onRename,
 }: {
   chat: SidebarChat
   active: boolean
+  pending: boolean
   onSelect: () => void
   onDelete: () => void
   onRename: (title: string) => void
@@ -286,13 +314,24 @@ function SidebarItem({
         <button
           type="button"
           onClick={onSelect}
-          className="flex min-w-0 flex-1 flex-col gap-0.5 px-2.5 py-2 text-left"
+          className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left"
         >
-          <span className="min-w-0 truncate text-sm text-foreground">
-            {chat.title || "Untitled"}
-          </span>
-          <span className="min-w-0 truncate text-xs text-muted-foreground">
-            {relativeTime(chat.updatedAt)}
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <span className="min-w-0 truncate text-sm text-foreground">
+              {chat.title || "Untitled"}
+            </span>
+            <span className="min-w-0 truncate text-xs text-muted-foreground">
+              {relativeTime(chat.updatedAt)}
+            </span>
+          </div>
+          <span
+            aria-hidden={!pending}
+            className={cn(
+              "flex size-5 shrink-0 items-center justify-center",
+              !pending && "invisible"
+            )}
+          >
+            <BrailleSpinner className="text-muted-foreground" />
           </span>
         </button>
       )}

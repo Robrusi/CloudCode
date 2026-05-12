@@ -381,8 +381,11 @@ function ChatInner() {
       chats.map((chat) => ({
         ...chat,
         ...(liveRunStates[chat.id as string] ?? {}),
+        pending:
+          Boolean(runningRunKeys[chat.id as string]) ||
+          chat.messages.some((m) => m.pending),
       })),
-    [chats, liveRunStates]
+    [chats, liveRunStates, runningRunKeys]
   )
   const activeRunKey = activeId ? (activeId as string) : DRAFT_RUN_KEY
   const activeRunState = activeId ? liveRunStates[activeId as string] : undefined
