@@ -77,6 +77,7 @@ export const MessageBlock = memo(function MessageBlock({
           repoName={repoName}
           onOpenFile={onOpenFile}
           error={Boolean(message.error)}
+          pending={Boolean(message.pending)}
           logs={logs}
         />
       ) : null}
@@ -130,12 +131,14 @@ const AssistantBody = memo(function AssistantBody({
   repoName,
   onOpenFile,
   error,
+  pending,
   logs,
 }: {
   text: string
   repoName: string | null
   onOpenFile: (path: string) => void
   error: boolean
+  pending: boolean
   logs: ChatRunLog[]
 }) {
   const segments = splitContentByToolMarkers(text)
@@ -193,7 +196,7 @@ const AssistantBody = memo(function AssistantBody({
       (seg) =>
         seg.kind === "tools" || (seg.kind === "text" && seg.text.trim())
     )
-  const showFinalSeparator = lastTextIndex > 0 && hasEarlierContent
+  const showFinalSeparator = !pending && lastTextIndex > 0 && hasEarlierContent
 
   const rendered: React.ReactNode[] = []
   grouped.forEach((seg, i) => {
