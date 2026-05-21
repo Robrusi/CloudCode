@@ -9,9 +9,6 @@ export type CloudcodeCommand = {
 }
 
 export type CloudcodeYamlConfig = {
-  agent?: {
-    commands?: Record<string, string>
-  }
   checks: CloudcodeCommand[]
   dev?: {
     command: string
@@ -72,17 +69,6 @@ function normalizeCommands(value: unknown) {
     .slice(0, 80)
 }
 
-function normalizeAgentCommands(value: unknown) {
-  const record = asRecord(value)
-  return Object.fromEntries(
-    Object.entries(record).flatMap(([name, command]) => {
-      const cleanName = asString(name)
-      const cleanCommand = asString(command)
-      return cleanName && cleanCommand ? [[cleanName, cleanCommand]] : []
-    })
-  )
-}
-
 function normalizeDev(value: unknown) {
   const record = asRecord(value)
   const command = asString(record.command) ?? asString(record.run)
@@ -101,21 +87,12 @@ export function parseCloudcodeYaml(source: string): CloudcodeYamlConfig {
   const root = asRecord(parsed)
   const globalConfig = asRecord(root.global)
   const repoConfig = asRecord(root.repo)
-  const agentConfig = asRecord(root.agent)
   const legacyKnowledge = normalizeCommands(root.knowledge)
-  const agentCommands = normalizeAgentCommands(agentConfig.commands)
-
-  for (const command of legacyKnowledge) {
-    if (command.name) agentCommands[command.name] = command.run
-  }
 
   const config = {
-    agent: Object.keys(agentCommands).length
-      ? { commands: agentCommands }
-      : undefined,
     checks: [
       ...normalizeCommands(root.checks),
-      ...legacyKnowledge.filter((command) => !command.name),
+      ...legacyKnowledge,
     ],
     dev: normalizeDev(root.dev),
     global: {
@@ -154,7 +131,6 @@ export function formatCloudcodeYaml(config: CloudcodeYamlConfig) {
       repo: config.repo.install.length ? config.repo.install : undefined,
       checks: config.checks.length ? config.checks : undefined,
       dev: config.dev,
-      agent: config.agent,
     },
     {
       lineWidth: 0,
@@ -183,9 +159,6 @@ export function cloudcodeYamlAgentContext(source?: string) {
       const label = command.name ? `${command.name}: ` : ""
       return `${label}${command.run}`
     }),
-    ...Object.entries(config.agent?.commands ?? {}).map(
-      ([name, command]) => `${name}: ${command}`
-    ),
     ...(config.dev ? [`dev: ${config.dev.command}`] : []),
   ]
 

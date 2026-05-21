@@ -134,6 +134,7 @@ export type AutoEnvironmentResult = {
   cloudcodeYaml?: string
   preparedSandboxFresh?: boolean
   preset: SandboxPresetInput
+  requireExistingSandbox?: boolean
   sandboxId?: string
   updatedAuthJson?: string
 }
@@ -141,6 +142,7 @@ export type AutoEnvironmentResult = {
 export type EnsureAutoEnvironmentInput = {
   authJson: string
   baseBranch?: string
+  currentSandboxId?: string
   githubToken?: string
   onLog?: (log: RunCodexLog) => void | Promise<void>
   repoUrl: string
@@ -272,13 +274,16 @@ function createBuildLogEmitter(
   }
 }
 
+const silentCommandOutput = {
+  onStderr: () => undefined,
+  onStdout: () => undefined,
+}
+
 async function prepareBuilderCodex(
   sandbox: Sandbox,
   paths: DaytonaSandboxPaths,
-  authJson: string,
-  emit: (log: RunCodexLog) => Promise<void>
+  authJson: string
 ) {
-  await emit({ kind: "setup", message: "Preparing scanner Codex CLI" })
   await runDaytonaCommand(
     sandbox,
     [
@@ -318,14 +323,7 @@ async function prepareBuilderCodex(
       PATH: daytonaTerminalPath(paths.home),
       TAR_OPTIONS: "--no-same-owner --no-same-permissions",
     },
-    onStderr: (chunk) => {
-      const message = compactLine(chunk)
-      if (message) void emit({ kind: "stderr", message })
-    },
-    onStdout: (chunk) => {
-      const message = compactLine(chunk)
-      if (message) void emit({ kind: "stdout", message })
-    },
+    ...silentCommandOutput,
     timeoutMs: 3 * 60 * 1000,
   })
 
@@ -350,7 +348,7 @@ function scannerPrompt(repoPath: string) {
     "",
     `The repository is already cloned at ${repoPath}. Your current working directory is outside the repository. Keep Codex running outside the repo; use explicit cd commands or absolute paths when you inspect files.`,
     "",
-    "Goal: create a valid repo-root cloudcode.yaml that tells Cloudcode exactly what to download/install globally, what to install in the repo, optional commands the agent can run later, and how to start the dev server.",
+    "Goal: create a valid repo-root cloudcode.yaml that tells Cloudcode exactly what to download/install globally, what to install in the repo, optional environment checks, and how to start the dev server.",
     "",
     "You may run shell commands to inspect the project. You may download/install tools under the sandbox home and repo dependencies if that is necessary to verify the recipe, but every required step must also be encoded in cloudcode.yaml.",
     "",
@@ -362,7 +360,7 @@ function scannerPrompt(repoPath: string) {
     "",
     "Global commands run outside the repo with CLOUDCODE_REPO pointing at the repository path. Repo commands run inside the repo. Use CLOUDCODE_REPO only when a global tool install needs to read repo config.",
     "",
-    "Do not prefix every repo, check, dev, or agent command with mise exec -- when the command runs from the repo. Cloudcode puts mise shims first in PATH and runs repo commands from the repo, so bare commands such as bun install --frozen-lockfile and bun run test are preferred after the global mise install step. Use mise exec -- only when a command must run outside the repo or shims are insufficient.",
+    "Do not prefix every repo, check, or dev command with mise exec -- when the command runs from the repo. Cloudcode puts mise shims first in PATH and runs repo commands from the repo, so bare commands such as bun install --frozen-lockfile and bun run test are preferred after the global mise install step. Use mise exec -- only when a command must run outside the repo or shims are insufficient.",
     "",
     "Do not force compiler variables such as CC=clang or CXX=clang++ unless repository docs require them or you verified those compilers are installed. Prefer the repo's normal install command.",
     "",
@@ -380,13 +378,10 @@ function scannerPrompt(repoPath: string) {
     "dev:",
     "  command: pnpm dev",
     "  port: 3000",
-    "agent:",
-    "  commands:",
-    "    lint: pnpm lint",
     "",
     "Important: for every required language runtime, package manager, SDK, database client, browser, or CLI, include a concrete download/install command in the global list unless you have just verified it already exists in the base snapshot. Do not use metadata-only fields in newly generated YAML.",
     "",
-    "Use commands that are realistic for this repo. Prefer frozen lockfile installs when a lockfile exists. Do not include secret values. Do not use package-manager-specific OS dependency flags such as Playwright --with-deps unless you verified that the base snapshot supports the needed package manager; prefer installing only the browser runtime in repo setup and leave OS package repair as an explicit command only when verified. Do not put lint, format, typecheck, test, browser-test, smoke-test, or build commands in checks for environment setup. Put those under agent.commands as shortcuts for the agent to run later when needed. If a command is unsafe, destructive, overly expensive, or requires credentials not present, omit it.",
+    "Use commands that are realistic for this repo. Prefer frozen lockfile installs when a lockfile exists. Do not include secret values. Do not use package-manager-specific OS dependency flags such as Playwright --with-deps unless you verified that the base snapshot supports the needed package manager; prefer installing only the browser runtime in repo setup and leave OS package repair as an explicit command only when verified. Do not include lint, format, typecheck, test, browser-test, smoke-test, or build commands unless they are directly needed to validate the environment. If a command is unsafe, destructive, overly expensive, or requires credentials not present, omit it.",
     "",
     "When finished, make sure cloudcode.yaml parses as YAML and contains concrete run commands.",
   ].join("\n")
@@ -394,14 +389,8 @@ function scannerPrompt(repoPath: string) {
 
 async function runScannerCodex(
   sandbox: Sandbox,
-  paths: DaytonaSandboxPaths,
-  emit: (log: RunCodexLog) => Promise<void>
+  paths: DaytonaSandboxPaths
 ) {
-  await emit({
-    kind: "setup",
-    message: "Scanning repo and generating cloudcode.yaml",
-  })
-
   const promptPath = `${paths.codexHome}/auto-environment-prompt.txt`
   const lastMessagePath = `${paths.codexHome}/auto-environment-last-message.txt`
   await writeDaytonaTextFile(sandbox, promptPath, scannerPrompt(paths.repoPath))
@@ -437,10 +426,6 @@ async function runScannerCodex(
     .filter(Boolean)
     .join(" ")
 
-  await emit({
-    kind: "command",
-    message: "codex exec environment scanner outside repo",
-  })
   const result = await runDaytonaCommand(
     sandbox,
     [
@@ -455,14 +440,7 @@ async function runScannerCodex(
     {
       cwd: paths.home,
       env: codexShellEnv(paths),
-      onStderr: (chunk) => {
-        const message = compactLine(chunk)
-        if (message) void emit({ kind: "stderr", message })
-      },
-      onStdout: (chunk) => {
-        const message = compactLine(chunk)
-        if (message) void emit({ kind: "stdout", message })
-      },
+      ...silentCommandOutput,
       timeoutMs: AUTO_BUILD_SCAN_TIMEOUT_MS,
     }
   )
@@ -485,20 +463,13 @@ async function cloneRepoForBuild({
   repoUrl,
   sandbox,
   paths,
-  emit,
 }: {
   baseBranch?: string
   githubToken?: string
   repoUrl: string
   sandbox: Sandbox
   paths: DaytonaSandboxPaths
-  emit: (log: RunCodexLog) => Promise<void>
 }) {
-  await emit({
-    detail: baseBranch ? `branch ${baseBranch}` : undefined,
-    kind: "command",
-    message: `git clone ${repoUrl}`,
-  })
   await runDaytonaCommand(
     sandbox,
     `rm -rf ${shellQuote(paths.repoPath)} && mkdir -p ${shellQuote(
@@ -543,24 +514,20 @@ async function runCloudcodeCommandList({
 }) {
   if (commands.length === 0) return
 
-  await emit({
-    kind: "setup",
-    message: label,
-  })
-
   for (const [index, command] of commands.entries()) {
     if (index < startIndex) continue
     const name = command.name ?? `${label} ${index + 1}`
     await emit({
+      detail: compactLine(command.run, 500),
       kind: "command",
-      message: `${name}: ${compactLine(command.run)}`,
+      message: `Downloading ${name}`,
     })
 
     const startedAt = Date.now()
     const heartbeat = setInterval(() => {
       void emit({
         kind: "setup",
-        message: `Still running ${name} after ${minutesSince(startedAt)} minute${minutesSince(startedAt) === 1 ? "" : "s"}`,
+        message: `Still downloading ${name} after ${minutesSince(startedAt)} minute${minutesSince(startedAt) === 1 ? "" : "s"}`,
       })
     }, 30_000)
 
@@ -572,14 +539,7 @@ async function runCloudcodeCommandList({
         {
           cwd,
           env,
-          onStderr: (chunk) => {
-            const message = compactLine(chunk)
-            if (message) void emit({ kind: "stderr", message })
-          },
-          onStdout: (chunk) => {
-            const message = compactLine(chunk)
-            if (message) void emit({ kind: "stdout", message })
-          },
+          ...silentCommandOutput,
           timeoutMs: commandTimeout(command),
         }
       )
@@ -602,11 +562,6 @@ async function runCloudcodeCommandList({
         output,
       })
     }
-
-    await emit({
-      kind: "setup",
-      message: `${name} completed`,
-    })
   }
 }
 
@@ -707,24 +662,16 @@ async function listMiseConfigFiles(
 
 async function trustMiseConfigFiles({
   configFiles,
-  emit,
   env,
   paths,
   sandbox,
 }: {
   configFiles: string[]
-  emit: (log: RunCodexLog) => Promise<void>
   env: Record<string, string>
   paths: DaytonaSandboxPaths
   sandbox: Sandbox
 }) {
   if (configFiles.length === 0) return
-
-  await emit({
-    detail: configFiles.join(", "),
-    kind: "setup",
-    message: "Trusting repo mise config",
-  })
 
   const result = await runDaytonaCommand(
     sandbox,
@@ -732,14 +679,7 @@ async function trustMiseConfigFiles({
     {
       cwd: paths.home,
       env,
-      onStderr: (chunk) => {
-        const message = compactLine(chunk)
-        if (message) void emit({ kind: "stderr", message })
-      },
-      onStdout: (chunk) => {
-        const message = compactLine(chunk)
-        if (message) void emit({ kind: "stdout", message })
-      },
+      ...silentCommandOutput,
       timeoutMs: 2 * 60 * 1000,
     }
   )
@@ -783,10 +723,6 @@ async function repairCxx20Compiler({
   paths: DaytonaSandboxPaths
   sandbox: Sandbox
 }) {
-  await emit({
-    kind: "setup",
-    message: "Detected native dependency requiring a C++20 compiler",
-  })
   addCxx20RepairCommand(config)
   await writeNormalizedCloudcodeYaml({ config, paths, sandbox })
   await runCloudcodeCommandList({
@@ -821,6 +757,18 @@ async function readBuildHashInputs(
     { timeoutMs: 20_000 }
   )
   return result.stdout
+}
+
+async function readRepoCloudcodeYaml(
+  sandbox: Sandbox,
+  paths: DaytonaSandboxPaths
+) {
+  const source = await readDaytonaTextFile(
+    sandbox,
+    `${paths.repoPath}/cloudcode.yaml`
+  ).catch(() => "")
+
+  return source.trim() ? source : undefined
 }
 
 async function writeEnvironmentGitExcludes(
@@ -887,7 +835,7 @@ async function buildAutoEnvironmentSandbox({
   try {
     await emit({
       kind: "setup",
-      message: "Creating auto environment builder sandbox",
+      message: "Creating Daytona sandbox",
     })
     sandbox = await createDaytonaSandbox({
       name: input.sandboxPreset.name,
@@ -908,7 +856,11 @@ async function buildAutoEnvironmentSandbox({
     await emit({
       detail: sandbox.id,
       kind: "setup",
-      message: "Auto environment builder sandbox ready",
+      message: "Daytona sandbox ready",
+    })
+    await emit({
+      kind: "setup",
+      message: "Cloning repository",
     })
     await cloneRepoForBuild({
       baseBranch: input.baseBranch,
@@ -916,26 +868,40 @@ async function buildAutoEnvironmentSandbox({
       repoUrl: input.repoUrl,
       sandbox,
       paths,
-      emit,
+    })
+    await emit({
+      kind: "setup",
+      message: "Repository cloned",
     })
     const miseConfigFiles = await listMiseConfigFiles(sandbox, paths)
     await trustMiseConfigFiles({
       configFiles: miseConfigFiles,
-      emit,
       env: terminalEnv,
       paths,
       sandbox,
     })
-    await prepareBuilderCodex(sandbox, paths, input.authJson, emit)
-    await runScannerCodex(sandbox, paths, emit)
+    let rawYaml = await readRepoCloudcodeYaml(sandbox, paths)
+    if (rawYaml) {
+      await emit({
+        kind: "setup",
+        message: "Found cloudcode.yaml",
+      })
+    } else {
+      await prepareBuilderCodex(sandbox, paths, input.authJson)
+      await emit({
+        kind: "setup",
+        message: "Starting environment scan",
+      })
+      await runScannerCodex(sandbox, paths)
+      rawYaml = await readRepoCloudcodeYaml(sandbox, paths)
 
-    const rawYaml = await readDaytonaTextFile(
-      sandbox,
-      `${paths.repoPath}/cloudcode.yaml`
-    ).catch(() => "")
-
-    if (!rawYaml.trim()) {
-      throw new Error("Environment scanner did not create cloudcode.yaml.")
+      if (!rawYaml) {
+        throw new Error("Environment scanner did not create cloudcode.yaml.")
+      }
+      await emit({
+        kind: "setup",
+        message: "cloudcode.yaml generated",
+      })
     }
 
     let cloudcodeYaml = normalizeCloudcodeYaml(rawYaml)
@@ -957,7 +923,6 @@ async function buildAutoEnvironmentSandbox({
     })
     await trustMiseConfigFiles({
       configFiles: miseConfigFiles,
-      emit,
       env: terminalEnv,
       paths,
       sandbox,
@@ -988,10 +953,6 @@ async function buildAutoEnvironmentSandbox({
         paths,
         sandbox,
       })
-      await emit({
-        kind: "setup",
-        message: "Retrying repo install after compiler repair",
-      })
       await runCloudcodeCommandList({
         commands: config.repo.install,
         cwd: paths.repoPath,
@@ -1000,12 +961,6 @@ async function buildAutoEnvironmentSandbox({
         label: "Running repo install",
         sandbox,
         startIndex: failedCommand,
-      })
-    }
-    if (config.checks.length > 0) {
-      await emit({
-        kind: "setup",
-        message: "Skipping environment checks during setup",
       })
     }
 
@@ -1023,11 +978,6 @@ async function buildAutoEnvironmentSandbox({
       cloudcodeYaml,
       configHash,
       sandboxId: sandbox.id,
-    })
-    await emit({
-      detail: sandbox.id,
-      kind: "result",
-      message: "Auto environment sandbox ready",
     })
     keepSandbox = true
 
@@ -1069,10 +1019,13 @@ function autoPresetForRun(
 export async function ensureAutoEnvironmentSandbox(
   input: EnsureAutoEnvironmentInput
 ): Promise<AutoEnvironmentResult> {
-  await input.onLog?.({
-    kind: "setup",
-    message: "Checking auto environment sandbox",
-  })
+  const currentSandboxId = input.currentSandboxId?.trim()
+  if (!currentSandboxId) {
+    await input.onLog?.({
+      kind: "setup",
+      message: "Checking auto environment sandbox",
+    })
+  }
   const client = await getConvexClient()
   const existing = (await client.query(
     api.sandboxPresets.getAutoEnvironmentForRun,
@@ -1085,6 +1038,20 @@ export async function ensureAutoEnvironmentSandbox(
     cloudcodeYaml?: string
     status: string
   } | null
+
+  if (
+    currentSandboxId &&
+    existing?.status === "ready" &&
+    existing.activeSandboxId === currentSandboxId
+  ) {
+    return {
+      cloudcodeYaml: existing.cloudcodeYaml,
+      preparedSandboxFresh: false,
+      preset: autoPresetForRun(input.sandboxPreset, existing.cloudcodeYaml),
+      requireExistingSandbox: true,
+      sandboxId: currentSandboxId,
+    }
+  }
 
   let usableActiveSandboxId = existing?.activeSandboxId
   if (usableActiveSandboxId && existing?.status === "ready") {
@@ -1125,7 +1092,7 @@ export async function ensureAutoEnvironmentSandbox(
   await input.onLog?.({
     detail: build.environmentSlug,
     kind: "setup",
-    message: "Preparing auto environment from cloudcode.yaml",
+    message: "Preparing auto environment",
   })
   const result = await buildAutoEnvironmentSandbox({
     build,

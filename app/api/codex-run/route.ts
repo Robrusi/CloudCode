@@ -137,20 +137,13 @@ export async function POST(request: Request) {
             let preparedSandboxFresh = false
             let requireExistingSandbox = false
             if (resolvedSandboxPreset?.mode === "auto") {
-              safeStreamEvent({
-                log: {
-                  kind: "setup",
-                  message: "Resolving auto environment preset",
-                },
-                time: Date.now(),
-                type: "progress",
-              })
               const autoEnvironment = await ensureAutoEnvironmentSandbox({
                 authJson: runAuthJson,
                 baseBranch:
                   typeof body.baseBranch === "string"
                     ? body.baseBranch
                     : undefined,
+                currentSandboxId: resolvedSandboxId,
                 githubToken:
                   typeof body.githubToken === "string"
                     ? body.githubToken
@@ -175,7 +168,10 @@ export async function POST(request: Request) {
                 preparedSandboxFresh = Boolean(
                   autoEnvironment.preparedSandboxFresh
                 )
-                requireExistingSandbox = preparedSandboxFresh
+                requireExistingSandbox = Boolean(
+                  autoEnvironment.requireExistingSandbox ||
+                    preparedSandboxFresh
+                )
               }
             }
 

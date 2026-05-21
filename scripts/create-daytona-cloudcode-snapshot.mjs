@@ -5,7 +5,7 @@ import process from "node:process"
 
 import { Daytona, Image } from "@daytona/sdk"
 
-const DEFAULT_SNAPSHOT_NAME = "cloudcode-batteries-included"
+const DEFAULT_SNAPSHOT_NAME = "cloudcode-batteries-included-experimental"
 const DEFAULT_BASE_IMAGE = "mcr.microsoft.com/devcontainers/universal:2-linux"
 
 function loadEnvFile(path) {
