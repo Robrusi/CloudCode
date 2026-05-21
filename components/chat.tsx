@@ -318,6 +318,15 @@ function ChatInner() {
       : ((localStorage.getItem(PRESET_KEY) as Id<"sandboxPresets"> | null) ??
         "")
   )
+  useEffect(() => {
+    if (rawPresets === undefined || !draftSandboxPresetId) return
+    if (sandboxPresets.some((preset) => preset.id === draftSandboxPresetId)) {
+      return
+    }
+
+    setDraftSandboxPresetId("")
+    localStorage.removeItem(PRESET_KEY)
+  }, [rawPresets, draftSandboxPresetId, sandboxPresets])
   const [editingRepo, setEditingRepo] = useState(false)
   const [newChatOpen, setNewChatOpen] = useState(false)
   const [modelOpen, setModelOpen] = useState(false)
@@ -453,7 +462,14 @@ function ChatInner() {
   const repoUrl = active ? active.repoUrl : draftRepo
   const baseBranch = active ? (active.baseBranch ?? "") : draftBaseBranch
   const model = active ? active.model : draftModel
-  const sandboxPresetId = active ? active.sandboxPresetId : draftSandboxPresetId
+  const availableDraftSandboxPresetId =
+    draftSandboxPresetId &&
+    sandboxPresets.some((preset) => preset.id === draftSandboxPresetId)
+      ? draftSandboxPresetId
+      : ""
+  const sandboxPresetId = active
+    ? active.sandboxPresetId
+    : availableDraftSandboxPresetId
   const speed = draftSpeed
   const thinking = draftThinking
   const empty = messages.length === 0
@@ -852,9 +868,15 @@ function ChatInner() {
     baseBranch: string
     sandboxPresetId: Id<"sandboxPresets"> | ""
   }) {
+    const availablePresetId =
+      nextPresetId &&
+      sandboxPresets.some((preset) => preset.id === nextPresetId)
+        ? nextPresetId
+        : ""
+
     persistDraftRepo(nextRepo)
     persistDraftBaseBranch(nextBaseBranch)
-    persistDraftSandboxPreset(nextPresetId)
+    persistDraftSandboxPreset(availablePresetId)
     setActiveId(null)
     setInput("")
     setEditingRepo(false)
@@ -970,7 +992,11 @@ function ChatInner() {
     )
 
     try {
-      const runSandboxPresetId = active?.sandboxPresetId ?? draftSandboxPresetId
+      const runSandboxPresetId = active
+        ? active.sandboxPresetName
+          ? active.sandboxPresetId
+          : undefined
+        : availableDraftSandboxPresetId
       if (!chatId) {
         const trimmedBaseBranch = draftBaseBranch.trim()
         const created = await createThread({
@@ -1460,7 +1486,7 @@ function ChatInner() {
         <NewChatDialog
           initialRepo={draftRepo}
           initialBaseBranch={draftBaseBranch}
-          initialPresetId={draftSandboxPresetId}
+          initialPresetId={availableDraftSandboxPresetId}
           presets={sandboxPresets}
           onCancel={() => setNewChatOpen(false)}
           onConfirm={confirmNewChat}

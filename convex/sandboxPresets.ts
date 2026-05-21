@@ -129,7 +129,9 @@ export const getForRun = query({
     const user = await getCurrentUser(ctx)
     if (!user) return null
 
-    const preset = await requireOwnedPreset(ctx, args.presetId, user._id)
+    const preset = await ctx.db.get(args.presetId)
+    if (!preset || preset.userId !== user._id) return null
+
     const secrets = await ctx.db
       .query("sandboxPresetSecrets")
       .withIndex("by_preset", (q) => q.eq("presetId", preset._id))

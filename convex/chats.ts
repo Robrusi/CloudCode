@@ -63,7 +63,7 @@ async function requireOwnedThread(
   return thread
 }
 
-async function requireOwnedPreset(
+async function resolveOwnedPresetId(
   ctx: MutationCtx,
   presetId: Id<"sandboxPresets"> | undefined,
   userId: Id<"users">
@@ -71,9 +71,7 @@ async function requireOwnedPreset(
   if (!presetId) return undefined
 
   const preset = await ctx.db.get(presetId)
-  if (!preset || preset.userId !== userId) {
-    throw new Error("Preset not found.")
-  }
+  if (!preset || preset.userId !== userId) return undefined
 
   return preset._id
 }
@@ -142,7 +140,7 @@ export const createThread = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
-    const sandboxPresetId = await requireOwnedPreset(
+    const sandboxPresetId = await resolveOwnedPresetId(
       ctx,
       args.sandboxPresetId,
       userId

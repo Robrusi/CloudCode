@@ -262,7 +262,9 @@ if (existingSnapshot) {
 }
 
 console.log(`Creating Daytona snapshot "${name}" from ${baseImage}...`)
-console.log("This is a one-time build; future sandboxes should use the snapshot.")
+console.log(
+  "This is a one-time build; future sandboxes should use the snapshot."
+)
 
 const createParams = {
   image: cloudcodeImage(baseImage),
