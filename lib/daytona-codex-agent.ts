@@ -16,6 +16,7 @@ import {
   defaultDaytonaSandboxResources,
   ensureDaytonaSandboxStarted,
   getDaytonaSandbox,
+  installDaytonaTarWrapper,
   readDaytonaTextFile,
   resolveDaytonaPaths,
   restoreDaytonaAutostop,
@@ -33,11 +34,18 @@ import {
   type SandboxEnvTarget,
   type SandboxPresetEnvVar,
 } from "./sandbox-env"
+import { cloudcodeYamlAgentContext } from "./cloudcode-yaml"
 
 const EXIT_MARKER = "__CLOUDCODE_CODEX_EXIT__"
 const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60 * 1000
 const CODEX_UPDATE_TIMEOUT_MS = 3 * 60 * 1000
 const PRESET_INSTALL_TIMEOUT_MS = 10 * 60 * 1000
+const MISE_CONFIG_FILES = [
+  ".mise.toml",
+  "mise.toml",
+  ".config/mise.toml",
+  ".config/mise/config.toml",
+]
 
 export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh"
 
@@ -58,6 +66,7 @@ export type RunCodexLog = {
 }
 
 export type SandboxPresetInput = {
+  cloudcodeYaml?: string
   daytonaSnapshot?: string
   installScript?: string
   name: string
@@ -77,8 +86,10 @@ export type RunCodexInSandboxInput = {
   previousDiff?: string
   prompt: string
   reasoningEffort?: ReasoningEffort
+  requireExistingSandbox?: boolean
   resumeContext?: string
   repoUrl: string
+  preparedSandboxFresh?: boolean
   sandboxId?: string
   sandboxPreset?: SandboxPresetInput
   speed?: CodexSpeed
@@ -198,9 +209,7 @@ function stringValue(value: unknown) {
 }
 
 function numberValue(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : undefined
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined
 }
 
 function eventTypeText(record: Record<string, unknown>) {
@@ -553,6 +562,7 @@ function createSandboxTarget(
     runCommand: (command, options) =>
       runDaytonaCommand(sandbox, command, {
         cwd: paths.home,
+        env: repoCommandEnv(paths),
         timeoutMs: options?.timeoutMs,
       }),
     writeTextFile: (path, content) =>
@@ -574,6 +584,8 @@ function presetProfileSnippet(
     "# Cloudcode runtime environment",
     `export PATH="${daytonaTerminalPath(paths.home)}:$PATH"`,
     `export CODEX_HOME=${shellQuote(paths.codexHome)}`,
+    `export MISE_TRUSTED_CONFIG_PATHS=${shellQuote(paths.repoPath)}`,
+    "export TAR_OPTIONS='--no-same-owner --no-same-permissions'",
     preset?.secrets.length ? secretExports(preset.secrets) : "",
     `if [ -d ${shellQuote(paths.repoPath)} ]; then cd ${shellQuote(paths.repoPath)}; fi`,
   ]
@@ -589,7 +601,9 @@ function runtimeShellProfileSnippet(
     "# Cloudcode Codex shell environment",
     `export HOME=${shellQuote(paths.runtimeHome)}`,
     `export CODEX_HOME=${shellQuote(paths.codexHome)}`,
+    `export MISE_TRUSTED_CONFIG_PATHS=${shellQuote(paths.repoPath)}`,
     `export PATH=${shellQuote(daytonaCodexPath(paths))}`,
+    "export TAR_OPTIONS='--no-same-owner --no-same-permissions'",
     preset?.secrets.length ? secretExports(preset.secrets) : "",
   ]
     .filter(Boolean)
@@ -597,7 +611,9 @@ function runtimeShellProfileSnippet(
 }
 
 function presetSecretEnv(secrets: SandboxPresetEnvVar[] = []) {
-  return Object.fromEntries(secrets.map((secret) => [secret.name, secret.value]))
+  return Object.fromEntries(
+    secrets.map((secret) => [secret.name, secret.value])
+  )
 }
 
 function codexShellEnv(
@@ -608,9 +624,19 @@ function codexShellEnv(
     BASH_ENV: "/dev/null",
     CODEX_HOME: paths.codexHome,
     HOME: paths.runtimeHome,
+    MISE_TRUSTED_CONFIG_PATHS: paths.repoPath,
     PATH: daytonaCodexPath(paths),
     SHELL: "/bin/bash",
+    TAR_OPTIONS: "--no-same-owner --no-same-permissions",
     ...presetSecretEnv(secrets),
+  }
+}
+
+function repoCommandEnv(paths: DaytonaSandboxPaths) {
+  return {
+    HOME: paths.runtimeHome,
+    MISE_TRUSTED_CONFIG_PATHS: paths.repoPath,
+    PATH: daytonaCodexPath(paths),
   }
 }
 
@@ -697,7 +723,7 @@ async function createDefaultBranch(
 }
 
 async function connectOrCreateSandbox(input: RunCodexInSandboxInput) {
-  const createSandbox = () =>
+  const createNewSandbox = () =>
     createDaytonaSandbox({
       envVars: presetSecretEnv(input.sandboxPreset?.secrets),
       name: input.sandboxPreset?.name,
@@ -711,31 +737,46 @@ async function connectOrCreateSandbox(input: RunCodexInSandboxInput) {
       const sandbox = await ensureDaytonaSandboxStarted(
         await getDaytonaSandbox(input.sandboxId)
       )
+      if (input.preparedSandboxFresh || input.requireExistingSandbox) {
+        return {
+          createdSandbox: false,
+          recoveredSandbox: false,
+          sandbox,
+        }
+      }
+
       if (
         desiredSnapshot &&
-        (sandbox.snapshot !== desiredSnapshot || sandboxIsUnderResourced(sandbox))
+        (sandbox.snapshot !== desiredSnapshot ||
+          sandboxIsUnderResourced(sandbox))
       ) {
-        await sandbox.delete(120).catch(() =>
-          sandbox.stop(120, true).catch(() => undefined)
-        )
+        await sandbox
+          .delete(120)
+          .catch(() => sandbox.stop(120, true).catch(() => undefined))
         return {
+          createdSandbox: true,
           recoveredSandbox: true,
-          sandbox: await createSandbox(),
+          sandbox: await createNewSandbox(),
         }
       }
 
       return {
+        createdSandbox: false,
         recoveredSandbox: false,
         sandbox,
       }
     } catch {
+      if (input.preparedSandboxFresh || input.requireExistingSandbox) {
+        throw new Error("Prepared auto environment sandbox is unavailable.")
+      }
       // The DB can outlive an auto-deleted sandbox. Continue in a fresh one.
     }
   }
 
   return {
+    createdSandbox: true,
     recoveredSandbox: Boolean(input.sandboxId),
-    sandbox: await createSandbox(),
+    sandbox: await createNewSandbox(),
   }
 }
 
@@ -841,6 +882,7 @@ async function updateCodexCli(
     cwd: paths.home,
     env: {
       HOME: paths.home,
+      MISE_TRUSTED_CONFIG_PATHS: paths.repoPath,
       PATH: daytonaTerminalPath(paths.home),
     },
     onStderr: (data) => {
@@ -904,6 +946,7 @@ async function prepareSandboxRuntime(
     ].join(" && "),
     { timeoutMs: 10_000 }
   )
+  await installDaytonaTarWrapper(sandbox, paths)
   await writeDaytonaTextFile(
     sandbox,
     paths.presetEnvPath,
@@ -929,11 +972,11 @@ async function prepareSandboxRuntime(
       )} ${shellQuote(`${paths.runtimeHome}/.bashrc`)}`,
       `profile_line=${shellQuote(`. ${paths.cloudcodeProfilePath}`)}`,
       `for file in ${shellQuote(`${paths.home}/.bashrc`)} ${shellQuote(`${paths.home}/.profile`)}; do`,
-      "  [ -f \"$file\" ] || continue",
+      '  [ -f "$file" ] || continue',
       "  tmp=$(mktemp)",
-      "  grep -vxF \"$profile_line\" \"$file\" > \"$tmp\" || true",
-      "  cat \"$tmp\" > \"$file\"",
-      "  rm -f \"$tmp\"",
+      '  grep -vxF "$profile_line" "$file" > "$tmp" || true',
+      '  cat "$tmp" > "$file"',
+      '  rm -f "$tmp"',
       "done",
       `rm -f ${shellQuote(paths.cloudcodeProfilePath)}`,
     ].join("\n"),
@@ -1022,7 +1065,9 @@ async function runPathInstallScript(
       CODEX_HOME: paths.codexHome,
       CI: "1",
       HOME: paths.home,
+      MISE_TRUSTED_CONFIG_PATHS: paths.repoPath,
       PATH: terminalPath,
+      TAR_OPTIONS: "--no-same-owner --no-same-permissions",
       ...presetSecretEnv(input.sandboxPreset?.secrets),
     },
     onStderr: (data) => {
@@ -1139,7 +1184,9 @@ async function runPresetInstallScript(
         CODEX_HOME: paths.codexHome,
         CI: "1",
         HOME: paths.home,
+        MISE_TRUSTED_CONFIG_PATHS: paths.repoPath,
         PATH: terminalPath,
+        TAR_OPTIONS: "--no-same-owner --no-same-permissions",
         ...presetSecretEnv(input.sandboxPreset?.secrets),
       },
       onStderr: (data) => {
@@ -1186,6 +1233,59 @@ async function cleanupRunFiles(sandbox: Sandbox, paths: DaytonaSandboxPaths) {
       timeoutMs: 10_000,
     }
   ).catch(() => undefined)
+}
+
+function trustMiseCommand(paths: DaytonaSandboxPaths) {
+  return [
+    "set -e",
+    `export MISE_TRUSTED_CONFIG_PATHS=${shellQuote(paths.repoPath)}`,
+    `cd ${shellQuote(paths.repoPath)}`,
+    "has_mise_config=0",
+    ...MISE_CONFIG_FILES.map(
+      (file) => `[ ! -f ${shellQuote(file)} ] || has_mise_config=1`
+    ),
+    '[ "$has_mise_config" = "1" ] || exit 0',
+    "if ! command -v mise >/dev/null 2>&1; then",
+    "  curl -fsSL https://mise.run | sh",
+    '  export PATH="$HOME/.local/bin:$HOME/.mise/bin:$PATH"',
+    "fi",
+    ...MISE_CONFIG_FILES.map(
+      (file) =>
+        `[ ! -f ${shellQuote(file)} ] || mise trust -y ${shellQuote(file)}`
+    ),
+  ].join("\n")
+}
+
+async function trustRepoMiseConfig(
+  sandbox: Sandbox,
+  input: RunCodexInSandboxInput,
+  paths: DaytonaSandboxPaths
+) {
+  const result = await runDaytonaCommand(sandbox, trustMiseCommand(paths), {
+    cwd: paths.home,
+    env: {
+      HOME: paths.home,
+      MISE_TRUSTED_CONFIG_PATHS: paths.repoPath,
+      MISE_YES: "1",
+      PATH: daytonaTerminalPath(paths.home),
+    },
+    onStderr: (chunk) => {
+      const message = compactLine(chunk)
+      if (message) void emitLog(input, { kind: "stderr", message })
+    },
+    onStdout: (chunk) => {
+      const message = compactLine(chunk)
+      if (message) void emitLog(input, { kind: "stdout", message })
+    },
+    timeoutMs: 2 * 60 * 1000,
+  })
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      compactLine(result.stderr || result.stdout) ||
+        "Unable to trust repo mise config."
+    )
+  }
 }
 
 async function writeBaseRef(sandbox: Sandbox, paths: DaytonaSandboxPaths) {
@@ -1255,6 +1355,68 @@ async function cloneRepo({
   return await createDefaultBranch(sandbox, input, paths, branchName)
 }
 
+async function prepareExistingRepoForFreshRun({
+  baseBranch,
+  branchName,
+  input,
+  paths,
+  requestedBranchName,
+  sandbox,
+}: {
+  baseBranch?: string
+  branchName: string
+  input: RunCodexInSandboxInput
+  paths: DaytonaSandboxPaths
+  requestedBranchName?: string
+  sandbox: Sandbox
+}) {
+  await emitLog(input, {
+    detail: baseBranch ? `branch ${baseBranch}` : undefined,
+    kind: "command",
+    message: "refresh prepared repo",
+  })
+
+  const refreshCommand = [
+    "set -eo pipefail",
+    `cd ${shellQuote(paths.repoPath)}`,
+    "git fetch origin --prune || true",
+    baseBranch
+      ? [
+          `if git show-ref --verify --quiet ${shellQuote(`refs/remotes/origin/${baseBranch}`)}; then`,
+          `  git checkout -B ${shellQuote(baseBranch)} ${shellQuote(`origin/${baseBranch}`)}`,
+          "else",
+          `  git checkout ${shellQuote(baseBranch)}`,
+          "fi",
+        ].join("\n")
+      : [
+          "default_branch=$(git remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}' | head -1)",
+          'if [ -n "$default_branch" ] && git show-ref --verify --quiet "refs/remotes/origin/$default_branch"; then',
+          '  git checkout -B "$default_branch" "origin/$default_branch"',
+          "fi",
+        ].join("\n"),
+    "git reset --hard HEAD",
+  ].join("\n")
+
+  const refreshResult = await runDaytonaCommand(sandbox, refreshCommand, {
+    timeoutMs: 60_000,
+  })
+  if (refreshResult.exitCode !== 0) {
+    await emitLog(input, {
+      kind: "stderr",
+      message:
+        compactLine(refreshResult.stderr || refreshResult.stdout) ||
+        "Unable to refresh prepared repo.",
+    })
+  }
+
+  if (requestedBranchName) {
+    await createBranch(sandbox, input, paths, requestedBranchName)
+    return requestedBranchName
+  }
+
+  return await createDefaultBranch(sandbox, input, paths, branchName)
+}
+
 function helpIncludes(help: string, flag: string) {
   return help.includes(flag)
 }
@@ -1277,13 +1439,16 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
   await emitLog(input, {
     kind: "setup",
     message: input.sandboxId
-      ? "Connecting to Daytona sandbox"
+      ? input.preparedSandboxFresh
+        ? "Connecting to prepared Daytona sandbox"
+        : "Connecting to Daytona sandbox"
       : input.sandboxPreset?.daytonaSnapshot
         ? "Creating Daytona sandbox from preset snapshot"
         : "Creating Daytona sandbox",
   })
 
-  const { recoveredSandbox, sandbox } = await connectOrCreateSandbox(input)
+  const { createdSandbox, recoveredSandbox, sandbox } =
+    await connectOrCreateSandbox(input)
   const paths = await resolveDaytonaPaths(sandbox)
 
   try {
@@ -1307,13 +1472,18 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     const shouldRestoreConversation = Boolean(
       existingCodexThreadId && !codexThreadIdToResume
     )
-    const prompt =
+    const taskPrompt =
       shouldRestoreConversation && input.resumeContext?.trim()
         ? restoredConversationPrompt(input.resumeContext, input.prompt)
         : input.prompt
+    const environmentContext = cloudcodeYamlAgentContext(
+      input.sandboxPreset?.cloudcodeYaml
+    )
+    const prompt = environmentContext
+      ? [environmentContext, "Current user request:", taskPrompt].join("\n\n")
+      : taskPrompt
     const needsCodexSetup =
-      recoveredSandbox ||
-      !(await isCodexLauncherReady(sandbox, paths))
+      recoveredSandbox || !(await isCodexLauncherReady(sandbox, paths))
 
     if (needsCodexSetup) {
       await updateCodexCli(sandbox, input, paths)
@@ -1341,8 +1511,9 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       { timeoutMs: 10_000 }
     )
 
-    const needsRepoClone = recoveredSandbox || !(await repoExists(sandbox, paths))
-    if (needsRepoClone) {
+    const repoAlreadyExists = await repoExists(sandbox, paths)
+    let preparedFreshRepo = false
+    if (!repoAlreadyExists) {
       branchName = await cloneRepo({
         baseBranch,
         branchName,
@@ -1353,38 +1524,55 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         sandbox,
         paths,
       })
+      await trustRepoMiseConfig(sandbox, input, paths)
       await writeBaseRef(sandbox, paths)
-      if (input.previousDiff?.trim()) {
-        await emitLog(input, {
-          kind: "command",
-          message: "git apply previous changes",
-        })
-        await writeDaytonaTextFile(
-          sandbox,
-          paths.previousDiffPath,
-          input.previousDiff
-        )
-        const applyResult = await runDaytonaCommand(
-          sandbox,
-          `git -C ${shellQuote(
-            paths.repoPath
-          )} apply --whitespace=nowarn ${shellQuote(paths.previousDiffPath)}`,
-          { timeoutMs: 60_000 }
-        )
-        if (applyResult.exitCode !== 0) {
-          await emitLog(input, {
-            kind: "stderr",
-            message:
-              compactLine(applyResult.stderr || applyResult.stdout) ||
-              "Unable to apply previous diff.",
-          })
-        }
-      }
+      preparedFreshRepo = true
     } else {
+      await trustRepoMiseConfig(sandbox, input, paths)
+      if (createdSandbox || input.preparedSandboxFresh) {
+        branchName = await prepareExistingRepoForFreshRun({
+          baseBranch,
+          branchName,
+          input,
+          paths,
+          requestedBranchName,
+          sandbox,
+        })
+        await writeBaseRef(sandbox, paths)
+        preparedFreshRepo = true
+      }
+    }
+    if (repoAlreadyExists && !preparedFreshRepo) {
       await emitLog(input, {
         kind: "command",
         message: `test -d ${paths.repoPath}/.git`,
       })
+    }
+    if (preparedFreshRepo && input.previousDiff?.trim()) {
+      await emitLog(input, {
+        kind: "command",
+        message: "git apply previous changes",
+      })
+      await writeDaytonaTextFile(
+        sandbox,
+        paths.previousDiffPath,
+        input.previousDiff
+      )
+      const applyResult = await runDaytonaCommand(
+        sandbox,
+        `git -C ${shellQuote(
+          paths.repoPath
+        )} apply --whitespace=nowarn ${shellQuote(paths.previousDiffPath)}`,
+        { timeoutMs: 60_000 }
+      )
+      if (applyResult.exitCode !== 0) {
+        await emitLog(input, {
+          kind: "stderr",
+          message:
+            compactLine(applyResult.stderr || applyResult.stdout) ||
+            "Unable to apply previous diff.",
+        })
+      }
     }
 
     await prepareSandboxRuntime(sandbox, input, paths)
@@ -1480,6 +1668,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
           `cd ${shellQuote(paths.repoPath)} &&`,
           `HOME=${shellQuote(paths.runtimeHome)}`,
           `CODEX_HOME=${shellQuote(paths.codexHome)}`,
+          `MISE_TRUSTED_CONFIG_PATHS=${shellQuote(paths.repoPath)}`,
           "BASH_ENV=/dev/null",
           "SHELL=/bin/bash",
           `${shellQuote(paths.codexLauncherPath)} exec resume`,
@@ -1497,6 +1686,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
           cdCommand,
           `HOME=${shellQuote(paths.runtimeHome)}`,
           `CODEX_HOME=${shellQuote(paths.codexHome)}`,
+          `MISE_TRUSTED_CONFIG_PATHS=${shellQuote(paths.repoPath)}`,
           "BASH_ENV=/dev/null",
           "SHELL=/bin/bash",
           `${shellQuote(paths.codexLauncherPath)} exec`,
@@ -1515,6 +1705,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         paths.presetEnvPath
       )}`,
       `export PATH=${shellQuote(sandboxPath)}`,
+      `export MISE_TRUSTED_CONFIG_PATHS=${shellQuote(paths.repoPath)}`,
       codexCommand,
       "code=$?",
       `printf '\\n${EXIT_MARKER}%s\\n' \"$code\"`,
@@ -1587,6 +1778,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
               paths.repoPath
             )} diff --binary "$base_ref"`,
             {
+              env: repoCommandEnv(paths),
               timeoutMs: 60_000,
             }
           )
@@ -1600,6 +1792,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
             sandbox,
             `git -C ${shellQuote(paths.repoPath)} status --short --branch`,
             {
+              env: repoCommandEnv(paths),
               timeoutMs: 60_000,
             }
           )

@@ -193,8 +193,7 @@ const AssistantBody = memo(function AssistantBody({
   const hasEarlierContent = grouped
     .slice(0, lastTextIndex)
     .some(
-      (seg) =>
-        seg.kind === "tools" || (seg.kind === "text" && seg.text.trim())
+      (seg) => seg.kind === "tools" || (seg.kind === "text" && seg.text.trim())
     )
   const showFinalSeparator = !pending && lastTextIndex > 0 && hasEarlierContent
 
@@ -209,7 +208,7 @@ const AssistantBody = memo(function AssistantBody({
           className="flex items-center gap-4 py-4"
         >
           <div className="h-px flex-1 bg-border" />
-          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
+          <span className="text-[10px] font-medium tracking-wider text-muted-foreground/60 uppercase">
             Response
           </span>
           <div className="h-px flex-1 bg-border" />
@@ -223,10 +222,7 @@ const AssistantBody = memo(function AssistantBody({
         <Markdown
           key={i}
           text={seg.text}
-          className={cn(
-            "text-[15px] leading-7",
-            error && "text-destructive"
-          )}
+          className={cn("text-[15px] leading-7", error && "text-destructive")}
           repoName={repoName}
           onOpenFile={onOpenFile}
         />
@@ -247,14 +243,9 @@ const RunSetupSummary = memo(function RunSetupSummary({
   pending: boolean
 }) {
   const [open, setOpen] = useState(false)
-  const codexStartIndex = getCodexStartIndex(logs)
-  const codexStarted = codexStartIndex >= 0 || contentStarted
-  const setupLogs =
-    codexStartIndex >= 0
-      ? logs.slice(0, codexStartIndex).filter(isSetupSummaryLog)
-      : logs.filter(isSetupSummaryLog)
+  const setupLogs = logs.filter(isSetupSummaryLog)
   const current = logs.at(-1)
-  const expanded = pending && !codexStarted ? true : open
+  const expanded = pending && !contentStarted ? true : open
 
   if (!pending && setupLogs.length === 0) return null
 
@@ -272,11 +263,11 @@ const RunSetupSummary = memo(function RunSetupSummary({
             expanded && "rotate-90"
           )}
         />
-        {pending && !codexStarted ? (
+        {pending && !contentStarted ? (
           <Loader2 className="size-3.5 shrink-0 animate-spin" />
         ) : null}
         <span className="truncate text-[13px]">
-          {codexStarted
+          {contentStarted
             ? "Setup complete"
             : (current?.message ?? "Starting Codex run")}
         </span>
@@ -293,16 +284,14 @@ const RunSetupSummary = memo(function RunSetupSummary({
   )
 })
 
-function getCodexStartIndex(logs: ChatRunLog[]) {
-  return logs.findIndex(isCodexStartLog)
-}
-
-function isCodexStartLog(log: ChatRunLog) {
-  return log.kind === "setup" && /^Codex turn\b/.test(log.message)
-}
-
 function isSetupSummaryLog(log: ChatRunLog) {
-  return log.kind === "setup" || log.kind === "stderr"
+  return (
+    log.kind === "setup" ||
+    log.kind === "command" ||
+    log.kind === "stdout" ||
+    log.kind === "stderr" ||
+    log.kind === "result"
+  )
 }
 
 type ParsedLogDetail = {
@@ -328,12 +317,16 @@ function parseLogDetail(detail?: string): ParsedLogDetail | null {
 }
 
 const SetupLogRow = memo(function SetupLogRow({ log }: { log: ChatRunLog }) {
-  const Icon = log.kind === "stderr" ? Terminal : ScrollText
+  const Icon =
+    log.kind === "stderr" || log.kind === "command" ? Terminal : ScrollText
   return (
     <div
       className={cn(
         "flex min-w-0 items-start gap-2 text-[12px] leading-5",
-        log.kind === "stderr" && "text-destructive"
+        log.kind === "stderr" && "text-destructive",
+        log.kind === "stdout" &&
+          "font-mono text-[11px] text-muted-foreground/80",
+        log.kind === "command" && "font-mono text-[11px] text-foreground/70"
       )}
     >
       <Icon className="mt-1 size-3 shrink-0" />
@@ -389,8 +382,7 @@ const ToolGroup = memo(function ToolGroup({
 
 const ToolRow = memo(function ToolRow({ detail }: { detail: ParsedLogDetail }) {
   const [open, setOpen] = useState(false)
-  const failed =
-    typeof detail.exitCode === "number" && detail.exitCode !== 0
+  const failed = typeof detail.exitCode === "number" && detail.exitCode !== 0
   const { body, icon: Icon, label } = presentTool(detail)
 
   const fullCommand =
@@ -427,10 +419,7 @@ const ToolRow = memo(function ToolRow({ detail }: { detail: ParsedLogDetail }) {
         </span>
         {body ? (
           <>
-            <span
-              className="shrink-0 text-muted-foreground/40"
-              aria-hidden
-            >
+            <span className="shrink-0 text-muted-foreground/40" aria-hidden>
               –
             </span>
             <span
@@ -452,30 +441,30 @@ const ToolRow = memo(function ToolRow({ detail }: { detail: ParsedLogDetail }) {
         {hasDetails ? (
           <ChevronRight
             className={cn(
-              "size-3 shrink-0 transition-transform text-muted-foreground/50",
+              "size-3 shrink-0 text-muted-foreground/50 transition-transform",
               open && "rotate-90"
             )}
           />
         ) : null}
       </button>
       {open && hasDetails ? (
-        <div className="ml-5 mt-1 mb-1 space-y-2 border-l border-border/60 pl-3">
+        <div className="mt-1 mb-1 ml-5 space-y-2 border-l border-border/60 pl-3">
           {fullCommand ? (
-            <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-muted-foreground/80">
+            <pre className="overflow-x-auto font-mono text-[11px] leading-5 break-words whitespace-pre-wrap text-muted-foreground/80">
               {fullCommand}
             </pre>
           ) : null}
           {fullText && !fullCommand ? (
-            <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-muted-foreground/80">
+            <pre className="overflow-x-auto font-mono text-[11px] leading-5 break-words whitespace-pre-wrap text-muted-foreground/80">
               {fullText}
             </pre>
           ) : null}
           {output ? (
             <div>
-              <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/50">
+              <div className="mb-1 text-[10px] font-medium tracking-wider text-muted-foreground/50 uppercase">
                 Output
               </div>
-              <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-muted-foreground/70">
+              <pre className="overflow-x-auto font-mono text-[11px] leading-5 break-words whitespace-pre-wrap text-muted-foreground/70">
                 {output}
               </pre>
             </div>

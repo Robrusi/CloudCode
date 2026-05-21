@@ -143,6 +143,7 @@ type ChatRecord = {
   baseBranch?: string
   codexThreadId?: string
   id: Id<"threads">
+  lastUserMessageAt?: number
   repoUrl: string
   sandboxPresetId?: Id<"sandboxPresets">
   sandboxPresetName?: string
@@ -151,6 +152,7 @@ type ChatRecord = {
   title: string
   messages: Message[]
   model: Model
+  pending?: boolean
   createdAt: number
   updatedAt: number
 }
@@ -165,8 +167,21 @@ type SandboxPresetSecretRecord = {
 type SandboxPresetRecord = {
   createdAt: number
   daytonaSnapshot?: string
+  environmentSlug?: string
+  environments?: Array<{
+    activeSandboxId?: string
+    builtAt?: number
+    environmentSlug: string
+    id: Id<"sandboxPresetEnvironments">
+    repoUrl: string
+    status: "empty" | "building" | "ready" | "failed" | "stale"
+    updatedAt: number
+  }>
   id: Id<"sandboxPresets">
+  installScript?: string
+  mode?: "manual" | "auto"
   name: string
+  pathInstallScript?: string
   secrets: SandboxPresetSecretRecord[]
   updatedAt: number
 }
@@ -252,14 +267,20 @@ export function Chat() {
 function ChatInner() {
   const { user } = useUser()
   const { isLoading: userLoading } = useStoreUserEffect()
-  const rawChats = useQuery(api.chats.list)
-  const chats = useMemo(() => (rawChats ?? []) as ChatRecord[], [rawChats])
+  const rawChatSummaries = useQuery(api.chats.list)
+  const chatSummaries = useMemo(
+    () => (rawChatSummaries ?? []) as ChatRecord[],
+    [rawChatSummaries]
+  )
   const rawPresets = useQuery(api.sandboxPresets.list)
   const sandboxPresets = useMemo(
     () => (rawPresets ?? []) as SandboxPresetRecord[],
     [rawPresets]
   )
   const createThread = useMutation(api.chats.createThread)
+  const ensureDefaultPresets = useMutation(
+    api.sandboxPresets.ensureDefaultPresets
+  )
   const appendRunMessages = useMutation(api.chats.appendRunMessages)
   const appendAssistantLogs = useMutation(api.chats.appendAssistantLogs)
   const completeAssistantMessage = useMutation(
@@ -275,6 +296,24 @@ function ChatInner() {
       ? null
       : (localStorage.getItem(ACTIVE_KEY) as Id<"threads"> | null)
   )
+  const rawActiveChat = useQuery(
+    api.chats.get,
+    activeId ? { threadId: activeId } : "skip"
+  )
+  const activeChat = rawActiveChat as ChatRecord | null | undefined
+  const chats = useMemo(() => {
+    if (!activeChat) return chatSummaries
+    const seen = new Set<string>()
+    const rows = chatSummaries.map((chat) => {
+      if (chat.id !== activeChat.id) return chat
+      seen.add(chat.id as string)
+      return {
+        ...chat,
+        ...activeChat,
+      }
+    })
+    return seen.has(activeChat.id as string) ? rows : [activeChat, ...rows]
+  }, [activeChat, chatSummaries])
   const [pendingDeleteId, setPendingDeleteId] = useState<Id<"threads"> | null>(
     null
   )
@@ -318,15 +357,6 @@ function ChatInner() {
       : ((localStorage.getItem(PRESET_KEY) as Id<"sandboxPresets"> | null) ??
         "")
   )
-  useEffect(() => {
-    if (rawPresets === undefined || !draftSandboxPresetId) return
-    if (sandboxPresets.some((preset) => preset.id === draftSandboxPresetId)) {
-      return
-    }
-
-    setDraftSandboxPresetId("")
-    localStorage.removeItem(PRESET_KEY)
-  }, [rawPresets, draftSandboxPresetId, sandboxPresets])
   const [editingRepo, setEditingRepo] = useState(false)
   const [newChatOpen, setNewChatOpen] = useState(false)
   const [modelOpen, setModelOpen] = useState(false)
@@ -358,6 +388,7 @@ function ChatInner() {
   const runControllersRef = useRef<Record<string, AbortController>>({})
   const runningRunKeysRef = useRef<Set<string>>(new Set())
   const threadRunStateRef = useRef<Record<string, CachedRunState>>({})
+  const autoPresetDefaultedRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const composerRef = useRef<HTMLDivElement>(null)
   const threadRef = useRef<HTMLDivElement | null>(null)
@@ -405,18 +436,14 @@ function ChatInner() {
   const sidebarChats = useMemo(
     () =>
       chats.map((chat) => {
-        const lastUserMessageAt = chat.messages.reduce((max, m) => {
-          if (m.role !== "user") return max
-          const t = m.createdAt ?? 0
-          return t > max ? t : max
-        }, 0)
         return {
           ...chat,
           ...(liveRunStates[chat.id as string] ?? {}),
           pending:
             Boolean(runningRunKeys[chat.id as string]) ||
+            Boolean(chat.pending) ||
             chat.messages.some((m) => m.pending),
-          lastUserMessageAt: lastUserMessageAt || chat.updatedAt,
+          lastUserMessageAt: chat.lastUserMessageAt || chat.updatedAt,
         }
       }),
     [chats, liveRunStates, runningRunKeys]
@@ -425,10 +452,9 @@ function ChatInner() {
   const activeRunState = activeId
     ? liveRunStates[activeId as string]
     : undefined
-  const activeSandboxId =
-    hasCachedRunKey(activeRunState, "sandboxId")
-      ? (activeRunState?.sandboxId ?? null)
-      : (active?.sandboxId ?? null)
+  const activeSandboxId = hasCachedRunKey(activeRunState, "sandboxId")
+    ? (activeRunState?.sandboxId ?? null)
+    : (active?.sandboxId ?? null)
   const activeFileCacheScope = activeId
     ? `thread:${activeId as string}`
     : activeSandboxId
@@ -450,7 +476,8 @@ function ChatInner() {
       : EMPTY_MESSAGES
   const messages = [...serverMessages, ...optimisticMessages]
   const activeLocalRunPending = Boolean(runningRunKeys[activeRunKey])
-  const activeMessagePending = messages.some((message) => message.pending)
+  const activeMessagePending =
+    Boolean(active?.pending) || messages.some((message) => message.pending)
   const activeRunPending = activeLocalRunPending || activeMessagePending
   const canStopActiveRun = Boolean(runControllersRef.current[activeRunKey])
   const terminalVisible = terminalOpen && Boolean(activeSandboxId)
@@ -462,14 +489,7 @@ function ChatInner() {
   const repoUrl = active ? active.repoUrl : draftRepo
   const baseBranch = active ? (active.baseBranch ?? "") : draftBaseBranch
   const model = active ? active.model : draftModel
-  const availableDraftSandboxPresetId =
-    draftSandboxPresetId &&
-    sandboxPresets.some((preset) => preset.id === draftSandboxPresetId)
-      ? draftSandboxPresetId
-      : ""
-  const sandboxPresetId = active
-    ? active.sandboxPresetId
-    : availableDraftSandboxPresetId
+  const sandboxPresetId = active ? active.sandboxPresetId : draftSandboxPresetId
   const speed = draftSpeed
   const thinking = draftThinking
   const empty = messages.length === 0
@@ -548,6 +568,28 @@ function ChatInner() {
   }, [userLoading])
 
   useEffect(() => {
+    if (userLoading) return
+    void ensureDefaultPresets().catch((error) => {
+      console.warn("Unable to ensure default presets.", error)
+    })
+  }, [ensureDefaultPresets, userLoading])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (autoPresetDefaultedRef.current) return
+    if (localStorage.getItem(PRESET_KEY) !== null || draftSandboxPresetId) {
+      autoPresetDefaultedRef.current = true
+      return
+    }
+
+    const autoPreset = sandboxPresets.find((preset) => preset.mode === "auto")
+    if (!autoPreset) return
+    autoPresetDefaultedRef.current = true
+    setDraftSandboxPresetId(autoPreset.id)
+    localStorage.setItem(PRESET_KEY, autoPreset.id)
+  }, [draftSandboxPresetId, sandboxPresets])
+
+  useEffect(() => {
     if (activeId) localStorage.setItem(ACTIVE_KEY, activeId)
     else localStorage.removeItem(ACTIVE_KEY)
   }, [activeId])
@@ -563,6 +605,7 @@ function ChatInner() {
         if (!optimistic) continue
         if (
           chat.messages.length > optimistic.baseMessageCount ||
+          chat.pending ||
           chat.messages.some((message) => message.pending)
         ) {
           delete next[key]
@@ -868,15 +911,9 @@ function ChatInner() {
     baseBranch: string
     sandboxPresetId: Id<"sandboxPresets"> | ""
   }) {
-    const availablePresetId =
-      nextPresetId &&
-      sandboxPresets.some((preset) => preset.id === nextPresetId)
-        ? nextPresetId
-        : ""
-
     persistDraftRepo(nextRepo)
     persistDraftBaseBranch(nextBaseBranch)
-    persistDraftSandboxPreset(availablePresetId)
+    persistDraftSandboxPreset(nextPresetId)
     setActiveId(null)
     setInput("")
     setEditingRepo(false)
@@ -962,7 +999,10 @@ function ChatInner() {
       !trimmed ||
       userLoading ||
       runningRunKeysRef.current.has(initialRunKey) ||
-      (active ? active.messages.some((message) => message.pending) : false)
+      (active
+        ? Boolean(active.pending) ||
+          active.messages.some((message) => message.pending)
+        : false)
     ) {
       return
     }
@@ -992,11 +1032,7 @@ function ChatInner() {
     )
 
     try {
-      const runSandboxPresetId = active
-        ? active.sandboxPresetName
-          ? active.sandboxPresetId
-          : undefined
-        : availableDraftSandboxPresetId
+      const runSandboxPresetId = active?.sandboxPresetId ?? draftSandboxPresetId
       if (!chatId) {
         const trimmedBaseBranch = draftBaseBranch.trim()
         const created = await createThread({
@@ -1026,6 +1062,23 @@ function ChatInner() {
       if (!chatId || !assistantMessageId) {
         throw new Error("Unable to create a thread for this run.")
       }
+
+      const startingLog: StoredRunLog = {
+        kind: "setup",
+        message: "Starting Codex request",
+        time: Date.now(),
+      }
+      appendRunLog(assistantMessageId, {
+        ...startingLog,
+        id: `client-start-${startingLog.time}`,
+      })
+      void appendAssistantLogs({
+        logs: [startingLog],
+        messageId: assistantMessageId,
+        threadId: chatId,
+      }).catch((error) => {
+        console.warn("Unable to persist starting log.", error)
+      })
 
       const previousAssistant = active?.messages
         .toReversed()
@@ -1486,7 +1539,7 @@ function ChatInner() {
         <NewChatDialog
           initialRepo={draftRepo}
           initialBaseBranch={draftBaseBranch}
-          initialPresetId={availableDraftSandboxPresetId}
+          initialPresetId={draftSandboxPresetId}
           presets={sandboxPresets}
           onCancel={() => setNewChatOpen(false)}
           onConfirm={confirmNewChat}
@@ -2019,9 +2072,7 @@ function SandboxMenu({
 
   const stopped = display === "stopped"
   const canAct =
-    Boolean(sandboxId) &&
-    display !== "deleted" &&
-    display !== "idle"
+    Boolean(sandboxId) && display !== "deleted" && display !== "idle"
 
   const showSpinner = busy || display === "starting" || display === "checking"
   const title =

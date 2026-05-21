@@ -113,7 +113,9 @@ function envNumber(name: string, fallback: number) {
 export function defaultDaytonaAutostopMinutes() {
   return Math.max(
     1,
-    Math.round(envNumber("DAYTONA_AUTO_STOP_MINUTES", DEFAULT_AUTO_STOP_MINUTES))
+    Math.round(
+      envNumber("DAYTONA_AUTO_STOP_MINUTES", DEFAULT_AUTO_STOP_MINUTES)
+    )
   )
 }
 
@@ -136,7 +138,10 @@ export function defaultDaytonaCreateTimeoutSeconds() {
   return Math.max(
     30,
     Math.round(
-      envNumber("DAYTONA_CREATE_TIMEOUT_SECONDS", DEFAULT_CREATE_TIMEOUT_SECONDS)
+      envNumber(
+        "DAYTONA_CREATE_TIMEOUT_SECONDS",
+        DEFAULT_CREATE_TIMEOUT_SECONDS
+      )
     )
   )
 }
@@ -164,7 +169,9 @@ export function daytonaAutostopMinutesForRun(timeoutMs: number) {
 }
 
 export function defaultDaytonaSnapshot() {
-  return process.env.DAYTONA_DEFAULT_SNAPSHOT?.trim() || DEFAULT_DAYTONA_SNAPSHOT
+  return (
+    process.env.DAYTONA_DEFAULT_SNAPSHOT?.trim() || DEFAULT_DAYTONA_SNAPSHOT
+  )
 }
 
 export function defaultDaytonaImage() {
@@ -174,15 +181,15 @@ export function defaultDaytonaImage() {
 export function daytonaUserPathEntries(home: string) {
   const cleanHome = home.replace(/\/+$/, "")
   return [
-    `${cleanHome}/.vite-plus/bin`,
-    `${cleanHome}/.local/bin`,
-    `${cleanHome}/.local/share/pnpm`,
     `${cleanHome}/.local/share/mise/shims`,
     `${cleanHome}/.local/share/mise/bin`,
     `${cleanHome}/.mise/shims`,
     `${cleanHome}/.asdf/shims`,
     `${cleanHome}/.asdf/bin`,
+    `${cleanHome}/.local/bin`,
+    `${cleanHome}/.local/share/pnpm`,
     `${cleanHome}/.bun/bin`,
+    `${cleanHome}/.vite-plus/bin`,
     `${cleanHome}/.cargo/bin`,
     `${cleanHome}/.deno/bin`,
     `${cleanHome}/.dotnet/tools`,
@@ -234,8 +241,10 @@ export async function resolveDaytonaPaths(
   sandbox?: Sandbox
 ): Promise<DaytonaSandboxPaths> {
   const home =
-    (sandbox ? await sandbox.getUserHomeDir().catch(() => undefined) : undefined)
-      ?.trim() || DEFAULT_DAYTONA_HOME
+    (sandbox
+      ? await sandbox.getUserHomeDir().catch(() => undefined)
+      : undefined
+    )?.trim() || DEFAULT_DAYTONA_HOME
   const repoPath =
     process.env.DAYTONA_REPO_PATH?.trim() || `${home.replace(/\/+$/, "")}/repo`
   const runtimeHome =
@@ -321,9 +330,10 @@ export async function createDaytonaSandbox({
   name?: string
   snapshot?: string
 }) {
-  const daytona = getDaytonaClient()
+  const requestedSnapshot = snapshot?.trim()
   const configuredDefaultSnapshot = defaultDaytonaSnapshot()
-  const resolvedSnapshot = snapshot?.trim() || configuredDefaultSnapshot
+  const daytona = getDaytonaClient()
+  const resolvedSnapshot = requestedSnapshot || configuredDefaultSnapshot
   const baseParams = {
     autoArchiveInterval: defaultDaytonaArchiveMinutes(),
     autoDeleteInterval: defaultDaytonaDeleteMinutes(),
@@ -357,6 +367,7 @@ export async function createDaytonaSandbox({
     )
   }
   await ensureDaytonaSandboxStarted(sandbox)
+  await installDaytonaTarWrapper(sandbox, await resolveDaytonaPaths(sandbox))
   return sandbox
 }
 
@@ -429,7 +440,71 @@ export function shellQuote(value: string) {
   return `'${value.replace(/'/g, "'\\''")}'`
 }
 
-function buildSessionCommand(command: string, options: DaytonaRunCommandOptions) {
+// Tool installers often call tar as root; user-namespaced sandbox storage can
+// reject archive uid/gid ownership, so extraction must ignore stored owners.
+const DAYTONA_TAR_WRAPPER = [
+  "#!/usr/bin/env bash",
+  "set -e",
+  'real_tar="/usr/bin/tar"',
+  '[ -x "$real_tar" ] || real_tar="/bin/tar"',
+  'if [ ! -x "$real_tar" ]; then',
+  '  echo "Unable to find system tar." >&2',
+  "  exit 127",
+  "fi",
+  "extract=0",
+  "index=0",
+  'for arg in "$@"; do',
+  "  index=$((index + 1))",
+  '  case "$arg" in',
+  "    --extract|-x|-*x*) extract=1 ;;",
+  "    --) break ;;",
+  "    --*) ;;",
+  "    -*) ;;",
+  '    *) if [ "$index" = "1" ]; then case "$arg" in *x*) extract=1 ;; esac; fi ;;',
+  "  esac",
+  "done",
+  'if [ "$extract" = "1" ]; then',
+  '  exec "$real_tar" --no-same-owner --no-same-permissions "$@"',
+  "fi",
+  'exec "$real_tar" "$@"',
+  "",
+].join("\n")
+
+export async function installDaytonaTarWrapper(
+  sandbox: Sandbox,
+  paths: Pick<DaytonaSandboxPaths, "home">
+) {
+  const binDir = `${paths.home}/.local/bin`
+  const wrapperPath = `${binDir}/tar`
+
+  const result = await runDaytonaCommand(
+    sandbox,
+    [
+      "set -eo pipefail",
+      `mkdir -p ${shellQuote(binDir)}`,
+      `cat > ${shellQuote(wrapperPath)} <<'EOF'`,
+      DAYTONA_TAR_WRAPPER.trimEnd(),
+      "EOF",
+      `chmod +x ${shellQuote(wrapperPath)}`,
+      `ln -sf ${shellQuote(wrapperPath)} /usr/local/bin/tar 2>/dev/null || true`,
+      `${shellQuote(wrapperPath)} --version >/dev/null`,
+    ].join("\n"),
+    { cwd: paths.home, timeoutMs: 10_000 }
+  )
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      result.stderr.trim() ||
+        result.stdout.trim() ||
+        "Unable to install sandbox tar wrapper."
+    )
+  }
+}
+
+function buildSessionCommand(
+  command: string,
+  options: DaytonaRunCommandOptions
+) {
   const envEntries = Object.entries(options.env ?? {}).filter(
     (entry): entry is [string, string] =>
       validEnvName(entry[0]) && typeof entry[1] === "string"
@@ -468,6 +543,10 @@ async function waitForCommandExit(
   return command.exitCode ?? 124
 }
 
+function wait(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms))
+}
+
 export async function runDaytonaCommand(
   sandbox: Sandbox,
   command: string,
@@ -494,26 +573,32 @@ export async function runDaytonaCommand(
       let stdout = ""
       let stderr = ""
 
-      await sandbox.process.getSessionCommandLogs(
-        sessionId,
-        commandId,
-        (chunk) => {
-          stdout += chunk
-          options.onStdout?.(chunk)
-        },
-        (chunk) => {
-          stderr += chunk
-          options.onStderr?.(chunk)
-        }
-      )
-
-      return {
-        exitCode: await waitForCommandExit(
-          sandbox,
+      const logsPromise = sandbox.process
+        .getSessionCommandLogs(
           sessionId,
           commandId,
-          options.timeoutMs
-        ),
+          (chunk) => {
+            stdout += chunk
+            options.onStdout?.(chunk)
+          },
+          (chunk) => {
+            stderr += chunk
+            options.onStderr?.(chunk)
+          }
+        )
+        .catch(() => undefined)
+
+      const exitCode = await waitForCommandExit(
+        sandbox,
+        sessionId,
+        commandId,
+        options.timeoutMs
+      )
+
+      await Promise.race([logsPromise, wait(1_000)])
+
+      return {
+        exitCode,
         stderr,
         stdout,
       }

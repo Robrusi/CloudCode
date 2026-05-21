@@ -141,7 +141,7 @@ export function NewChatDialog({
     onConfirm({
       repoUrl: repo.trim(),
       baseBranch: branch.trim(),
-      sandboxPresetId: selectedPreset?.id ?? "",
+      sandboxPresetId: presetId,
     })
   }
 

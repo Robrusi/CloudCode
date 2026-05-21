@@ -7,8 +7,10 @@ import { decryptSecret } from "@/lib/secret-crypto"
 
 export type SandboxPresetForRun = {
   daytonaSnapshot?: string
+  environmentSlug?: string
   id: Id<"sandboxPresets">
   installScript?: string
+  mode?: "manual" | "auto"
   name: string
   pathInstallScript?: string
   secrets: Array<{

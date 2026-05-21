@@ -1,6 +1,6 @@
 "use client"
 
-import { useMutation } from "convex/react"
+import { useMutation, useQuery } from "convex/react"
 import {
   ChevronRight,
   KeyRound,
@@ -28,8 +28,19 @@ type SandboxPresetSecretRecord = {
 type SandboxPresetRecord = {
   createdAt: number
   daytonaSnapshot?: string
+  environmentSlug?: string
+  environments?: Array<{
+    activeSandboxId?: string
+    builtAt?: number
+    environmentSlug: string
+    id: Id<"sandboxPresetEnvironments">
+    repoUrl: string
+    status: "empty" | "building" | "ready" | "failed" | "stale"
+    updatedAt: number
+  }>
   id: Id<"sandboxPresets">
   installScript?: string
+  mode?: "manual" | "auto"
   name: string
   pathInstallScript?: string
   secrets: SandboxPresetSecretRecord[]
@@ -45,6 +56,8 @@ export function SettingsScreen({
   authError: string
   sandboxPresets: SandboxPresetRecord[]
 }) {
+  const detailedPresets = useQuery(api.sandboxPresets.listWithEnvironments)
+  const presets = (detailedPresets ?? sandboxPresets) as SandboxPresetRecord[]
   const connected = Boolean(authStatus?.exists)
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -101,7 +114,7 @@ export function SettingsScreen({
             </div>
           </div>
 
-          <PresetSettings presets={sandboxPresets} />
+          <PresetSettings presets={presets} />
         </div>
       </div>
     </div>
@@ -117,6 +130,7 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
     null
   )
   const selected = presets.find((preset) => preset.id === selectedId) ?? null
+  const selectedIsAuto = selected?.mode === "auto"
   const [name, setName] = useState("")
   const [pathInstallScript, setPathInstallScript] = useState("")
   const [installScript, setInstallScript] = useState("")
@@ -295,15 +309,29 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                     {preset.name}
                   </div>
                   <div className="truncate text-xs text-muted-foreground">
-                    {[
-                      preset.pathInstallScript ? "PATH tools" : "",
-                      preset.installScript ? "repo install" : "",
-                      preset.secrets.length
-                        ? `${preset.secrets.length} secret${preset.secrets.length === 1 ? "" : "s"}`
-                        : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" · ") || "Cloudcode default environment"}
+                    {preset.mode === "auto"
+                      ? [
+                          "Scans cloudcode.yaml",
+                          preset.environments?.some(
+                            (environment) => environment.status === "ready"
+                          )
+                            ? `${preset.environments.filter((environment) => environment.status === "ready").length} ready`
+                            : "",
+                          preset.secrets.length
+                            ? `${preset.secrets.length} secret${preset.secrets.length === 1 ? "" : "s"}`
+                            : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")
+                      : [
+                          preset.pathInstallScript ? "PATH tools" : "",
+                          preset.installScript ? "repo install" : "",
+                          preset.secrets.length
+                            ? `${preset.secrets.length} secret${preset.secrets.length === 1 ? "" : "s"}`
+                            : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" · ") || "Cloudcode default environment"}
                   </div>
                 </div>
                 {preset.pathInstallScript ? (
@@ -372,37 +400,72 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
               />
             </label>
 
-            <label className="grid gap-1.5 text-xs font-medium text-foreground/80">
-              PATH setup script
-              <textarea
-                value={pathInstallScript}
-                onChange={(event) => setPathInstallScript(event.target.value)}
-                placeholder={
-                  "curl -fsSL https://vite.plus | bash\nnpm install -g vercel"
-                }
-                spellCheck={false}
-                className="min-h-24 resize-y rounded-md border border-border/70 bg-transparent px-3 py-2 font-mono text-xs font-normal leading-5 transition-colors outline-none focus:border-foreground/30"
-              />
-              <span className="text-[11px] leading-4 font-normal text-muted-foreground">
-                Runs from the sandbox home before repo setup. Use it for CLIs
-                and language tools that should be available on PATH.
-              </span>
-            </label>
+            {selectedIsAuto ? (
+              <div className="rounded-md border border-border/70 px-3 py-3">
+                <div className="text-xs font-medium text-foreground/80">
+                  Automatic cloudcode.yaml environments
+                </div>
+                <div className="mt-1 text-[11px] leading-4 text-muted-foreground">
+                  When this preset runs against a repo, Cloudcode scans the
+                  repo, writes cloudcode.yaml, executes its setup commands in a
+                  builder sandbox once, then reuses that sandbox for later
+                  chats.
+                </div>
+                {selected.environments?.length ? (
+                  <div className="mt-3 overflow-hidden rounded-md border border-border/60">
+                    {selected.environments.map((environment) => (
+                      <div
+                        key={environment.id}
+                        className="flex items-center gap-2 border-b border-border/50 px-2.5 py-2 last:border-0"
+                      >
+                        <span className="min-w-0 flex-1 truncate text-xs text-foreground/80">
+                          {environment.repoUrl.replace(/^https?:\/\//, "")}
+                        </span>
+                        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                          {environment.status}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <>
+                <label className="grid gap-1.5 text-xs font-medium text-foreground/80">
+                  PATH setup script
+                  <textarea
+                    value={pathInstallScript}
+                    onChange={(event) =>
+                      setPathInstallScript(event.target.value)
+                    }
+                    placeholder={
+                      "curl -fsSL https://vite.plus | bash\nnpm install -g vercel"
+                    }
+                    spellCheck={false}
+                    className="min-h-24 resize-y rounded-md border border-border/70 bg-transparent px-3 py-2 font-mono text-xs leading-5 font-normal transition-colors outline-none focus:border-foreground/30"
+                  />
+                  <span className="text-[11px] leading-4 font-normal text-muted-foreground">
+                    Runs from the sandbox home before repo setup. Use it for
+                    CLIs and language tools that should be available on PATH.
+                  </span>
+                </label>
 
-            <label className="grid gap-1.5 text-xs font-medium text-foreground/80">
-              Repo install script
-              <textarea
-                value={installScript}
-                onChange={(event) => setInstallScript(event.target.value)}
-                placeholder={"pnpm install\npnpm test -- --runInBand"}
-                spellCheck={false}
-                className="min-h-28 resize-y rounded-md border border-border/70 bg-transparent px-3 py-2 font-mono text-xs font-normal leading-5 transition-colors outline-none focus:border-foreground/30"
-              />
-              <span className="text-[11px] leading-4 font-normal text-muted-foreground">
-                Runs from the cloned repo root before Codex starts. Leave blank
-                when the base environment already has everything.
-              </span>
-            </label>
+                <label className="grid gap-1.5 text-xs font-medium text-foreground/80">
+                  Repo install script
+                  <textarea
+                    value={installScript}
+                    onChange={(event) => setInstallScript(event.target.value)}
+                    placeholder={"pnpm install\npnpm test -- --runInBand"}
+                    spellCheck={false}
+                    className="min-h-28 resize-y rounded-md border border-border/70 bg-transparent px-3 py-2 font-mono text-xs leading-5 font-normal transition-colors outline-none focus:border-foreground/30"
+                  />
+                  <span className="text-[11px] leading-4 font-normal text-muted-foreground">
+                    Runs from the cloned repo root before Codex starts. Leave
+                    blank when the base environment already has everything.
+                  </span>
+                </label>
+              </>
+            )}
 
             <div className="border-t border-border/60 pt-4">
               <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground/80">

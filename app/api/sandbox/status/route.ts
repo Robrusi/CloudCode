@@ -6,14 +6,6 @@ export const maxDuration = 300
 const STATUS_POLL_INTERVAL_MS = 1_000
 const HEARTBEAT_INTERVAL_MS = 15_000
 
-function streamEvent(
-  controller: ReadableStreamDefaultController,
-  encoder: TextEncoder,
-  value: unknown
-) {
-  controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`))
-}
-
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const sandboxId = searchParams.get("sandboxId")
@@ -31,6 +23,21 @@ export async function GET(request: Request) {
 
   const stream = new ReadableStream({
     start(controller) {
+      function safeEnqueue(chunk: string) {
+        if (closed) return false
+        try {
+          controller.enqueue(encoder.encode(chunk))
+          return true
+        } catch {
+          close()
+          return false
+        }
+      }
+
+      function safeStreamEvent(value: unknown) {
+        return safeEnqueue(`data: ${JSON.stringify(value)}\n\n`)
+      }
+
       function close() {
         if (closed) return
         closed = true
@@ -51,15 +58,14 @@ export async function GET(request: Request) {
           if (payload !== lastPayload) {
             lastPayload = payload
             lastHeartbeat = Date.now()
-            controller.enqueue(encoder.encode(`data: ${payload}\n\n`))
+            if (!safeEnqueue(`data: ${payload}\n\n`)) return
           } else if (Date.now() - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
             lastHeartbeat = Date.now()
-            controller.enqueue(encoder.encode(": heartbeat\n\n"))
+            if (!safeEnqueue(": heartbeat\n\n")) return
           }
         } catch (error) {
-          streamEvent(controller, encoder, {
-            error:
-              error instanceof Error ? error.message : "Sandbox not found",
+          safeStreamEvent({
+            error: error instanceof Error ? error.message : "Sandbox not found",
             notFound: true,
             sandboxId: checkedSandboxId,
             state: "deleted",

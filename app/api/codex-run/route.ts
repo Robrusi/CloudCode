@@ -7,6 +7,7 @@ import {
   type RunCodexLog,
   runCodexInSandbox,
 } from "@/lib/daytona-codex-agent"
+import { ensureAutoEnvironmentSandbox } from "@/lib/sandbox-auto-environment"
 import { getSandboxPresetForRun } from "@/lib/sandbox-presets"
 
 export const runtime = "nodejs"
@@ -79,12 +80,6 @@ export async function POST(request: Request) {
     const prompt = body.prompt
     const repoUrl = body.repoUrl
     const profile = typeof body.profile === "string" ? body.profile : undefined
-    const authJson = await getCodexAuthJson(profile)
-    const sandboxPreset = await getSandboxPresetForRun(
-      typeof body.sandboxPresetId === "string"
-        ? body.sandboxPresetId
-        : undefined
-    )
 
     let cancelled = false
     let closed = false
@@ -121,8 +116,71 @@ export async function POST(request: Request) {
 
         void (async () => {
           try {
+            safeStreamEvent({
+              log: {
+                kind: "setup",
+                message: "Authorizing Codex run",
+              },
+              time: Date.now(),
+              type: "progress",
+            })
+            const authJson = await getCodexAuthJson(profile)
+            const sandboxPreset = await getSandboxPresetForRun(
+              typeof body.sandboxPresetId === "string"
+                ? body.sandboxPresetId
+                : undefined
+            )
+            let runAuthJson = authJson
+            let resolvedSandboxPreset = sandboxPreset
+            let resolvedSandboxId =
+              typeof body.sandboxId === "string" ? body.sandboxId : undefined
+            let preparedSandboxFresh = false
+            let requireExistingSandbox = false
+            if (resolvedSandboxPreset?.mode === "auto") {
+              safeStreamEvent({
+                log: {
+                  kind: "setup",
+                  message: "Resolving auto environment preset",
+                },
+                time: Date.now(),
+                type: "progress",
+              })
+              const autoEnvironment = await ensureAutoEnvironmentSandbox({
+                authJson: runAuthJson,
+                baseBranch:
+                  typeof body.baseBranch === "string"
+                    ? body.baseBranch
+                    : undefined,
+                githubToken:
+                  typeof body.githubToken === "string"
+                    ? body.githubToken
+                    : undefined,
+                onLog: (log: RunCodexLog) => {
+                  safeStreamEvent({
+                    log,
+                    time: Date.now(),
+                    type: "progress",
+                  })
+                },
+                repoUrl,
+                sandboxPreset: resolvedSandboxPreset,
+              })
+              resolvedSandboxPreset = {
+                ...resolvedSandboxPreset,
+                ...autoEnvironment.preset,
+              }
+              runAuthJson = autoEnvironment.updatedAuthJson ?? runAuthJson
+              if (autoEnvironment.sandboxId) {
+                resolvedSandboxId = autoEnvironment.sandboxId
+                preparedSandboxFresh = Boolean(
+                  autoEnvironment.preparedSandboxFresh
+                )
+                requireExistingSandbox = preparedSandboxFresh
+              }
+            }
+
             const result = await runCodexInSandbox({
-              authJson,
+              authJson: runAuthJson,
               baseBranch:
                 typeof body.baseBranch === "string"
                   ? body.baseBranch
@@ -159,14 +217,15 @@ export async function POST(request: Request) {
                   : undefined,
               prompt,
               reasoningEffort: parseReasoningEffort(body.reasoningEffort),
+              requireExistingSandbox,
               resumeContext:
                 typeof body.resumeContext === "string"
                   ? body.resumeContext
                   : undefined,
               repoUrl,
-              sandboxId:
-                typeof body.sandboxId === "string" ? body.sandboxId : undefined,
-              sandboxPreset,
+              preparedSandboxFresh,
+              sandboxId: resolvedSandboxId,
+              sandboxPreset: resolvedSandboxPreset,
               speed: parseSpeed(body.speed),
               timeoutMs:
                 typeof body.timeoutMs === "number" ? body.timeoutMs : undefined,

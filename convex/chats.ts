@@ -1,8 +1,8 @@
 import { v } from "convex/values"
 
 import { mutation, query } from "./_generated/server"
-import type { MutationCtx } from "./_generated/server"
-import type { Id } from "./_generated/dataModel"
+import type { MutationCtx, QueryCtx } from "./_generated/server"
+import type { Doc, Id } from "./_generated/dataModel"
 import { ensureCurrentUser, getCurrentUser } from "./lib/users"
 
 const model = v.union(
@@ -49,6 +49,63 @@ const messageMeta = v.object({
   status: v.optional(v.string()),
 })
 
+const THREAD_LIST_LIMIT = 80
+const MAX_STORED_RUN_LOGS = 80
+const MAX_STORED_LOG_MESSAGE_LENGTH = 500
+const MAX_STORED_LOG_DETAIL_LENGTH = 1_500
+const STORED_LOG_KINDS = new Set<string>([
+  "setup",
+  "command",
+  "result",
+  "stderr",
+] as const)
+
+type StoredRunLog = {
+  detail?: string
+  kind: "setup" | "command" | "reasoning" | "stdout" | "stderr" | "result"
+  message: string
+  time: number
+}
+
+function truncate(value: string | undefined, max: number) {
+  if (!value) return undefined
+  return value.length > max ? `${value.slice(0, max - 3)}...` : value
+}
+
+function compactRunLog(log: StoredRunLog) {
+  if (!STORED_LOG_KINDS.has(log.kind)) return null
+  return {
+    ...(truncate(log.detail, MAX_STORED_LOG_DETAIL_LENGTH)
+      ? { detail: truncate(log.detail, MAX_STORED_LOG_DETAIL_LENGTH) }
+      : {}),
+    kind: log.kind,
+    message: truncate(log.message, MAX_STORED_LOG_MESSAGE_LENGTH) ?? "",
+    time: log.time,
+  }
+}
+
+function compactRunLogs(logs: StoredRunLog[] | undefined) {
+  return (logs ?? [])
+    .flatMap((log) => {
+      const compacted = compactRunLog(log)
+      return compacted ? [compacted] : []
+    })
+    .slice(-MAX_STORED_RUN_LOGS)
+}
+
+function compactMessageMeta(
+  meta: Doc<"messages">["meta"]
+): Doc<"messages">["meta"] {
+  if (!meta) return undefined
+  const logs = compactRunLogs(meta.logs)
+  const { logs: _logs, ...rest } = meta
+  void _logs
+  return {
+    ...rest,
+    ...(logs.length ? { logs } : {}),
+  }
+}
+
 async function requireOwnedThread(
   ctx: MutationCtx,
   threadId: Id<"threads">,
@@ -63,7 +120,7 @@ async function requireOwnedThread(
   return thread
 }
 
-async function resolveOwnedPresetId(
+async function requireOwnedPreset(
   ctx: MutationCtx,
   presetId: Id<"sandboxPresets"> | undefined,
   userId: Id<"users">
@@ -71,9 +128,61 @@ async function resolveOwnedPresetId(
   if (!presetId) return undefined
 
   const preset = await ctx.db.get(presetId)
-  if (!preset || preset.userId !== userId) return undefined
+  if (!preset || preset.userId !== userId) {
+    throw new Error("Preset not found.")
+  }
 
   return preset._id
+}
+
+async function presetNameForThread(
+  ctx: QueryCtx,
+  presetId: Id<"sandboxPresets"> | undefined
+) {
+  if (!presetId) return undefined
+  return (await ctx.db.get(presetId))?.name
+}
+
+async function threadSummaryRecord(ctx: QueryCtx, thread: Doc<"threads">) {
+  return {
+    baseBranch: thread.baseBranch,
+    codexThreadId: thread.codexThreadId,
+    createdAt: thread.createdAt,
+    id: thread._id,
+    lastUserMessageAt: thread.lastUserMessageAt ?? thread.updatedAt,
+    messages: [],
+    model: thread.model,
+    pending: Boolean(thread.hasPendingMessage),
+    repoUrl: thread.repoUrl,
+    sandboxPresetId: thread.sandboxPresetId,
+    sandboxPresetName: await presetNameForThread(ctx, thread.sandboxPresetId),
+    sandboxId: thread.sandboxId,
+    sandboxState: thread.sandboxState,
+    title: thread.title,
+    updatedAt: thread.updatedAt,
+  }
+}
+
+async function fullThreadRecord(ctx: QueryCtx, thread: Doc<"threads">) {
+  const messages = await ctx.db
+    .query("messages")
+    .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
+    .collect()
+
+  return {
+    ...(await threadSummaryRecord(ctx, thread)),
+    messages: messages.map((message) => ({
+      content: message.content,
+      createdAt: message._creationTime,
+      error: message.error,
+      id: message._id,
+      meta: compactMessageMeta(message.meta),
+      pending: message.pending,
+      role: message.role,
+      speed: message.speed,
+      thinking: message.thinking,
+    })),
+  }
 }
 
 export const list = query({
@@ -86,44 +195,26 @@ export const list = query({
       .query("threads")
       .withIndex("by_user_updated", (q) => q.eq("userId", user._id))
       .order("desc")
-      .collect()
+      .take(THREAD_LIST_LIMIT)
 
     return await Promise.all(
-      threads.map(async (thread) => {
-        const messages = await ctx.db
-          .query("messages")
-          .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
-          .collect()
-
-        return {
-          baseBranch: thread.baseBranch,
-          codexThreadId: thread.codexThreadId,
-          createdAt: thread.createdAt,
-          id: thread._id,
-          messages: messages.map((message) => ({
-            content: message.content,
-            createdAt: message._creationTime,
-            error: message.error,
-            id: message._id,
-            meta: message.meta,
-            pending: message.pending,
-            role: message.role,
-            speed: message.speed,
-            thinking: message.thinking,
-          })),
-          model: thread.model,
-          repoUrl: thread.repoUrl,
-          sandboxPresetId: thread.sandboxPresetId,
-          sandboxPresetName: thread.sandboxPresetId
-            ? (await ctx.db.get(thread.sandboxPresetId))?.name
-            : undefined,
-          sandboxId: thread.sandboxId,
-          sandboxState: thread.sandboxState,
-          title: thread.title,
-          updatedAt: thread.updatedAt,
-        }
-      })
+      threads.map((thread) => threadSummaryRecord(ctx, thread))
     )
+  },
+})
+
+export const get = query({
+  args: {
+    threadId: v.id("threads"),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx)
+    if (!user) return null
+
+    const thread = await ctx.db.get(args.threadId)
+    if (!thread || thread.userId !== user._id) return null
+
+    return await fullThreadRecord(ctx, thread)
   },
 })
 
@@ -140,7 +231,7 @@ export const createThread = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
-    const sandboxPresetId = await resolveOwnedPresetId(
+    const sandboxPresetId = await requireOwnedPreset(
       ctx,
       args.sandboxPresetId,
       userId
@@ -150,6 +241,8 @@ export const createThread = mutation({
     const threadId = await ctx.db.insert("threads", {
       ...(trimmedBaseBranch ? { baseBranch: trimmedBaseBranch } : {}),
       createdAt: now,
+      hasPendingMessage: true,
+      lastUserMessageAt: now,
       model: args.model,
       repoUrl: args.repoUrl,
       ...(sandboxPresetId ? { sandboxPresetId } : {}),
@@ -208,7 +301,11 @@ export const appendRunMessages = mutation({
       userId,
     })
 
-    await ctx.db.patch(args.threadId, { updatedAt: now })
+    await ctx.db.patch(args.threadId, {
+      hasPendingMessage: true,
+      lastUserMessageAt: now,
+      updatedAt: now,
+    })
 
     return { assistantMessageId }
   },
@@ -237,10 +334,11 @@ export const completeAssistantMessage = mutation({
       throw new Error("Message not found.")
     }
 
+    const existingMeta = compactMessageMeta(message.meta)
     const nextMeta =
-      message.meta || args.meta
+      existingMeta || args.meta
         ? {
-            ...message.meta,
+            ...existingMeta,
             ...args.meta,
           }
         : undefined
@@ -252,6 +350,7 @@ export const completeAssistantMessage = mutation({
       pending: false,
     })
     await ctx.db.patch(args.threadId, {
+      hasPendingMessage: false,
       ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
       ...(args.sandboxState
         ? { sandboxState: args.sandboxState }
@@ -285,10 +384,16 @@ export const appendAssistantLogs = mutation({
       throw new Error("Message not found.")
     }
 
+    const logs = compactRunLogs(args.logs)
+    if (logs.length === 0) return
+    const existingMeta = compactMessageMeta(message.meta)
+
     await ctx.db.patch(args.messageId, {
       meta: {
-        ...message.meta,
-        logs: [...(message.meta?.logs ?? []), ...args.logs].slice(-500),
+        ...existingMeta,
+        logs: [...(existingMeta?.logs ?? []), ...logs].slice(
+          -MAX_STORED_RUN_LOGS
+        ),
       },
     })
   },
