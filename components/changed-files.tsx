@@ -1,16 +1,34 @@
 "use client"
 
-import {
-  ChevronDown,
-  ChevronRight,
-  File as FileIcon,
-  Folder,
-} from "lucide-react"
-import { useMemo, useState } from "react"
+import { FileDiff, type ThemeTypes } from "@pierre/diffs/react"
+import type { FileDiffOptions } from "@pierre/diffs"
+import { ChevronDown, ChevronRight, Folder } from "lucide-react"
+import { useTheme } from "next-themes"
+import { type CSSProperties, useMemo, useState } from "react"
 
+import { TreeFileIcon } from "@/components/tree-file-icon"
 import { Button } from "@/components/ui/button"
-import { getDiffStats, type DiffFileStat } from "@/lib/diff-metadata"
+import {
+  getDiffStats,
+  parsePatchDiff,
+  type DiffFileStat,
+} from "@/lib/diff-metadata"
 import { cn } from "@/lib/utils"
+
+const PIERRE_CODE_THEMES = {
+  dark: "pierre-dark",
+  light: "pierre-light",
+} as const
+
+// Match the file-editor styling exactly so diff rows here look identical to
+// the single-file viewer.
+const PIERRE_FILE_STYLE: CSSProperties = {
+  "--diffs-font-family": "var(--font-mono)",
+  "--diffs-font-size": "13px",
+  "--diffs-line-height": "1.6",
+  "--diffs-gap-block": "16px",
+  "--diffs-gap-inline": "16px",
+} as CSSProperties
 
 type TreeNode =
   | { kind: "dir"; name: string; path: string; children: TreeNode[] }
@@ -45,7 +63,6 @@ function buildFileTree(files: DiffFileStat[]): TreeNode[] {
     })
   }
 
-  // Sort: directories first, then files; alphabetical within each
   const sortLevel = (nodes: TreeNode[]) => {
     nodes.sort((a, b) => {
       if (a.kind !== b.kind) return a.kind === "dir" ? -1 : 1
@@ -87,49 +104,6 @@ function collectDirPaths(nodes: TreeNode[], acc: string[] = []): string[] {
     }
   }
   return acc
-}
-
-const FILE_BADGE_STYLES: Record<string, { label: string; className: string }> =
-  {
-    ts: { label: "TS", className: "text-sky-600 dark:text-sky-400" },
-    tsx: { label: "TSX", className: "text-sky-600 dark:text-sky-400" },
-    js: { label: "JS", className: "text-amber-600 dark:text-amber-400" },
-    jsx: { label: "JSX", className: "text-amber-600 dark:text-amber-400" },
-    json: { label: "JSON", className: "text-amber-600 dark:text-amber-400" },
-    md: { label: "MD", className: "text-muted-foreground" },
-    css: { label: "CSS", className: "text-violet-600 dark:text-violet-400" },
-    html: { label: "HTML", className: "text-orange-600 dark:text-orange-400" },
-    py: { label: "PY", className: "text-emerald-600 dark:text-emerald-400" },
-    go: { label: "GO", className: "text-cyan-600 dark:text-cyan-400" },
-    rs: { label: "RS", className: "text-orange-700 dark:text-orange-400" },
-    sh: { label: "SH", className: "text-muted-foreground" },
-    yml: { label: "YML", className: "text-rose-600 dark:text-rose-400" },
-    yaml: { label: "YML", className: "text-rose-600 dark:text-rose-400" },
-    sql: { label: "SQL", className: "text-pink-600 dark:text-pink-400" },
-  }
-
-function FileBadge({ name }: { name: string }) {
-  const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : ""
-  const style = FILE_BADGE_STYLES[ext]
-  if (!style) {
-    return (
-      <FileIcon
-        className="size-3.5 shrink-0 text-muted-foreground"
-        strokeWidth={2}
-      />
-    )
-  }
-  return (
-    <span
-      className={cn(
-        "inline-flex h-3.5 min-w-[1.75rem] shrink-0 items-center justify-center font-mono text-[10px] font-semibold tracking-tight",
-        style.className
-      )}
-      aria-hidden
-    >
-      {style.label}
-    </span>
-  )
 }
 
 function DiffStatBadge({
@@ -199,7 +173,7 @@ function FileTreeRows({
                   className="size-3.5 shrink-0 text-muted-foreground"
                   strokeWidth={2}
                 />
-                <span className="flex-1 truncate font-mono text-[12px] text-foreground">
+                <span className="flex-1 truncate text-[13px] text-foreground">
                   {node.name}
                 </span>
                 <DiffStatBadge
@@ -230,8 +204,8 @@ function FileTreeRows({
             title={node.path}
           >
             <span className="size-3.5 shrink-0" />
-            <FileBadge name={node.name} />
-            <span className="flex-1 truncate font-mono text-[12px] text-foreground">
+            <TreeFileIcon path={node.path} />
+            <span className="flex-1 truncate text-[13px] text-foreground">
               {node.name}
             </span>
             <DiffStatBadge
@@ -309,3 +283,109 @@ export function ChangedFiles({
     </div>
   )
 }
+
+export type DiffStyle = "unified" | "split"
+
+export function DiffList({
+  diff,
+  diffStyle = "unified",
+}: {
+  diff: string
+  diffStyle?: DiffStyle
+}) {
+  const files = useMemo(() => parsePatchDiff(diff), [diff])
+  const fileStats = useMemo(() => {
+    const map = new Map<string, { additions: number; deletions: number }>()
+    for (const file of getDiffStats(diff).files) {
+      map.set(file.path, {
+        additions: file.additions,
+        deletions: file.deletions,
+      })
+    }
+    return map
+  }, [diff])
+
+  const [expanded, setExpanded] = useState<Set<string>>(
+    () => new Set(files.map((f) => f.name))
+  )
+
+  const { resolvedTheme } = useTheme()
+  const themeType: ThemeTypes = resolvedTheme === "dark" ? "dark" : "light"
+
+  const diffOptions = useMemo<FileDiffOptions<undefined>>(
+    () => ({
+      diffIndicators: "bars",
+      diffStyle,
+      disableFileHeader: true,
+      disableLineNumbers: false,
+      hunkSeparators: "line-info-basic",
+      lineDiffType: "word",
+      overflow: "wrap",
+      theme: PIERRE_CODE_THEMES,
+      themeType,
+    }),
+    [diffStyle, themeType]
+  )
+
+  if (files.length === 0) {
+    return (
+      <div className="grid h-full place-items-center text-sm text-muted-foreground">
+        No changed files.
+      </div>
+    )
+  }
+
+  const toggle = (name: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+
+  return (
+    <div className="divide-y divide-border/60">
+      {files.map((file) => {
+        const isOpen = expanded.has(file.name)
+        const stat = fileStats.get(file.name) ?? { additions: 0, deletions: 0 }
+        return (
+          <div key={file.name}>
+            <button
+              type="button"
+              onClick={() => toggle(file.name)}
+              aria-expanded={isOpen}
+              className="sticky top-0 z-10 flex w-full items-center gap-2.5 border-b border-border/60 bg-background/85 px-4 py-2.5 text-left backdrop-blur-xl transition-colors hover:bg-muted/60"
+            >
+              <ChevronRight
+                className={cn(
+                  "size-3.5 shrink-0 text-muted-foreground transition-transform",
+                  isOpen && "rotate-90"
+                )}
+                strokeWidth={2}
+              />
+              <TreeFileIcon path={file.name} />
+              <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">
+                {file.name}
+              </span>
+              <DiffStatBadge
+                additions={stat.additions}
+                deletions={stat.deletions}
+              />
+            </button>
+            {isOpen ? (
+              <div className="overflow-x-auto bg-background pb-3">
+                <FileDiff
+                  fileDiff={file}
+                  options={diffOptions}
+                  disableWorkerPool
+                  style={PIERRE_FILE_STYLE}
+                />
+              </div>
+            ) : null}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+

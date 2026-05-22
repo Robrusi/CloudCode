@@ -12,6 +12,7 @@ import {
   Plus,
   SquareTerminal,
   Square,
+  X,
 } from "lucide-react"
 import dynamic from "next/dynamic"
 import { createPortal } from "react-dom"
@@ -38,7 +39,6 @@ import {
 } from "@/components/sandbox-terminal"
 import { SettingsScreen } from "@/components/settings-screen"
 import { Sidebar } from "@/components/chat-sidebar"
-import { NewChatDialog } from "@/components/new-chat-dialog"
 import {
   SANDBOX_STATE_LABEL,
   formatSandboxAutoStop,
@@ -51,7 +51,9 @@ import {
   Pill,
   PresetPill,
   RepoChip,
+  ThinkingSpeedPill,
 } from "@/components/chat-controls"
+import { DiffList } from "@/components/changed-files"
 import { MessageBlock } from "@/components/chat-message"
 import { Button } from "@/components/ui/button"
 import type { FileBrowserOpenMode } from "@/components/file-browser"
@@ -358,10 +360,8 @@ function ChatInner() {
         "")
   )
   const [editingRepo, setEditingRepo] = useState(false)
-  const [newChatOpen, setNewChatOpen] = useState(false)
   const [modelOpen, setModelOpen] = useState(false)
   const [presetOpen, setPresetOpen] = useState(false)
-  const [speedOpen, setSpeedOpen] = useState(false)
   const [thinkingOpen, setThinkingOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
   const [terminalOpen, setTerminalOpen] = useState(false)
@@ -370,6 +370,8 @@ function ChatInner() {
   const [activeFileMode, setActiveFileMode] =
     useState<FileBrowserOpenMode>("file")
   const [activeFileDiff, setActiveFileDiff] = useState<string | null>(null)
+  const [allDiffsOpen, setAllDiffsOpen] = useState(false)
+  const [diffStyle, setDiffStyle] = useState<"unified" | "split">("unified")
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [view, setView] = useState<"chat" | "settings">("chat")
   const [runningRunKeys, setRunningRunKeys] = useState<Record<string, true>>({})
@@ -532,12 +534,20 @@ function ChatInner() {
     setActiveFilePath(path)
     setActiveFileMode("file")
     setActiveFileDiff(null)
+    setAllDiffsOpen(false)
   }, [])
 
   const openFileDiff = useCallback((path: string, diff: string) => {
     setActiveFilePath(path)
     setActiveFileMode("diff")
     setActiveFileDiff(diff)
+    setAllDiffsOpen(false)
+  }, [])
+
+  const openAllDiffs = useCallback(() => {
+    setActiveFilePath(null)
+    setActiveFileDiff(null)
+    setAllDiffsOpen(true)
   }, [])
 
   useEffect(() => {
@@ -894,26 +904,6 @@ function ChatInner() {
   }
 
   function startNewChat() {
-    setNewChatOpen(true)
-  }
-
-  function startNewChatInRepo(repoUrl: string) {
-    persistDraftRepo(repoUrl)
-    setNewChatOpen(true)
-  }
-
-  function confirmNewChat({
-    repoUrl: nextRepo,
-    baseBranch: nextBaseBranch,
-    sandboxPresetId: nextPresetId,
-  }: {
-    repoUrl: string
-    baseBranch: string
-    sandboxPresetId: Id<"sandboxPresets"> | ""
-  }) {
-    persistDraftRepo(nextRepo)
-    persistDraftBaseBranch(nextBaseBranch)
-    persistDraftSandboxPreset(nextPresetId)
     setActiveId(null)
     setInput("")
     setEditingRepo(false)
@@ -921,8 +911,12 @@ function ChatInner() {
     setFilesOpen(false)
     setTerminalOpen(false)
     setView("chat")
-    setNewChatOpen(false)
     requestAnimationFrame(() => textareaRef.current?.focus())
+  }
+
+  function startNewChatInRepo(repoUrl: string) {
+    persistDraftRepo(repoUrl)
+    startNewChat()
   }
 
   function selectChat(id: Id<"threads">) {
@@ -1518,6 +1512,111 @@ function ChatInner() {
     }
   }
 
+  const composerBlock =
+    view === "settings" || activeFilePath ? null : (
+      <div className="pointer-events-auto w-full max-w-3xl">
+        <form
+          onSubmit={onSubmit}
+          className="relative z-[1] w-full rounded-3xl border border-border/70 bg-background shadow-[0_1px_2px_rgba(0,0,0,0.04),0_10px_28px_-14px_rgba(0,0,0,0.18)] transition-colors focus-within:border-border"
+        >
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={(e: ChangeEvent<HTMLTextAreaElement>) =>
+              setInput(e.target.value)
+            }
+            onKeyDown={onKeyDown}
+            rows={1}
+            placeholder={empty ? "Ask anything…" : "Ask for follow-up changes"}
+            className="block min-h-20 w-full resize-none bg-transparent px-5 pt-4 pb-1 text-[15px] leading-6 outline-none placeholder:text-muted-foreground/70"
+          />
+
+          <div className="flex items-center gap-1.5 px-2.5 pt-1 pb-2.5">
+            <IconButton aria-label="Attach" disabled>
+              <Plus className="size-[18px]" />
+            </IconButton>
+
+            <div className="ml-auto flex items-center gap-1.5">
+              <Pill
+                header="Model"
+                value={model}
+                options={MODELS}
+                formatTrigger={shortModel}
+                formatOption={(m) => MODEL_LABEL[m]}
+                open={modelOpen}
+                setOpen={setModelOpen}
+                onSelect={persistModel}
+              />
+              <ThinkingSpeedPill
+                thinking={thinking}
+                thinkingOptions={THINKINGS}
+                formatThinking={(t) => THINKING_LABEL[t]}
+                onSelectThinking={persistThinking}
+                speed={speed}
+                speedOptions={SPEEDS}
+                formatSpeed={(s) => SPEED_LABEL[s]}
+                onSelectSpeed={persistSpeed}
+                open={thinkingOpen}
+                setOpen={setThinkingOpen}
+              />
+
+              {activeRunPending ? (
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  onClick={stopActiveRun}
+                  disabled={!canStopActiveRun}
+                  aria-label="Stop"
+                  title={
+                    canStopActiveRun ? "Stop" : "Run finishing elsewhere"
+                  }
+                >
+                  <Square className="size-3.5 fill-current" />
+                </Button>
+              ) : (
+                <Button
+                  type="submit"
+                  size="icon-sm"
+                  disabled={!input.trim()}
+                  aria-label="Send"
+                >
+                  <ArrowUp className="size-4" strokeWidth={2.4} />
+                </Button>
+              )}
+            </div>
+          </div>
+        </form>
+
+        {active ? null : (
+          <div className="-mt-3 flex flex-wrap items-center gap-1 rounded-b-3xl border border-t-0 border-border/60 bg-muted/40 px-3 pt-5 pb-2">
+            <RepoChip
+              value={repoUrl}
+              editing={editingRepo}
+              setEditing={setEditingRepo}
+              onChange={persistRepo}
+              locked={false}
+            />
+            <span aria-hidden className="h-3.5 w-px bg-border/70" />
+            <BranchChip
+              value={baseBranch}
+              onChange={persistBaseBranch}
+              locked={false}
+            />
+            <div className="ml-auto">
+              <PresetPill
+                value={sandboxPresetId ?? ""}
+                presets={sandboxPresets}
+                open={presetOpen}
+                setOpen={setPresetOpen}
+                onSelect={persistSandboxPreset}
+                locked={false}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+    )
+
   return (
     <div className="fixed inset-0 flex min-w-0 overflow-hidden bg-background text-foreground">
       {sidebarOpen ? (
@@ -1532,17 +1631,6 @@ function ChatInner() {
           onRename={renameChat}
           onShowSettings={showSettings}
           brandClassName={GeistPixelSquare.className}
-        />
-      ) : null}
-
-      {newChatOpen ? (
-        <NewChatDialog
-          initialRepo={draftRepo}
-          initialBaseBranch={draftBaseBranch}
-          initialPresetId={draftSandboxPresetId}
-          presets={sandboxPresets}
-          onCancel={() => setNewChatOpen(false)}
-          onConfirm={confirmNewChat}
         />
       ) : null}
 
@@ -1620,6 +1708,12 @@ function ChatInner() {
                 }}
                 placement="main"
               />
+            ) : allDiffsOpen ? (
+              <AllDiffsPanel
+                diff={activeDiff ?? ""}
+                diffStyle={diffStyle}
+                onClose={() => setAllDiffsOpen(false)}
+              />
             ) : (
               <div
                 key={activeRunKey}
@@ -1628,17 +1722,23 @@ function ChatInner() {
                 className="min-h-0 flex-1 overflow-y-auto [contain:paint]"
                 style={{ scrollPaddingBottom: threadBottomInset }}
               >
-                <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col px-6 pt-16">
+                <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col px-6 pt-16">
                   {empty ? (
-                    <div className="flex flex-1 flex-col items-center justify-center text-center">
-                      <h1 className="text-3xl font-medium tracking-tight text-foreground/90">
+                    <div className="flex flex-col items-center pt-[22vh]">
+                      <h1 className="text-center text-3xl font-medium tracking-tight text-foreground/90">
                         {userFirstName
                           ? `What are we building, ${userFirstName}?`
                           : "What are we building?"}
                       </h1>
+                      <div
+                        ref={composerRef}
+                        className="mt-8 flex w-full justify-center"
+                      >
+                        {composerBlock}
+                      </div>
                     </div>
                   ) : (
-                    <div className="space-y-8">
+                    <div className="mx-auto w-full max-w-2xl space-y-8">
                       {messages.map((m) => (
                         <MessageBlock
                           key={m.id}
@@ -1654,7 +1754,7 @@ function ChatInner() {
                   <div
                     aria-hidden="true"
                     className="shrink-0"
-                    style={{ height: threadBottomInset }}
+                    style={{ height: empty ? 0 : threadBottomInset }}
                   />
                 </div>
               </div>
@@ -1668,120 +1768,18 @@ function ChatInner() {
               onHeightChange={setTerminalHeight}
             />
 
-            <div
-              ref={composerRef}
-              className={cn(
-                "pointer-events-none absolute inset-x-0 z-10 flex justify-center bg-background px-4 pt-3 pb-6",
-                activeFilePath && "hidden"
-              )}
-              style={{ bottom: terminalVisible ? terminalHeight : 0 }}
-            >
-              <form
-                onSubmit={onSubmit}
-                className="pointer-events-auto w-full max-w-3xl rounded-3xl border border-border/70 bg-background/80 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-12px_rgba(0,0,0,0.12)] backdrop-blur-xl transition-colors focus-within:border-border"
+            {empty ? null : (
+              <div
+                ref={composerRef}
+                className={cn(
+                  "pointer-events-none absolute inset-x-0 z-10 flex justify-center bg-background px-4 pt-3 pb-6",
+                  activeFilePath && "hidden"
+                )}
+                style={{ bottom: terminalVisible ? terminalHeight : 0 }}
               >
-                <textarea
-                  ref={textareaRef}
-                  value={input}
-                  onChange={(e: ChangeEvent<HTMLTextAreaElement>) =>
-                    setInput(e.target.value)
-                  }
-                  onKeyDown={onKeyDown}
-                  rows={1}
-                  placeholder={
-                    empty ? "Ask anything…" : "Ask for follow-up changes"
-                  }
-                  className="block min-h-20 w-full resize-none bg-transparent px-5 pt-4 pb-1 text-[15px] leading-6 outline-none placeholder:text-muted-foreground/70"
-                />
-
-                <div className="flex items-center gap-1.5 px-2.5 pt-1 pb-2.5">
-                  <IconButton aria-label="Attach" disabled>
-                    <Plus className="size-[18px]" />
-                  </IconButton>
-
-                  <RepoChip
-                    value={repoUrl}
-                    editing={editingRepo}
-                    setEditing={setEditingRepo}
-                    onChange={persistRepo}
-                    locked={Boolean(active)}
-                  />
-                  <BranchChip
-                    value={baseBranch}
-                    onChange={persistBaseBranch}
-                    locked={Boolean(active)}
-                  />
-                  <PresetPill
-                    value={sandboxPresetId ?? ""}
-                    presets={sandboxPresets}
-                    open={presetOpen}
-                    setOpen={setPresetOpen}
-                    onSelect={persistSandboxPreset}
-                    locked={Boolean(active)}
-                    activeLabel={active?.sandboxPresetName}
-                  />
-
-                  <div className="ml-auto flex items-center gap-1.5">
-                    <Pill
-                      header="Model"
-                      value={model}
-                      options={MODELS}
-                      formatTrigger={shortModel}
-                      formatOption={(m) => MODEL_LABEL[m]}
-                      open={modelOpen}
-                      setOpen={setModelOpen}
-                      onSelect={persistModel}
-                    />
-                    <Pill
-                      header="Thinking"
-                      value={thinking}
-                      options={THINKINGS}
-                      formatTrigger={(t) => THINKING_LABEL[t]}
-                      formatOption={(t) => THINKING_LABEL[t]}
-                      open={thinkingOpen}
-                      setOpen={setThinkingOpen}
-                      onSelect={persistThinking}
-                      triggerClassName="text-muted-foreground"
-                    />
-                    <Pill
-                      header="Speed"
-                      value={speed}
-                      options={SPEEDS}
-                      formatTrigger={(s) => SPEED_LABEL[s]}
-                      formatOption={(s) => SPEED_LABEL[s]}
-                      open={speedOpen}
-                      setOpen={setSpeedOpen}
-                      onSelect={persistSpeed}
-                      triggerClassName="text-muted-foreground"
-                    />
-
-                    {activeRunPending ? (
-                      <Button
-                        type="button"
-                        size="icon-sm"
-                        onClick={stopActiveRun}
-                        disabled={!canStopActiveRun}
-                        aria-label="Stop"
-                        title={
-                          canStopActiveRun ? "Stop" : "Run finishing elsewhere"
-                        }
-                      >
-                        <Square className="size-3.5 fill-current" />
-                      </Button>
-                    ) : (
-                      <Button
-                        type="submit"
-                        size="icon-sm"
-                        disabled={!input.trim()}
-                        aria-label="Send"
-                      >
-                        <ArrowUp className="size-4" strokeWidth={2.4} />
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              </form>
-            </div>
+                {composerBlock}
+              </div>
+            )}
           </>
         )}
       </div>
@@ -1798,9 +1796,48 @@ function ChatInner() {
           setActiveFilePath(p)
           setActiveFileMode(mode)
           setActiveFileDiff(null)
+          setAllDiffsOpen(false)
         }}
+        onOpenAllDiffs={openAllDiffs}
+        diffStyle={diffStyle}
+        onDiffStyleChange={setDiffStyle}
       />
     </div>
+  )
+}
+
+function AllDiffsPanel({
+  diff,
+  diffStyle,
+  onClose,
+}: {
+  diff: string
+  diffStyle: "unified" | "split"
+  onClose: () => void
+}) {
+  return (
+    <section className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+      <header className="flex h-[3.25rem] shrink-0 items-center gap-2.5 border-b border-border/60 bg-background/80 px-4 backdrop-blur-xl">
+        <span className="flex-1 text-[13px] text-muted-foreground">Diffs</span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close diffs"
+          className="-mr-[7px] inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <X className="size-4" />
+        </button>
+      </header>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {diff ? (
+          <DiffList diff={diff} diffStyle={diffStyle} />
+        ) : (
+          <div className="grid h-full place-items-center text-sm text-muted-foreground">
+            No diffs to show.
+          </div>
+        )}
+      </div>
+    </section>
   )
 }
 

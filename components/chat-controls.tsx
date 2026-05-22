@@ -396,3 +396,102 @@ export function Pill<T extends string>({
     </div>
   )
 }
+
+export function ThinkingSpeedPill<TThinking extends string, TSpeed extends string>({
+  thinking,
+  thinkingOptions,
+  formatThinking,
+  onSelectThinking,
+  speed,
+  speedOptions,
+  formatSpeed,
+  onSelectSpeed,
+  open,
+  setOpen,
+}: {
+  thinking: TThinking
+  thinkingOptions: readonly TThinking[]
+  formatThinking: (v: TThinking) => string
+  onSelectThinking: (v: TThinking) => void
+  speed: TSpeed
+  speedOptions: readonly TSpeed[]
+  formatSpeed: (v: TSpeed) => string
+  onSelectSpeed: (v: TSpeed) => void
+  open: boolean
+  setOpen: (v: boolean) => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function onClick(e: MouseEvent) {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener("mousedown", onClick)
+    return () => document.removeEventListener("mousedown", onClick)
+  }, [open, setOpen])
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={cn(chipTrigger, "gap-1.5 text-foreground")}
+      >
+        <span className="text-foreground/80">{formatThinking(thinking)}</span>
+        <span aria-hidden className="text-muted-foreground/50">·</span>
+        <span className="text-muted-foreground">{formatSpeed(speed)}</span>
+        <ChevronDown className="size-3 opacity-60" />
+      </button>
+      {open ? (
+        <div className={cn(popoverPanel, "right-0 bottom-10 min-w-52")}>
+          <div className="px-2.5 pt-1.5 pb-1 text-left text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">
+            Thinking
+          </div>
+          {thinkingOptions.map((opt) => {
+            const selected = opt === thinking
+            return (
+              <button
+                key={opt}
+                type="button"
+                onClick={() => {
+                  onSelectThinking(opt)
+                  setOpen(false)
+                }}
+                className={cn(popoverItem, "pl-5")}
+              >
+                <span>{formatThinking(opt)}</span>
+                {selected ? (
+                  <Check className="size-4 shrink-0" strokeWidth={2.25} />
+                ) : null}
+              </button>
+            )
+          })}
+          <div className="my-1 h-px bg-border/60" />
+          <div className="px-2.5 pt-1 pb-1 text-left text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">
+            Speed
+          </div>
+          {speedOptions.map((opt) => {
+            const selected = opt === speed
+            return (
+              <button
+                key={opt}
+                type="button"
+                onClick={() => {
+                  onSelectSpeed(opt)
+                  setOpen(false)
+                }}
+                className={cn(popoverItem, "pl-5")}
+              >
+                <span>{formatSpeed(opt)}</span>
+                {selected ? (
+                  <Check className="size-4 shrink-0" strokeWidth={2.25} />
+                ) : null}
+              </button>
+            )
+          })}
+        </div>
+      ) : null}
+    </div>
+  )
+}

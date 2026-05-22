@@ -5,10 +5,11 @@ import type {
   FileTreeRowDecorationRenderer,
   GitStatusEntry,
 } from "@pierre/trees"
-import { Loader2, X } from "lucide-react"
+import { Columns2, Loader2, Rows2, X } from "lucide-react"
 import { useTheme } from "next-themes"
 import {
   type CSSProperties,
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -22,6 +23,7 @@ import {
   getDiffStats,
   type DiffFileStat,
 } from "@/lib/diff-metadata"
+import { cn } from "@/lib/utils"
 import {
   readCachedFileList,
   writeCachedFileList,
@@ -120,11 +122,16 @@ export function FileBrowser({
   activeMode,
   onClose,
   onOpenFile,
+  onOpenAllDiffs,
+  diffStyle,
+  onDiffStyleChange,
 }: {
   sandboxId: string | null
   cacheScope: string | null
   open: boolean
   diff?: string
+  diffStyle?: "unified" | "split"
+  onDiffStyleChange?: (style: "unified" | "split") => void
   /**
    * The file path currently shown in the editor, or `null` when the editor is
    * closed. Used to keep the tree's internal selection in sync — without this,
@@ -136,6 +143,7 @@ export function FileBrowser({
   activeMode: FileBrowserOpenMode
   onClose: () => void
   onOpenFile: (path: string, mode: FileBrowserOpenMode) => void
+  onOpenAllDiffs?: () => void
 }) {
   const [entries, setEntries] = useState<FileEntry[]>([])
   const [loading, setLoading] = useState(false)
@@ -413,11 +421,32 @@ export function FileBrowser({
         {loading ? (
           <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
         ) : null}
+        {view === "diffs" && diffStyle && onDiffStyleChange ? (
+          <div className="ml-auto flex shrink-0 items-center gap-0.5">
+            <DiffStyleButton
+              active={diffStyle === "unified"}
+              label="Unified"
+              icon={<Rows2 className="size-3.5" strokeWidth={2} />}
+              onClick={() => onDiffStyleChange("unified")}
+            />
+            <DiffStyleButton
+              active={diffStyle === "split"}
+              label="Split"
+              icon={<Columns2 className="size-3.5" strokeWidth={2} />}
+              onClick={() => onDiffStyleChange("split")}
+            />
+          </div>
+        ) : null}
         <button
           type="button"
           onClick={onClose}
           aria-label="Close file browser"
-          className="ml-auto inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+          className={cn(
+            "inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground",
+            view === "diffs" && diffStyle && onDiffStyleChange
+              ? ""
+              : "ml-auto"
+          )}
         >
           <X className="size-4" />
         </button>
@@ -433,7 +462,10 @@ export function FileBrowser({
         <ViewButton
           active={view === "diffs"}
           label="Diffs"
-          onClick={() => setView("diffs")}
+          onClick={() => {
+            setView("diffs")
+            onOpenAllDiffs?.()
+          }}
         />
       </div>
 
@@ -529,6 +561,36 @@ function ViewButton({
       }
     >
       {label}
+    </button>
+  )
+}
+
+function DiffStyleButton({
+  active,
+  label,
+  icon,
+  onClick,
+}: {
+  active: boolean
+  label: string
+  icon: ReactNode
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      aria-label={label}
+      title={label}
+      className={cn(
+        "inline-flex size-7 items-center justify-center rounded-md transition-colors",
+        active
+          ? "text-foreground"
+          : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+      )}
+    >
+      {icon}
     </button>
   )
 }
