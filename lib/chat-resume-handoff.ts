@@ -1,4 +1,5 @@
 import { getDiffStats } from "./diff-metadata"
+import { stripInlineToolMarkers } from "./codex-run-log"
 
 type Role = "user" | "assistant"
 
@@ -17,7 +18,7 @@ function truncateHandoffContent(
   content: string,
   limit = HANDOFF_CONTENT_LIMIT
 ) {
-  const trimmed = content.trim()
+  const trimmed = stripInlineToolMarkers(content)
 
   if (trimmed.length <= limit) {
     return trimmed

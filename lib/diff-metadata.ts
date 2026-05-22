@@ -68,7 +68,9 @@ export function findDiffForPath(diff: string | undefined, path: string) {
   )
 }
 
-export function diffTypeToGitStatus(type: ChangeTypes): GitStatusEntry["status"] {
+export function diffTypeToGitStatus(
+  type: ChangeTypes
+): GitStatusEntry["status"] {
   if (type === "new") return "added"
   if (type === "deleted") return "deleted"
   if (type === "rename-pure" || type === "rename-changed") return "renamed"

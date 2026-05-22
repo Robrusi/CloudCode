@@ -131,9 +131,7 @@ export function Sidebar({
     return Array.from(map.entries())
       .map(([repo, items]) => ({
         repo,
-        items: items.sort(
-          (a, b) => b.lastUserMessageAt - a.lastUserMessageAt
-        ),
+        items: items.sort((a, b) => b.lastUserMessageAt - a.lastUserMessageAt),
         latest: Math.max(...items.map((i) => i.lastUserMessageAt)),
       }))
       .sort((a, b) => b.latest - a.latest)

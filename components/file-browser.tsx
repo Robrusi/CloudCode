@@ -443,9 +443,7 @@ export function FileBrowser({
           aria-label="Close file browser"
           className={cn(
             "inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground",
-            view === "diffs" && diffStyle && onDiffStyleChange
-              ? ""
-              : "ml-auto"
+            view === "diffs" && diffStyle && onDiffStyleChange ? "" : "ml-auto"
           )}
         >
           <X className="size-4" />

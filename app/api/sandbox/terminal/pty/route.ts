@@ -105,8 +105,7 @@ export async function POST(request: Request) {
     terminalId?: unknown
   }
   const sandboxId = typeof body.sandboxId === "string" ? body.sandboxId : ""
-  const terminalId =
-    typeof body.terminalId === "string" ? body.terminalId : ""
+  const terminalId = typeof body.terminalId === "string" ? body.terminalId : ""
 
   if (!sandboxId || !terminalId) {
     return NextResponse.json(
@@ -153,8 +152,7 @@ export async function DELETE(request: Request) {
     terminalId?: unknown
   }
   const sandboxId = typeof body.sandboxId === "string" ? body.sandboxId : ""
-  const terminalId =
-    typeof body.terminalId === "string" ? body.terminalId : ""
+  const terminalId = typeof body.terminalId === "string" ? body.terminalId : ""
 
   if (!sandboxId || !terminalId) {
     return NextResponse.json(

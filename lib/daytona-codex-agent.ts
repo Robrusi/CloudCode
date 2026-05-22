@@ -92,6 +92,7 @@ export type RunCodexInSandboxInput = {
   preparedSandboxFresh?: boolean
   sandboxId?: string
   sandboxPreset?: SandboxPresetInput
+  signal?: AbortSignal
   speed?: CodexSpeed
   timeoutMs?: number
 }
@@ -212,13 +213,41 @@ function numberValue(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined
 }
 
-function eventTypeText(record: Record<string, unknown>) {
-  const nestedTypes = ["item", "event", "payload"]
-    .map((key) => objectRecord(record[key]))
-    .map((nested) => (nested ? stringValue(nested.type) : undefined))
-    .filter(Boolean)
+function collectStringValues(
+  value: unknown,
+  keys: readonly string[],
+  depth = 0
+): string[] {
+  if (depth > 6) return []
 
-  return [stringValue(record.type), ...nestedTypes].join(" ").toLowerCase()
+  if (Array.isArray(value)) {
+    return value.flatMap((nested) =>
+      collectStringValues(nested, keys, depth + 1)
+    )
+  }
+
+  const record = objectRecord(value)
+  if (!record) return []
+
+  const values: string[] = []
+  for (const key of keys) {
+    const found = stringValue(record[key])
+    if (found) values.push(found)
+  }
+
+  for (const nested of Object.values(record)) {
+    values.push(...collectStringValues(nested, keys, depth + 1))
+  }
+
+  return values
+}
+
+function eventTypeText(record: Record<string, unknown>) {
+  return collectStringValues(record, ["type", "method"]).join(" ").toLowerCase()
+}
+
+function normalizedEventTypeText(type: string) {
+  return type.replace(/[\s._/-]+/g, "")
 }
 
 function readableCodexText(value: string): string {
@@ -235,9 +264,21 @@ function codexThreadIdFromEvent(event: unknown) {
   const record = objectRecord(event)
   if (!record) return undefined
 
-  const type = stringValue(record.type)
-  const threadId = stringValue(record.thread_id)
-  return type === "thread.started" ? threadId : undefined
+  const type = eventTypeText(record)
+  const normalizedType = normalizedEventTypeText(type)
+  const threadId = findString(record, [
+    "thread_id",
+    "threadId",
+    "conversation_id",
+    "conversationId",
+  ])
+
+  return normalizedType.includes("threadstarted") ||
+    normalizedType.includes("threadcreated") ||
+    normalizedType.includes("conversationstarted") ||
+    normalizedType.includes("conversationcreated")
+    ? threadId
+    : undefined
 }
 
 function assistantTextFromEvent(event: unknown) {
@@ -245,33 +286,38 @@ function assistantTextFromEvent(event: unknown) {
   if (!record) return undefined
 
   const type = eventTypeText(record)
+  if (!type) {
+    return undefined
+  }
+  const normalizedType = normalizedEventTypeText(type)
+  const isAssistantTextEvent =
+    type.includes("assistant") ||
+    type.includes("agent_message") ||
+    normalizedType.includes("agentmessage") ||
+    type.includes("message_delta") ||
+    normalizedType.includes("messagedelta") ||
+    type.includes("output_text") ||
+    normalizedType.includes("outputtext") ||
+    type.includes("text_delta") ||
+    normalizedType.includes("textdelta")
+
   if (
-    !type ||
+    !isAssistantTextEvent ||
     type.includes("reason") ||
     type.includes("tool") ||
-    type.includes("user")
+    type.includes("user") ||
+    normalizedType.includes("commandexecution")
   ) {
     return undefined
   }
 
   const text = findString(record, ["delta", "text_delta", "content_delta"])
-  if (
-    text &&
-    (type.includes("assistant") ||
-      type.includes("agent_message") ||
-      type.includes("message_delta") ||
-      type.includes("output_text.delta"))
-  ) {
+  if (text && isAssistantTextEvent) {
     return { mode: "delta" as const, text }
   }
 
   const snapshot = findString(record, ["message", "content", "text"])
-  if (
-    snapshot &&
-    (type.includes("assistant") ||
-      type.includes("agent_message") ||
-      type.includes("message"))
-  ) {
+  if (snapshot && isAssistantTextEvent) {
     return { mode: "snapshot" as const, text: snapshot }
   }
 
@@ -284,7 +330,7 @@ function findString(
   depth = 0
 ): string | undefined {
   if (Array.isArray(value)) {
-    if (depth > 3) return undefined
+    if (depth > 6) return undefined
 
     const parts = value
       .map((nested) => findString(nested, keys, depth + 1))
@@ -294,7 +340,7 @@ function findString(
   }
 
   const record = objectRecord(value)
-  if (!record || depth > 3) return undefined
+  if (!record || depth > 6) return undefined
 
   for (const key of keys) {
     const found = stringValue(record[key])
@@ -315,7 +361,7 @@ function findNumber(
   depth = 0
 ): number | undefined {
   if (Array.isArray(value)) {
-    if (depth > 3) return undefined
+    if (depth > 6) return undefined
 
     for (const nested of value) {
       const found = findNumber(nested, keys, depth + 1)
@@ -326,7 +372,7 @@ function findNumber(
   }
 
   const record = objectRecord(value)
-  if (!record || depth > 3) return undefined
+  if (!record || depth > 6) return undefined
 
   for (const key of keys) {
     const found = numberValue(record[key])
@@ -350,6 +396,7 @@ function summarizeCodexEvent(event: unknown): RunCodexLog | undefined {
   if (!record) return undefined
 
   const type = eventTypeText(record)
+  const normalizedType = normalizedEventTypeText(type)
   const status = stringValue(record.status)
   const nestedStatus = findString(record, ["status"])
   const command = findString(record, ["command", "cmd", "shell_command"])
@@ -379,6 +426,7 @@ function summarizeCodexEvent(event: unknown): RunCodexLog | undefined {
   if (
     command &&
     (type.includes("command") ||
+      normalizedType.includes("commandexecution") ||
       type.includes("exec") ||
       type.includes("tool") ||
       type.includes("function"))
@@ -396,7 +444,12 @@ function summarizeCodexEvent(event: unknown): RunCodexLog | undefined {
     }
   }
 
-  if (type.includes("tool") || type.includes("function")) {
+  if (
+    type.includes("tool") ||
+    type.includes("function") ||
+    normalizedType.includes("toolcall") ||
+    normalizedType.includes("functioncall")
+  ) {
     const name = toolName ?? "Tool call"
     return {
       detail: logDetail({
@@ -418,7 +471,10 @@ function summarizeCodexEvent(event: unknown): RunCodexLog | undefined {
     }
   }
 
-  if (type.includes("turn") && (type.includes("start") || status)) {
+  if (
+    (type.includes("turn") || normalizedType.includes("turn")) &&
+    (type.includes("start") || normalizedType.includes("started") || status)
+  ) {
     return {
       kind: "setup",
       message: status ? `Codex turn ${status}` : "Codex turn started",
@@ -441,7 +497,7 @@ function summarizeUnknownCodexEvent(event: unknown): RunCodexLog | undefined {
   const record = objectRecord(event)
   if (!record) return undefined
 
-  const type = stringValue(record.type)
+  const type = eventTypeText(record)
   if (!type) return undefined
 
   const status = stringValue(record.status)
@@ -488,6 +544,7 @@ function createStdoutLogger(
       const assistantText = assistantTextFromEvent(event)
       if (assistantText) {
         if (assistantText.mode === "delta") {
+          assistantSnapshot += assistantText.text
           void onContentDelta?.(assistantText.text)
         } else if (assistantText.text.startsWith(assistantSnapshot)) {
           const delta = assistantText.text.slice(assistantSnapshot.length)
@@ -555,7 +612,8 @@ function restoredConversationPrompt(context: string, prompt: string) {
 
 function createSandboxTarget(
   sandbox: Sandbox,
-  paths: DaytonaSandboxPaths
+  paths: DaytonaSandboxPaths,
+  signal?: AbortSignal
 ): SandboxEnvTarget {
   return {
     readTextFile: (path) => readDaytonaTextFile(sandbox, path),
@@ -563,6 +621,7 @@ function createSandboxTarget(
       runDaytonaCommand(sandbox, command, {
         cwd: paths.home,
         env: repoCommandEnv(paths),
+        signal,
         timeoutMs: options?.timeoutMs,
       }),
     writeTextFile: (path, content) =>
@@ -661,6 +720,26 @@ function linkSandboxPathToolsCommand(paths: DaytonaSandboxPaths) {
 
 function sha256(value: string) {
   return createHash("sha256").update(value).digest("hex")
+}
+
+async function sandboxMarkerMatches(
+  sandbox: Sandbox,
+  markerPath: string,
+  expected: string,
+  signal?: AbortSignal
+) {
+  try {
+    const result = await runDaytonaCommand(
+      sandbox,
+      `[ -s ${shellQuote(markerPath)} ] || ([ -f ${shellQuote(
+        markerPath
+      )} ] && grep -qxF ${shellQuote(expected)} ${shellQuote(markerPath)})`,
+      { signal, timeoutMs: 5_000 }
+    )
+    return result.exitCode === 0
+  } catch {
+    return false
+  }
 }
 
 function sandboxIsUnderResourced(sandbox: Sandbox) {
@@ -827,13 +906,14 @@ async function getCodexResumeHelp(
 
 async function isCodexLauncherReady(
   sandbox: Sandbox,
-  paths: DaytonaSandboxPaths
+  paths: DaytonaSandboxPaths,
+  signal?: AbortSignal
 ) {
   try {
     const result = await runDaytonaCommand(
       sandbox,
       `test -x ${shellQuote(paths.codexLauncherPath)}`,
-      { timeoutMs: 10_000 }
+      { signal, timeoutMs: 10_000 }
     )
     return result.exitCode === 0
   } catch {
@@ -893,6 +973,7 @@ async function updateCodexCli(
       const trimmed = compactLine(data)
       if (trimmed) void input.onLog?.({ kind: "stdout", message: trimmed })
     },
+    signal: input.signal,
     timeoutMs: CODEX_UPDATE_TIMEOUT_MS,
   })
 
@@ -929,7 +1010,7 @@ async function prepareSandboxRuntime(
   input: RunCodexInSandboxInput,
   paths: DaytonaSandboxPaths
 ) {
-  const target = createSandboxTarget(sandbox, paths)
+  const target = createSandboxTarget(sandbox, paths, input.signal)
 
   await runDaytonaCommand(
     sandbox,
@@ -944,7 +1025,7 @@ async function prepareSandboxRuntime(
       `mkdir -p ${shellQuote(paths.home)}`,
       linkSandboxPathToolsCommand(paths),
     ].join(" && "),
-    { timeoutMs: 10_000 }
+    { signal: input.signal, timeoutMs: 10_000 }
   )
   await installDaytonaTarWrapper(sandbox, paths)
   await writeDaytonaTextFile(
@@ -980,7 +1061,7 @@ async function prepareSandboxRuntime(
       "done",
       `rm -f ${shellQuote(paths.cloudcodeProfilePath)}`,
     ].join("\n"),
-    { cwd: paths.home, timeoutMs: 10_000 }
+    { cwd: paths.home, signal: input.signal, timeoutMs: 10_000 }
   )
 
   if (input.sandboxPreset?.secrets.length) {
@@ -1006,6 +1087,15 @@ async function runPathInstallScript(
   const script = input.sandboxPreset?.pathInstallScript?.trim()
   if (!script) return
 
+  const scriptHash = sha256(script)
+  const scriptPath = `${paths.codexHome}/path-install-${scriptHash}.sh`
+  const markerPath = `${paths.codexHome}/path-install-${scriptHash}.fingerprint`
+  if (
+    await sandboxMarkerMatches(sandbox, markerPath, scriptHash, input.signal)
+  ) {
+    return
+  }
+
   await emitLog(input, {
     kind: "setup",
     message: `Running ${input.sandboxPreset?.name ?? "preset"} PATH setup script`,
@@ -1016,9 +1106,6 @@ async function runPathInstallScript(
   })
 
   const terminalPath = daytonaTerminalPath(paths.home)
-  const scriptHash = sha256(script)
-  const scriptPath = `${paths.codexHome}/path-install-${scriptHash}.sh`
-  const markerPath = `${paths.codexHome}/path-install-${scriptHash}.fingerprint`
   await writeDaytonaTextFile(
     sandbox,
     scriptPath,
@@ -1047,10 +1134,9 @@ async function runPathInstallScript(
     `export YARN_CACHE_FOLDER=${shellQuote(`${paths.home}/.cache/yarn`)}`,
     `export BUN_INSTALL=${shellQuote(`${paths.home}/.bun`)}`,
     `export BUN_INSTALL_CACHE_DIR=${shellQuote(`${paths.home}/.cache/bun`)}`,
-    `if [ -f ${shellQuote(markerPath)} ] && grep -qxF ${shellQuote(
+    `if [ -s ${shellQuote(markerPath)} ] || ([ -f ${shellQuote(markerPath)} ] && grep -qxF ${shellQuote(
       scriptHash
-    )} ${shellQuote(markerPath)}; then`,
-    "  echo 'Preset PATH setup script skipped; inputs unchanged.'",
+    )} ${shellQuote(markerPath)}); then`,
     "  exit 0",
     "fi",
     `chmod +x ${shellQuote(scriptPath)}`,
@@ -1078,6 +1164,7 @@ async function runPathInstallScript(
       const trimmed = compactLine(data)
       if (trimmed) void input.onLog?.({ kind: "stdout", message: trimmed })
     },
+    signal: input.signal,
     timeoutMs: PRESET_INSTALL_TIMEOUT_MS,
   })
 
@@ -1110,6 +1197,15 @@ async function runPresetInstallScript(
   const script = input.sandboxPreset?.installScript?.trim()
   if (!script) return
 
+  const scriptHash = sha256(script)
+  const scriptPath = `${paths.codexHome}/preset-install-${scriptHash}.sh`
+  const markerPath = `${paths.codexHome}/preset-install-${scriptHash}.fingerprint`
+  if (
+    await sandboxMarkerMatches(sandbox, markerPath, scriptHash, input.signal)
+  ) {
+    return
+  }
+
   await emitLog(input, {
     kind: "setup",
     message: `Running ${input.sandboxPreset?.name ?? "preset"} install script`,
@@ -1119,9 +1215,6 @@ async function runPresetInstallScript(
     message: "preset install script",
   })
 
-  const scriptHash = sha256(script)
-  const scriptPath = `${paths.codexHome}/preset-install-${scriptHash}.sh`
-  const markerPath = `${paths.codexHome}/preset-install-${scriptHash}.fingerprint`
   const terminalPath = daytonaTerminalPath(paths.home)
   await writeDaytonaTextFile(
     sandbox,
@@ -1159,23 +1252,14 @@ async function runPresetInstallScript(
     `command -v pnpm >/dev/null 2>&1 && pnpm config set store-dir ${shellQuote(
       `${paths.home}/.pnpm-store`
     )} --location=user >/dev/null 2>&1 || true`,
-    [
-      "manifest_hash=$(",
-      "  {",
-      "    find . \\( -path './node_modules' -o -path './node_modules/*' -o -path './.next' -o -path './.next/*' -o -path './dist' -o -path './dist/*' -o -path './build' -o -path './build/*' \\) -prune -o -type f \\( -name package.json -o -name pnpm-lock.yaml -o -name package-lock.json -o -name yarn.lock -o -name bun.lock -o -name bun.lockb \\) -print0 | sort -z | xargs -0 -r sha256sum 2>/dev/null || true",
-      "    printf '%s' " + shellQuote(scriptHash),
-      "  } | sha256sum | awk '{print $1}'",
-      ")",
-    ].join("\n"),
-    `if [ -f ${shellQuote(markerPath)} ] && grep -qxF "$manifest_hash" ${shellQuote(
-      markerPath
-    )}; then`,
-    "  echo 'Preset install script skipped; inputs unchanged.'",
+    `if [ -s ${shellQuote(markerPath)} ] || ([ -f ${shellQuote(markerPath)} ] && grep -qxF ${shellQuote(
+      scriptHash
+    )} ${shellQuote(markerPath)}); then`,
     "  exit 0",
     "fi",
     `chmod +x ${shellQuote(scriptPath)}`,
     `${shellQuote(scriptPath)}`,
-    `printf '%s\\n' "$manifest_hash" > ${shellQuote(markerPath)}`,
+    `printf '%s\\n' ${shellQuote(scriptHash)} > ${shellQuote(markerPath)}`,
   ].join("\n")
   const runInstall = () =>
     runDaytonaCommand(sandbox, command, {
@@ -1197,6 +1281,7 @@ async function runPresetInstallScript(
         const trimmed = compactLine(data)
         if (trimmed) void input.onLog?.({ kind: "stdout", message: trimmed })
       },
+      signal: input.signal,
       timeoutMs: PRESET_INSTALL_TIMEOUT_MS,
     })
 
@@ -1223,13 +1308,18 @@ async function runPresetInstallScript(
   })
 }
 
-async function cleanupRunFiles(sandbox: Sandbox, paths: DaytonaSandboxPaths) {
+async function cleanupRunFiles(
+  sandbox: Sandbox,
+  paths: DaytonaSandboxPaths,
+  signal?: AbortSignal
+) {
   await runDaytonaCommand(
     sandbox,
     `rm -f ${shellQuote(`${paths.codexHome}/auth.json`)} ${shellQuote(
       paths.promptPath
     )} ${shellQuote(paths.previousDiffPath)} ${shellQuote(paths.lastMessagePath)}`,
     {
+      signal,
       timeoutMs: 10_000,
     }
   ).catch(() => undefined)
@@ -1277,6 +1367,7 @@ async function trustRepoMiseConfig(
       const message = compactLine(chunk)
       if (message) void emitLog(input, { kind: "stdout", message })
     },
+    signal: input.signal,
     timeoutMs: 2 * 60 * 1000,
   })
 
@@ -1337,7 +1428,7 @@ async function cloneRepo({
     `rm -rf ${shellQuote(paths.repoPath)} && mkdir -p ${shellQuote(
       paths.repoPath.replace(/\/[^/]+$/, "")
     )}`,
-    { timeoutMs: 60_000 }
+    { signal: input.signal, timeoutMs: 60_000 }
   )
   await sandbox.git.clone(
     repoUrl,
@@ -1398,6 +1489,7 @@ async function prepareExistingRepoForFreshRun({
   ].join("\n")
 
   const refreshResult = await runDaytonaCommand(sandbox, refreshCommand, {
+    signal: input.signal,
     timeoutMs: 60_000,
   })
   if (refreshResult.exitCode !== 0) {
@@ -1483,7 +1575,8 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       ? [environmentContext, "Current user request:", taskPrompt].join("\n\n")
       : taskPrompt
     const needsCodexSetup =
-      recoveredSandbox || !(await isCodexLauncherReady(sandbox, paths))
+      recoveredSandbox ||
+      !(await isCodexLauncherReady(sandbox, paths, input.signal))
 
     if (needsCodexSetup) {
       await updateCodexCli(sandbox, input, paths)
@@ -1495,7 +1588,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       `mkdir -p ${shellQuote(paths.codexHome)} && chmod 700 ${shellQuote(
         paths.codexHome
       )}`,
-      { timeoutMs: 10_000 }
+      { signal: input.signal, timeoutMs: 10_000 }
     )
     await writeDaytonaTextFile(
       sandbox,
@@ -1563,7 +1656,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         `git -C ${shellQuote(
           paths.repoPath
         )} apply --whitespace=nowarn ${shellQuote(paths.previousDiffPath)}`,
-        { timeoutMs: 60_000 }
+        { signal: input.signal, timeoutMs: 60_000 }
       )
       if (applyResult.exitCode !== 0) {
         await emitLog(input, {
@@ -1733,6 +1826,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
           if (trimmed) void input.onLog?.({ kind: "stderr", message: trimmed })
         },
         onStdout: (data) => stdoutLogger.chunk(data),
+        signal: input.signal,
         timeoutMs,
       }),
       paths
@@ -1754,9 +1848,9 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       sandbox,
       `${paths.codexHome}/auth.json`
     )
-    await cleanupRunFiles(sandbox, paths)
+    await cleanupRunFiles(sandbox, paths, input.signal)
 
-    const target = createSandboxTarget(sandbox, paths)
+    const target = createSandboxTarget(sandbox, paths, input.signal)
     const { diff, status } = await withoutCloudcodeEnvLocal(
       target,
       {
@@ -1779,6 +1873,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
             )} diff --binary "$base_ref"`,
             {
               env: repoCommandEnv(paths),
+              signal: input.signal,
               timeoutMs: 60_000,
             }
           )
@@ -1793,6 +1888,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
             `git -C ${shellQuote(paths.repoPath)} status --short --branch`,
             {
               env: repoCommandEnv(paths),
+              signal: input.signal,
               timeoutMs: 60_000,
             }
           )
@@ -1825,7 +1921,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     } satisfies RunCodexInSandboxResult
   } finally {
     try {
-      await cleanupRunFiles(sandbox, paths)
+      await cleanupRunFiles(sandbox, paths, input.signal)
     } finally {
       await restoreDaytonaAutostop(sandbox)
     }

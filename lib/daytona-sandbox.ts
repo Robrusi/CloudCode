@@ -18,6 +18,8 @@ const DEFAULT_SANDBOX_MEMORY = 4
 const DEFAULT_DAYTONA_SNAPSHOT = "cloudcode-batteries-included"
 const DEFAULT_DAYTONA_IMAGE =
   "mcr.microsoft.com/devcontainers/universal:2-linux"
+const DEFAULT_COMMAND_STATUS_POLL_MS = 2_000
+const DEFAULT_COMMAND_STATUS_MAX_POLL_MS = 5_000
 const DAYTONA_SYSTEM_PATH_ENTRIES = [
   "/home/codespace/.dotnet",
   "/home/codespace/nvm/current/bin",
@@ -86,6 +88,7 @@ export type DaytonaRunCommandOptions = {
   env?: Record<string, string | undefined>
   onStderr?: (chunk: string) => void
   onStdout?: (chunk: string) => void
+  signal?: AbortSignal
   timeoutMs?: number
 }
 
@@ -432,6 +435,30 @@ function timeoutSeconds(timeoutMs?: number) {
   return Math.max(1, Math.ceil(timeoutMs / 1000))
 }
 
+function commandStatusPollMs() {
+  return Math.max(
+    500,
+    Math.round(
+      envNumber(
+        "DAYTONA_COMMAND_STATUS_POLL_MS",
+        DEFAULT_COMMAND_STATUS_POLL_MS
+      )
+    )
+  )
+}
+
+function commandStatusMaxPollMs() {
+  return Math.max(
+    commandStatusPollMs(),
+    Math.round(
+      envNumber(
+        "DAYTONA_COMMAND_STATUS_MAX_POLL_MS",
+        DEFAULT_COMMAND_STATUS_MAX_POLL_MS
+      )
+    )
+  )
+}
+
 function validEnvName(name: string) {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)
 }
@@ -530,13 +557,26 @@ async function waitForCommandExit(
   sandbox: Sandbox,
   sessionId: string,
   commandId: string,
+  signal?: AbortSignal,
   timeoutMs?: number
 ) {
   const deadline = Date.now() + (timeoutMs ?? 10 * 60 * 1000)
+  const initialPollMs = commandStatusPollMs()
+  const maxPollMs = commandStatusMaxPollMs()
+  let pollMs = initialPollMs
   let command = await sandbox.process.getSessionCommand(sessionId, commandId)
 
   while (command.exitCode === undefined && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 500))
+    if (signal?.aborted) {
+      await sandbox.process.deleteSession(sessionId).catch(() => undefined)
+      throw new Error("Run was canceled.")
+    }
+    await waitForPoll(pollMs, signal)
+    if (signal?.aborted) {
+      await sandbox.process.deleteSession(sessionId).catch(() => undefined)
+      throw new Error("Run was canceled.")
+    }
+    pollMs = Math.min(maxPollMs, Math.round(pollMs * 1.5))
     command = await sandbox.process.getSessionCommand(sessionId, commandId)
   }
 
@@ -545,6 +585,23 @@ async function waitForCommandExit(
 
 function wait(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms))
+}
+
+function waitForPoll(ms: number, signal?: AbortSignal) {
+  if (!signal) return wait(ms)
+  if (signal.aborted) return Promise.resolve()
+
+  return new Promise<void>((resolve) => {
+    const timeout = setTimeout(done, ms)
+
+    function done() {
+      clearTimeout(timeout)
+      signal?.removeEventListener("abort", done)
+      resolve()
+    }
+
+    signal.addEventListener("abort", done, { once: true })
+  })
 }
 
 export async function runDaytonaCommand(
@@ -559,6 +616,10 @@ export async function runDaytonaCommand(
   await sandbox.process.createSession(sessionId)
 
   try {
+    if (options.signal?.aborted) {
+      throw new Error("Run was canceled.")
+    }
+
     if (options.onStdout || options.onStderr) {
       const response = await sandbox.process.executeSessionCommand(
         sessionId,
@@ -573,29 +634,40 @@ export async function runDaytonaCommand(
       let stdout = ""
       let stderr = ""
 
-      const logsPromise = sandbox.process
-        .getSessionCommandLogs(
-          sessionId,
-          commandId,
-          (chunk) => {
-            stdout += chunk
-            options.onStdout?.(chunk)
-          },
-          (chunk) => {
-            stderr += chunk
-            options.onStderr?.(chunk)
-          }
-        )
-        .catch(() => undefined)
+      const logsPromise =
+        options.onStdout || options.onStderr
+          ? sandbox.process
+              .getSessionCommandLogs(
+                sessionId,
+                commandId,
+                (chunk) => {
+                  stdout += chunk
+                  options.onStdout?.(chunk)
+                },
+                (chunk) => {
+                  stderr += chunk
+                  options.onStderr?.(chunk)
+                }
+              )
+              .catch(() => undefined)
+          : Promise.resolve()
 
       const exitCode = await waitForCommandExit(
         sandbox,
         sessionId,
         commandId,
+        options.signal,
         options.timeoutMs
       )
 
       await Promise.race([logsPromise, wait(1_000)])
+      if (!options.onStdout && !options.onStderr) {
+        const logs = await sandbox.process
+          .getSessionCommandLogs(sessionId, commandId)
+          .catch(() => undefined)
+        stdout = logs?.stdout ?? logs?.output ?? ""
+        stderr = logs?.stderr ?? ""
+      }
 
       return {
         exitCode,
@@ -612,6 +684,9 @@ export async function runDaytonaCommand(
       },
       timeout
     )
+    if (options.signal?.aborted) {
+      throw new Error("Run was canceled.")
+    }
 
     return {
       exitCode: response.exitCode ?? 0,

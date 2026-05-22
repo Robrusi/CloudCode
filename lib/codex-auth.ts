@@ -4,6 +4,7 @@ import { auth } from "@clerk/nextjs/server"
 import { ConvexHttpClient } from "convex/browser"
 
 import { api } from "@/convex/_generated/api"
+import type { Id } from "@/convex/_generated/dataModel"
 
 const DEFAULT_PROFILE = "default"
 const CONVEX_JWT_TEMPLATE = "convex"
@@ -38,6 +39,13 @@ export type SaveCodexOAuthTokensInput = {
   openaiApiKey?: string
   profile?: string
   refreshToken: string
+}
+
+export type SaveCodexAuthJsonForWorkerInput = {
+  authJson: string
+  profile?: string
+  userId: Id<"users">
+  workerSecret: string
 }
 
 function getConvexUrl() {
@@ -141,7 +149,7 @@ function getAccountIdFromIdToken(idToken: string) {
   return null
 }
 
-function buildAuthJson(auth: CodexChatGptAuth) {
+export function buildCodexAuthJson(auth: CodexChatGptAuth) {
   return JSON.stringify(
     {
       auth_mode: auth.authMode,
@@ -159,7 +167,7 @@ function buildAuthJson(auth: CodexChatGptAuth) {
   )
 }
 
-function parseCodexAuthJson(authJson: string) {
+export function parseCodexAuthJson(authJson: string) {
   let parsed: unknown
 
   try {
@@ -239,8 +247,10 @@ export async function saveCodexOAuthTokens(input: SaveCodexOAuthTokensInput) {
   }
 
   const client = await getClient(input.convexToken)
-  return (await client.mutation(api.codexAuth.saveOAuthTokens, auth)) satisfies
-    AuthStatus
+  return (await client.mutation(
+    api.codexAuth.saveOAuthTokens,
+    auth
+  )) satisfies AuthStatus
 }
 
 export async function saveCodexAuthJson(
@@ -258,6 +268,28 @@ export async function saveCodexAuthJson(
   })
 }
 
+export async function saveCodexAuthJsonForWorker(
+  input: SaveCodexAuthJsonForWorkerInput
+) {
+  const parsed = parseCodexAuthJson(input.authJson)
+  const profile = normalizeProfile(input.profile)
+  const lastRefresh = new Date().toISOString()
+  const client = new ConvexHttpClient(getConvexUrl())
+
+  return await client.mutation(api.codexAuth.saveOAuthTokensForWorker, {
+    accessToken: parsed.accessToken,
+    accountId: parsed.accountId,
+    fingerprint: fingerprint(parsed.idToken, parsed.refreshToken, lastRefresh),
+    idToken: parsed.idToken,
+    lastRefresh,
+    openaiApiKey: parsed.openaiApiKey,
+    profile,
+    refreshToken: parsed.refreshToken,
+    userId: input.userId,
+    workerSecret: input.workerSecret,
+  })
+}
+
 export async function getCodexAuthJson(profileInput?: string) {
   const profile = normalizeProfile(profileInput)
   const client = await getClient()
@@ -269,12 +301,13 @@ export async function getCodexAuthJson(profileInput?: string) {
     )
   }
 
-  return buildAuthJson(stored)
+  return buildCodexAuthJson(stored)
 }
 
 export async function getCodexAuthStatus(profileInput?: string) {
   const profile = normalizeProfile(profileInput)
   const client = await getClient()
-  return (await client.query(api.codexAuth.status, { profile })) satisfies
-    AuthStatus
+  return (await client.query(api.codexAuth.status, {
+    profile,
+  })) satisfies AuthStatus
 }

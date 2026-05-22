@@ -147,6 +147,8 @@ export type EnsureAutoEnvironmentInput = {
   onLog?: (log: RunCodexLog) => void | Promise<void>
   repoUrl: string
   sandboxPreset: SandboxPresetForRun
+  signal?: AbortSignal
+  workerSecret?: string
 }
 
 function getConvexUrl() {
@@ -159,10 +161,140 @@ function getConvexUrl() {
   return url
 }
 
-async function getConvexClient() {
+async function getConvexClient(workerSecret?: string) {
   const client = new ConvexHttpClient(getConvexUrl())
-  client.setAuth(await getConvexAuthToken())
+  if (!workerSecret) {
+    client.setAuth(await getConvexAuthToken())
+  }
   return client
+}
+
+async function getAutoEnvironmentForRun(
+  client: ConvexHttpClient,
+  input: EnsureAutoEnvironmentInput
+) {
+  if (input.workerSecret) {
+    return (await client.query(
+      api.sandboxPresets.getAutoEnvironmentForRunForWorker,
+      {
+        presetId: input.sandboxPreset.id,
+        repoUrl: input.repoUrl,
+        workerSecret: input.workerSecret,
+      }
+    )) as {
+      activeSandboxId?: string
+      cloudcodeYaml?: string
+      status: string
+    } | null
+  }
+
+  return (await client.query(api.sandboxPresets.getAutoEnvironmentForRun, {
+    presetId: input.sandboxPreset.id,
+    repoUrl: input.repoUrl,
+  })) as {
+    activeSandboxId?: string
+    cloudcodeYaml?: string
+    status: string
+  } | null
+}
+
+async function beginAutoEnvironmentBuild(
+  client: ConvexHttpClient,
+  input: EnsureAutoEnvironmentInput
+) {
+  if (input.workerSecret) {
+    return (await client.mutation(
+      api.sandboxPresets.beginAutoEnvironmentBuildForWorker,
+      {
+        baseBranch: input.baseBranch,
+        presetId: input.sandboxPreset.id,
+        repoUrl: input.repoUrl,
+        workerSecret: input.workerSecret,
+      }
+    )) as AutoEnvironmentBuildRecord
+  }
+
+  return (await client.mutation(api.sandboxPresets.beginAutoEnvironmentBuild, {
+    baseBranch: input.baseBranch,
+    presetId: input.sandboxPreset.id,
+    repoUrl: input.repoUrl,
+  })) as AutoEnvironmentBuildRecord
+}
+
+async function appendAutoEnvironmentBuildLogs(
+  client: ConvexHttpClient,
+  buildId: Id<"sandboxPresetBuilds">,
+  logs: StoredBuildLog[],
+  workerSecret?: string
+) {
+  if (workerSecret) {
+    return await client.mutation(
+      api.sandboxPresets.appendAutoEnvironmentBuildLogsForWorker,
+      {
+        buildId,
+        logs,
+        workerSecret,
+      }
+    )
+  }
+
+  return await client.mutation(
+    api.sandboxPresets.appendAutoEnvironmentBuildLogs,
+    {
+      buildId,
+      logs,
+    }
+  )
+}
+
+async function completeAutoEnvironmentBuild(
+  client: ConvexHttpClient,
+  args: {
+    buildId: Id<"sandboxPresetBuilds">
+    cloudcodeYaml: string
+    configHash: string
+    sandboxId?: string
+  },
+  workerSecret?: string
+) {
+  if (workerSecret) {
+    return await client.mutation(
+      api.sandboxPresets.completeAutoEnvironmentBuildForWorker,
+      {
+        ...args,
+        workerSecret,
+      }
+    )
+  }
+
+  return await client.mutation(
+    api.sandboxPresets.completeAutoEnvironmentBuild,
+    args
+  )
+}
+
+async function failAutoEnvironmentBuild(
+  client: ConvexHttpClient,
+  args: {
+    buildId: Id<"sandboxPresetBuilds">
+    error: string
+  },
+  workerSecret?: string
+) {
+  if (workerSecret) {
+    return await client.mutation(
+      api.sandboxPresets.failAutoEnvironmentBuildForWorker,
+      {
+        ...args,
+        workerSecret,
+      }
+    )
+  }
+
+  return await client.mutation(
+    api.sandboxPresets.failAutoEnvironmentBuild,
+    args
+  )
 }
 
 function compactLine(value: string, max = 260) {
@@ -223,11 +355,12 @@ function createBuildLogEmitter(
     const logs = pending.splice(0, BUILD_LOG_BATCH_SIZE)
     if (logs.length === 0) return Promise.resolve()
 
-    flushPromise = client
-      .mutation(api.sandboxPresets.appendAutoEnvironmentBuildLogs, {
-        buildId,
-        logs,
-      })
+    flushPromise = appendAutoEnvironmentBuildLogs(
+      client,
+      buildId,
+      logs,
+      input.workerSecret
+    )
       .catch(() => undefined)
       .then(() => undefined)
       .finally(() => {
@@ -282,7 +415,8 @@ const silentCommandOutput = {
 async function prepareBuilderCodex(
   sandbox: Sandbox,
   paths: DaytonaSandboxPaths,
-  authJson: string
+  authJson: string,
+  signal?: AbortSignal
 ) {
   await runDaytonaCommand(
     sandbox,
@@ -290,7 +424,7 @@ async function prepareBuilderCodex(
       `mkdir -p ${shellQuote(paths.runtimeHome)} ${shellQuote(paths.codexHome)}`,
       `chmod 700 ${shellQuote(paths.runtimeHome)} ${shellQuote(paths.codexHome)}`,
     ].join(" && "),
-    { timeoutMs: 10_000 }
+    { signal, timeoutMs: 10_000 }
   )
   await installDaytonaTarWrapper(sandbox, paths)
 
@@ -324,6 +458,7 @@ async function prepareBuilderCodex(
       TAR_OPTIONS: "--no-same-owner --no-same-permissions",
     },
     ...silentCommandOutput,
+    signal,
     timeoutMs: 3 * 60 * 1000,
   })
 
@@ -338,7 +473,7 @@ async function prepareBuilderCodex(
   await runDaytonaCommand(
     sandbox,
     `chmod 600 ${shellQuote(`${paths.codexHome}/auth.json`)}`,
-    { timeoutMs: 10_000 }
+    { signal, timeoutMs: 10_000 }
   )
 }
 
@@ -389,7 +524,8 @@ function scannerPrompt(repoPath: string) {
 
 async function runScannerCodex(
   sandbox: Sandbox,
-  paths: DaytonaSandboxPaths
+  paths: DaytonaSandboxPaths,
+  signal?: AbortSignal
 ) {
   const promptPath = `${paths.codexHome}/auto-environment-prompt.txt`
   const lastMessagePath = `${paths.codexHome}/auto-environment-last-message.txt`
@@ -402,6 +538,7 @@ async function runScannerCodex(
       {
         cwd: paths.home,
         env: codexShellEnv(paths),
+        signal,
         timeoutMs: 10_000,
       }
     )
@@ -441,6 +578,7 @@ async function runScannerCodex(
       cwd: paths.home,
       env: codexShellEnv(paths),
       ...silentCommandOutput,
+      signal,
       timeoutMs: AUTO_BUILD_SCAN_TIMEOUT_MS,
     }
   )
@@ -462,12 +600,14 @@ async function cloneRepoForBuild({
   githubToken,
   repoUrl,
   sandbox,
+  signal,
   paths,
 }: {
   baseBranch?: string
   githubToken?: string
   repoUrl: string
   sandbox: Sandbox
+  signal?: AbortSignal
   paths: DaytonaSandboxPaths
 }) {
   await runDaytonaCommand(
@@ -475,7 +615,7 @@ async function cloneRepoForBuild({
     `rm -rf ${shellQuote(paths.repoPath)} && mkdir -p ${shellQuote(
       paths.repoPath.replace(/\/[^/]+$/, "")
     )}`,
-    { timeoutMs: 60_000 }
+    { signal, timeoutMs: 60_000 }
   )
   await sandbox.git.clone(
     repoUrl,
@@ -502,6 +642,7 @@ async function runCloudcodeCommandList({
   env,
   label,
   sandbox,
+  signal,
   startIndex = 0,
 }: {
   commands: CloudcodeCommand[]
@@ -510,6 +651,7 @@ async function runCloudcodeCommandList({
   env: Record<string, string>
   label: string
   sandbox: Sandbox
+  signal?: AbortSignal
   startIndex?: number
 }) {
   if (commands.length === 0) return
@@ -540,6 +682,7 @@ async function runCloudcodeCommandList({
           cwd,
           env,
           ...silentCommandOutput,
+          signal,
           timeoutMs: commandTimeout(command),
         }
       )
@@ -638,7 +781,8 @@ function addMiseTrustCommand(
 
 async function listMiseConfigFiles(
   sandbox: Sandbox,
-  paths: DaytonaSandboxPaths
+  paths: DaytonaSandboxPaths,
+  signal?: AbortSignal
 ) {
   const result = await runDaytonaCommand(
     sandbox,
@@ -650,7 +794,7 @@ async function listMiseConfigFiles(
           `[ -f ${shellQuote(file)} ] && printf '%s\\n' ${shellQuote(file)}`
       ),
     ].join("\n"),
-    { timeoutMs: 10_000 }
+    { signal, timeoutMs: 10_000 }
   )
 
   if (result.exitCode !== 0) return []
@@ -665,11 +809,13 @@ async function trustMiseConfigFiles({
   env,
   paths,
   sandbox,
+  signal,
 }: {
   configFiles: string[]
   env: Record<string, string>
   paths: DaytonaSandboxPaths
   sandbox: Sandbox
+  signal?: AbortSignal
 }) {
   if (configFiles.length === 0) return
 
@@ -680,6 +826,7 @@ async function trustMiseConfigFiles({
       cwd: paths.home,
       env,
       ...silentCommandOutput,
+      signal,
       timeoutMs: 2 * 60 * 1000,
     }
   )
@@ -716,12 +863,14 @@ async function repairCxx20Compiler({
   env,
   paths,
   sandbox,
+  signal,
 }: {
   config: CloudcodeYamlConfig
   emit: (log: RunCodexLog) => Promise<void>
   env: Record<string, string>
   paths: DaytonaSandboxPaths
   sandbox: Sandbox
+  signal?: AbortSignal
 }) {
   addCxx20RepairCommand(config)
   await writeNormalizedCloudcodeYaml({ config, paths, sandbox })
@@ -738,12 +887,14 @@ async function repairCxx20Compiler({
     env,
     label: "Running global environment repair",
     sandbox,
+    signal,
   })
 }
 
 async function readBuildHashInputs(
   sandbox: Sandbox,
-  paths: DaytonaSandboxPaths
+  paths: DaytonaSandboxPaths,
+  signal?: AbortSignal
 ) {
   const result = await runDaytonaCommand(
     sandbox,
@@ -754,7 +905,7 @@ async function readBuildHashInputs(
       '  [ -f "$file" ] && sha256sum "$file"',
       "done",
     ].join("\n"),
-    { timeoutMs: 20_000 }
+    { signal, timeoutMs: 20_000 }
   )
   return result.stdout
 }
@@ -773,7 +924,8 @@ async function readRepoCloudcodeYaml(
 
 async function writeEnvironmentGitExcludes(
   sandbox: Sandbox,
-  paths: DaytonaSandboxPaths
+  paths: DaytonaSandboxPaths,
+  signal?: AbortSignal
 ) {
   await runDaytonaCommand(
     sandbox,
@@ -801,20 +953,21 @@ async function writeEnvironmentGitExcludes(
       ".turbo/",
       "EOF",
     ].join("\n"),
-    { timeoutMs: 10_000 }
+    { signal, timeoutMs: 10_000 }
   ).catch(() => undefined)
 }
 
 async function cleanupBuilderFiles(
   sandbox: Sandbox,
-  paths: DaytonaSandboxPaths
+  paths: DaytonaSandboxPaths,
+  signal?: AbortSignal
 ) {
   await runDaytonaCommand(
     sandbox,
     `rm -f ${shellQuote(`${paths.codexHome}/auth.json`)} ${shellQuote(
       `${paths.codexHome}/auto-environment-prompt.txt`
     )} ${shellQuote(`${paths.codexHome}/auto-environment-last-message.txt`)}`,
-    { timeoutMs: 10_000 }
+    { signal, timeoutMs: 10_000 }
   ).catch(() => undefined)
 }
 
@@ -867,18 +1020,24 @@ async function buildAutoEnvironmentSandbox({
       githubToken: input.githubToken,
       repoUrl: input.repoUrl,
       sandbox,
+      signal: input.signal,
       paths,
     })
     await emit({
       kind: "setup",
       message: "Repository cloned",
     })
-    const miseConfigFiles = await listMiseConfigFiles(sandbox, paths)
+    const miseConfigFiles = await listMiseConfigFiles(
+      sandbox,
+      paths,
+      input.signal
+    )
     await trustMiseConfigFiles({
       configFiles: miseConfigFiles,
       env: terminalEnv,
       paths,
       sandbox,
+      signal: input.signal,
     })
     let rawYaml = await readRepoCloudcodeYaml(sandbox, paths)
     if (rawYaml) {
@@ -887,12 +1046,12 @@ async function buildAutoEnvironmentSandbox({
         message: "Found cloudcode.yaml",
       })
     } else {
-      await prepareBuilderCodex(sandbox, paths, input.authJson)
+      await prepareBuilderCodex(sandbox, paths, input.authJson, input.signal)
       await emit({
         kind: "setup",
         message: "Starting environment scan",
       })
-      await runScannerCodex(sandbox, paths)
+      await runScannerCodex(sandbox, paths, input.signal)
       rawYaml = await readRepoCloudcodeYaml(sandbox, paths)
 
       if (!rawYaml) {
@@ -920,12 +1079,14 @@ async function buildAutoEnvironmentSandbox({
       env: terminalEnv,
       label: "Running global environment setup",
       sandbox,
+      signal: input.signal,
     })
     await trustMiseConfigFiles({
       configFiles: miseConfigFiles,
       env: terminalEnv,
       paths,
       sandbox,
+      signal: input.signal,
     })
     try {
       await runCloudcodeCommandList({
@@ -935,6 +1096,7 @@ async function buildAutoEnvironmentSandbox({
         env: terminalEnv,
         label: "Running repo install",
         sandbox,
+        signal: input.signal,
       })
     } catch (error) {
       if (!needsCxx20CompilerRepair(error)) throw error
@@ -947,6 +1109,7 @@ async function buildAutoEnvironmentSandbox({
         env: terminalEnv,
         paths,
         sandbox,
+        signal: input.signal,
       })
       cloudcodeYaml = await writeNormalizedCloudcodeYaml({
         config,
@@ -960,25 +1123,30 @@ async function buildAutoEnvironmentSandbox({
         env: terminalEnv,
         label: "Running repo install",
         sandbox,
+        signal: input.signal,
         startIndex: failedCommand,
       })
     }
 
-    await writeEnvironmentGitExcludes(sandbox, paths)
-    const hashInputs = await readBuildHashInputs(sandbox, paths)
+    await writeEnvironmentGitExcludes(sandbox, paths, input.signal)
+    const hashInputs = await readBuildHashInputs(sandbox, paths, input.signal)
     const configHash = cloudcodeYamlHash(cloudcodeYaml, hashInputs)
     const updatedAuthJson = await readDaytonaTextFile(
       sandbox,
       `${paths.codexHome}/auth.json`
     ).catch(() => input.authJson)
-    await cleanupBuilderFiles(sandbox, paths)
+    await cleanupBuilderFiles(sandbox, paths, input.signal)
 
-    await client.mutation(api.sandboxPresets.completeAutoEnvironmentBuild, {
-      buildId: build.buildId,
-      cloudcodeYaml,
-      configHash,
-      sandboxId: sandbox.id,
-    })
+    await completeAutoEnvironmentBuild(
+      client,
+      {
+        buildId: build.buildId,
+        cloudcodeYaml,
+        configHash,
+        sandboxId: sandbox.id,
+      },
+      input.workerSecret
+    )
     keepSandbox = true
 
     return {
@@ -989,12 +1157,14 @@ async function buildAutoEnvironmentSandbox({
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Auto environment build failed."
-    await client
-      .mutation(api.sandboxPresets.failAutoEnvironmentBuild, {
+    await failAutoEnvironmentBuild(
+      client,
+      {
         buildId: build.buildId,
         error: message,
-      })
-      .catch(() => undefined)
+      },
+      input.workerSecret
+    ).catch(() => undefined)
     throw error
   } finally {
     await buildLogs.flush()
@@ -1026,18 +1196,8 @@ export async function ensureAutoEnvironmentSandbox(
       message: "Checking auto environment sandbox",
     })
   }
-  const client = await getConvexClient()
-  const existing = (await client.query(
-    api.sandboxPresets.getAutoEnvironmentForRun,
-    {
-      presetId: input.sandboxPreset.id,
-      repoUrl: input.repoUrl,
-    }
-  )) as {
-    activeSandboxId?: string
-    cloudcodeYaml?: string
-    status: string
-  } | null
+  const client = await getConvexClient(input.workerSecret)
+  const existing = await getAutoEnvironmentForRun(client, input)
 
   if (
     currentSandboxId &&
@@ -1081,14 +1241,7 @@ export async function ensureAutoEnvironmentSandbox(
     }
   }
 
-  const build = (await client.mutation(
-    api.sandboxPresets.beginAutoEnvironmentBuild,
-    {
-      baseBranch: input.baseBranch,
-      presetId: input.sandboxPreset.id,
-      repoUrl: input.repoUrl,
-    }
-  )) as AutoEnvironmentBuildRecord
+  const build = await beginAutoEnvironmentBuild(client, input)
   await input.onLog?.({
     detail: build.environmentSlug,
     kind: "setup",

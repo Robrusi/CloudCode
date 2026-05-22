@@ -233,10 +233,7 @@ export function FileEditorPanel({
       // Dragging the LEFT edge: moving the cursor right shrinks the panel,
       // moving left enlarges it. Clamp against viewport so neighbouring
       // columns keep at least 360 px.
-      const maxWidth = Math.max(
-        MIN_PANEL_WIDTH,
-        window.innerWidth - 360
-      )
+      const maxWidth = Math.max(MIN_PANEL_WIDTH, window.innerWidth - 360)
       const next = Math.min(maxWidth, Math.max(MIN_PANEL_WIDTH, ctx.w - dx))
       setWidth(next)
     }
@@ -279,9 +276,7 @@ export function FileEditorPanel({
     <section
       className={cn(
         "relative flex h-full min-h-0 flex-col overflow-hidden bg-background",
-        sidePlacement
-          ? "shrink-0 border-l border-border/60"
-          : "min-w-0 flex-1"
+        sidePlacement ? "shrink-0 border-l border-border/60" : "min-w-0 flex-1"
       )}
       style={sidePlacement ? { width } : undefined}
     >
@@ -594,12 +589,7 @@ function FileViewer({
       )
     }
 
-    return (
-      <ImageViewer
-        sandboxId={sandboxId}
-        path={path}
-      />
-    )
+    return <ImageViewer sandboxId={sandboxId} path={path} />
   }
 
   if (mode === "diff") {
@@ -614,7 +604,7 @@ function FileViewer({
     }
 
     return (
-      <div className="h-full min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-background">
+      <div className="h-full min-h-0 flex-1 overflow-x-hidden overflow-y-auto bg-background">
         <FileDiff
           fileDiff={fileDiff}
           options={diffOptions}
@@ -628,9 +618,7 @@ function FileViewer({
   if (!sandboxId && content === null) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 bg-background px-6 text-center">
-        <p className="text-xs text-destructive">
-          {error ?? "No sandbox yet."}
-        </p>
+        <p className="text-xs text-destructive">{error ?? "No sandbox yet."}</p>
       </div>
     )
   }
@@ -655,7 +643,7 @@ function FileViewer({
 
   if (mode === "preview" && markdownPreview) {
     return (
-      <div className="h-full min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-background">
+      <div className="h-full min-h-0 flex-1 overflow-x-hidden overflow-y-auto bg-background">
         <Markdown
           text={content ?? ""}
           repoName={null}
@@ -671,7 +659,7 @@ function FileViewer({
   // keeps every line visible, so the user sees the whole file plus the diff.
   if (fileModeDiff) {
     return (
-      <div className="h-full min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-background">
+      <div className="h-full min-h-0 flex-1 overflow-x-hidden overflow-y-auto bg-background">
         <FileDiff
           fileDiff={fileModeDiff}
           options={fileModeDiffOptions}
@@ -683,7 +671,7 @@ function FileViewer({
   }
 
   return (
-    <div className="h-full min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-background">
+    <div className="h-full min-h-0 flex-1 overflow-x-hidden overflow-y-auto bg-background">
       <PierreFile<undefined>
         file={file}
         options={options}
@@ -736,7 +724,7 @@ function ImageDimensionsLabel({
   if (!dimensions) return null
 
   return (
-    <span className="shrink-0 font-sans text-[11px] tabular-nums text-muted-foreground">
+    <span className="shrink-0 font-sans text-[11px] text-muted-foreground tabular-nums">
       {dimensions.width} x {dimensions.height}
     </span>
   )
@@ -752,17 +740,14 @@ function ImageViewer({
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState(false)
 
-  const src = useMemo(
-    () => {
-      const params = new URLSearchParams({
-        path,
-        format: "raw",
-        ...(sandboxId ? { sandboxId } : {}),
-      })
-      return `/api/sandbox/files/read?${params}`
-    },
-    [path, sandboxId]
-  )
+  const src = useMemo(() => {
+    const params = new URLSearchParams({
+      path,
+      format: "raw",
+      ...(sandboxId ? { sandboxId } : {}),
+    })
+    return `/api/sandbox/files/read?${params}`
+  }, [path, sandboxId])
 
   if (error) {
     return (

@@ -81,9 +81,7 @@ export async function connectDaytonaTerminal({
       try {
         handle = await sandbox.process.connectPty(cleanId, { onData })
       } catch {
-        await sandbox.process
-          .killPtySession(cleanId)
-          .catch(() => undefined)
+        await sandbox.process.killPtySession(cleanId).catch(() => undefined)
         handle = await sandbox.process.createPty({
           ...createOptions,
           cwd: paths.home,
@@ -181,7 +179,9 @@ export async function killDaytonaTerminal(
   }
 
   const sandbox = await getStartedDaytonaSandbox(sandboxId)
-  await sandbox.process.killPtySession(cleanTerminalId(terminalId)).catch(() => {
-    // The PTY may already be gone.
-  })
+  await sandbox.process
+    .killPtySession(cleanTerminalId(terminalId))
+    .catch(() => {
+      // The PTY may already be gone.
+    })
 }

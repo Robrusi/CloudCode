@@ -41,6 +41,13 @@ const sandboxSnapshotStatus = v.union(
   v.literal("failed"),
   v.literal("stale")
 )
+const codexRunStatus = v.union(
+  v.literal("queued"),
+  v.literal("running"),
+  v.literal("succeeded"),
+  v.literal("failed"),
+  v.literal("canceled")
+)
 
 const runLog = v.object({
   detail: v.optional(v.string()),
@@ -79,6 +86,38 @@ export default defineSchema({
     userId: v.id("users"),
   })
     .index("by_user_profile", ["userId", "profile"])
+    .index("by_user_updated", ["userId", "updatedAt"]),
+
+  codexRuns: defineTable({
+    assistantMessageId: v.id("messages"),
+    baseBranch: v.optional(v.string()),
+    branchName: v.optional(v.string()),
+    codexThreadId: v.optional(v.string()),
+    content: v.optional(v.string()),
+    createdAt: v.number(),
+    error: v.optional(v.string()),
+    finishedAt: v.optional(v.number()),
+    logs: v.optional(v.array(runLog)),
+    model,
+    previousDiff: v.optional(v.string()),
+    profile: v.optional(v.string()),
+    prompt: v.string(),
+    reasoningEffort: thinking,
+    repoUrl: v.string(),
+    resumeContext: v.optional(v.string()),
+    sandboxId: v.optional(v.string()),
+    sandboxPresetId: v.optional(v.id("sandboxPresets")),
+    sandboxState: v.optional(sandboxState),
+    speed,
+    startedAt: v.optional(v.number()),
+    status: codexRunStatus,
+    threadId: v.id("threads"),
+    triggerRunId: v.optional(v.string()),
+    updatedAt: v.number(),
+    userId: v.id("users"),
+  })
+    .index("by_thread_updated", ["threadId", "updatedAt"])
+    .index("by_trigger_run", ["triggerRunId"])
     .index("by_user_updated", ["userId", "updatedAt"]),
 
   messages: defineTable({

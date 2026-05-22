@@ -362,70 +362,6 @@ export const completeAssistantMessage = mutation({
   },
 })
 
-export const appendAssistantLogs = mutation({
-  args: {
-    logs: v.array(runLog),
-    messageId: v.id("messages"),
-    threadId: v.id("threads"),
-  },
-  handler: async (ctx, args) => {
-    if (args.logs.length === 0) return
-
-    const userId = await ensureCurrentUser(ctx)
-    await requireOwnedThread(ctx, args.threadId, userId)
-
-    const message = await ctx.db.get(args.messageId)
-    if (
-      !message ||
-      message.threadId !== args.threadId ||
-      message.userId !== userId ||
-      message.role !== "assistant"
-    ) {
-      throw new Error("Message not found.")
-    }
-
-    const logs = compactRunLogs(args.logs)
-    if (logs.length === 0) return
-    const existingMeta = compactMessageMeta(message.meta)
-
-    await ctx.db.patch(args.messageId, {
-      meta: {
-        ...existingMeta,
-        logs: [...(existingMeta?.logs ?? []), ...logs].slice(
-          -MAX_STORED_RUN_LOGS
-        ),
-      },
-    })
-  },
-})
-
-export const updateAssistantContent = mutation({
-  args: {
-    content: v.string(),
-    messageId: v.id("messages"),
-    threadId: v.id("threads"),
-  },
-  handler: async (ctx, args) => {
-    const userId = await ensureCurrentUser(ctx)
-    await requireOwnedThread(ctx, args.threadId, userId)
-
-    const message = await ctx.db.get(args.messageId)
-    if (
-      !message ||
-      message.threadId !== args.threadId ||
-      message.userId !== userId ||
-      message.role !== "assistant" ||
-      !message.pending
-    ) {
-      throw new Error("Message not found.")
-    }
-
-    await ctx.db.patch(args.messageId, {
-      content: args.content,
-    })
-  },
-})
-
 export const saveRunState = mutation({
   args: {
     codexThreadId: v.optional(v.string()),
@@ -505,7 +441,14 @@ export const deleteThread = mutation({
       .query("messages")
       .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
       .collect()
+    const runs = await ctx.db
+      .query("codexRuns")
+      .withIndex("by_thread_updated", (q) => q.eq("threadId", args.threadId))
+      .collect()
 
+    for (const run of runs) {
+      await ctx.db.delete(run._id)
+    }
     for (const message of messages) {
       await ctx.db.delete(message._id)
     }

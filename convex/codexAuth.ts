@@ -2,6 +2,7 @@ import { v } from "convex/values"
 
 import { mutation, query } from "./_generated/server"
 import { ensureCurrentUser, getCurrentUser } from "./lib/users"
+import { requireWorkerSecret } from "./lib/workerAuth"
 
 function toStatus(auth: {
   accountId: string | null
@@ -102,6 +103,52 @@ export const saveOAuthTokens = mutation({
       refreshToken: args.refreshToken,
       updatedAt: args.lastRefresh,
       userId,
+    }
+
+    if (existing) {
+      await ctx.db.patch(existing._id, auth)
+    } else {
+      await ctx.db.insert("codexAuth", auth)
+    }
+
+    return toStatus(auth)
+  },
+})
+
+export const saveOAuthTokensForWorker = mutation({
+  args: {
+    accessToken: v.string(),
+    accountId: v.union(v.string(), v.null()),
+    fingerprint: v.string(),
+    idToken: v.string(),
+    lastRefresh: v.string(),
+    openaiApiKey: v.optional(v.string()),
+    profile: v.string(),
+    refreshToken: v.string(),
+    userId: v.id("users"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const existing = await ctx.db
+      .query("codexAuth")
+      .withIndex("by_user_profile", (q) =>
+        q.eq("userId", args.userId).eq("profile", args.profile)
+      )
+      .unique()
+
+    const auth = {
+      accessToken: args.accessToken,
+      accountId: args.accountId,
+      authMode: "chatgpt" as const,
+      fingerprint: args.fingerprint,
+      idToken: args.idToken,
+      lastRefresh: args.lastRefresh,
+      openaiApiKey: args.openaiApiKey,
+      profile: args.profile,
+      refreshToken: args.refreshToken,
+      updatedAt: args.lastRefresh,
+      userId: args.userId,
     }
 
     if (existing) {

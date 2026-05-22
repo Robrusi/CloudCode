@@ -11,7 +11,10 @@ export type SandboxPresetEnvVar = {
 
 export type SandboxEnvTarget = {
   readTextFile: (path: string) => Promise<string>
-  runCommand: (command: string, options?: { timeoutMs?: number }) => Promise<{
+  runCommand: (
+    command: string,
+    options?: { timeoutMs?: number }
+  ) => Promise<{
     exitCode: number
     stderr: string
     stdout: string

@@ -18,6 +18,8 @@ DAYTONA_DEFAULT_SNAPSHOT=cloudcode-batteries-included # optional override
 DAYTONA_DEFAULT_IMAGE=mcr.microsoft.com/devcontainers/universal:2-linux # optional fallback
 DAYTONA_CODEX_RUNTIME_HOME=... # optional clean Codex home parent inside sandboxes
 DAYTONA_CREATE_TIMEOUT_SECONDS=480 # optional, useful for large cold snapshots
+DAYTONA_COMMAND_STATUS_POLL_MS=2000 # optional, Daytona async command status polling
+DAYTONA_COMMAND_STATUS_MAX_POLL_MS=5000 # optional, max polling backoff
 DAYTONA_AUTO_STOP_MINUTES=30 # optional
 DAYTONA_AUTO_ARCHIVE_MINUTES=10080 # optional
 DAYTONA_AUTO_DELETE_MINUTES=43200 # optional
@@ -29,15 +31,28 @@ NEXT_PUBLIC_CONVEX_SITE_URL=...
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=...
 CLERK_SECRET_KEY=...
 GITHUB_TOKEN=... # optional, required for private repos or pushing elsewhere
+CLOUDCODE_SECRET_ENCRYPTION_KEY=... # required for Trigger workers if CLERK_SECRET_KEY is not set there
+TRIGGER_PROJECT_REF=...
+TRIGGER_SECRET_KEY=...
+TRIGGER_WORKER_SECRET=... # same value in Trigger and Convex env; local Trigger dev can read it here
 ```
 
 Convex also needs `CLERK_JWT_ISSUER_DOMAIN` set on the deployment, for example:
 
 ```bash
 pnpm exec convex env set CLERK_JWT_ISSUER_DOMAIN https://your-app.clerk.accounts.dev
+pnpm exec convex env set TRIGGER_WORKER_SECRET your-long-random-shared-secret
 ```
 
 In Clerk, create a JWT template named `convex` with audience `convex`.
+
+In production, the Next/Vercel app needs `TRIGGER_SECRET_KEY` so API routes can
+queue and cancel Trigger runs. The Trigger.dev project needs the worker runtime
+variables: `NEXT_PUBLIC_CONVEX_URL`, `TRIGGER_WORKER_SECRET`, Daytona settings,
+and `CLOUDCODE_SECRET_ENCRYPTION_KEY` when preset secrets are encrypted with that
+dedicated key. Convex must use the exact same `TRIGGER_WORKER_SECRET` value as
+the Trigger worker; generate it once and reuse it rather than creating separate
+values.
 
 ## Daytona base image
 
@@ -131,4 +146,17 @@ chat is deleted.
 
 ```bash
 pnpm dev
+```
+
+Trigger.dev runs Codex jobs outside the request/response lifecycle. In a second
+terminal, start the Trigger worker:
+
+```bash
+pnpm trigger:dev
+```
+
+Deploy the worker with:
+
+```bash
+pnpm trigger:deploy
 ```

@@ -422,7 +422,7 @@ export function SandboxTerminalPanel({
       : status === "reconnecting"
         ? "Reconnecting"
         : status === "error"
-          ? error ?? "Connection issue"
+          ? (error ?? "Connection issue")
           : "Connecting"
 
   const surfaceBg = palette.background

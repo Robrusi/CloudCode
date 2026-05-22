@@ -2,6 +2,8 @@
 
 import dynamic from "next/dynamic"
 import { memo, useMemo, type ReactNode } from "react"
+import ReactMarkdown, { type Components } from "react-markdown"
+import remarkGfm from "remark-gfm"
 
 import { cn } from "@/lib/utils"
 
@@ -9,6 +11,8 @@ const CodeBlock = dynamic(
   () => import("@/components/code-block").then((mod) => mod.CodeBlock),
   { ssr: false }
 )
+
+const remarkPlugins = [remarkGfm]
 
 export const Markdown = memo(function Markdown({
   text,
@@ -21,175 +25,109 @@ export const Markdown = memo(function Markdown({
   onOpenFile: (path: string) => void
   repoName: string | null
 }) {
-  const blocks = useMemo(() => {
-    const out: Array<{ kind: "code" | "text"; lang?: string; body: string }> =
-      []
-    const fence = /```([^\n`]*)\n([\s\S]*?)```/g
-    let last = 0
-    let m: RegExpExecArray | null
-    while ((m = fence.exec(text)) !== null) {
-      if (m.index > last)
-        out.push({ kind: "text", body: text.slice(last, m.index) })
-      out.push({ kind: "code", lang: parseCodeLanguage(m[1]), body: m[2] })
-      last = m.index + m[0].length
-    }
-    if (last < text.length) out.push({ kind: "text", body: text.slice(last) })
-    return out
-  }, [text])
+  const normalizedText = useMemo(() => closeOpenCodeFence(text), [text])
+  const components = useMemo<Components>(
+    () => ({
+      a: ({ children, href }) => {
+        const normalizedHref = href ? normalizeLinkHref(href) : undefined
+
+        return normalizedHref ? (
+          <MarkdownLink
+            href={normalizedHref}
+            fileLinkContext={{ onOpenFile, repoName }}
+          >
+            {children}
+          </MarkdownLink>
+        ) : (
+          <span>{children}</span>
+        )
+      },
+      blockquote: ({ children }) => (
+        <blockquote className="border-l-2 border-border pl-4 text-muted-foreground">
+          {children}
+        </blockquote>
+      ),
+      code: ({ children, className: codeClassName }) => {
+        const body = String(children).replace(/\n$/, "")
+        const language = /language-([^\s]+)/.exec(codeClassName ?? "")?.[1]
+        const isBlock = Boolean(
+          language || codeClassName || body.includes("\n")
+        )
+
+        if (isBlock) {
+          return <CodeBlock body={body} lang={language?.toLowerCase()} />
+        }
+
+        return (
+          <code
+            className={cn(
+              "rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]",
+              codeClassName
+            )}
+          >
+            {children}
+          </code>
+        )
+      },
+      h1: ({ children }) => (
+        <h1 className="mt-6 mb-3 text-xl font-semibold first:mt-0">
+          {children}
+        </h1>
+      ),
+      h2: ({ children }) => (
+        <h2 className="mt-5 mb-2.5 text-lg font-semibold first:mt-0">
+          {children}
+        </h2>
+      ),
+      h3: ({ children }) => (
+        <h3 className="mt-4 mb-2 text-base font-semibold first:mt-0">
+          {children}
+        </h3>
+      ),
+      hr: () => <hr className="border-border" />,
+      li: ({ children }) => <li className="pl-1">{children}</li>,
+      ol: ({ children }) => (
+        <ol className="list-decimal space-y-1.5 pl-5">{children}</ol>
+      ),
+      p: ({ children }) => <p className="whitespace-pre-wrap">{children}</p>,
+      pre: ({ children }) => <>{children}</>,
+      table: ({ children }) => (
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-sm">{children}</table>
+        </div>
+      ),
+      td: ({ children }) => (
+        <td className="border border-border px-2 py-1 align-top">{children}</td>
+      ),
+      th: ({ children }) => (
+        <th className="border border-border bg-muted px-2 py-1 text-left align-top font-semibold">
+          {children}
+        </th>
+      ),
+      ul: ({ children }) => (
+        <ul className="list-disc space-y-1.5 pl-5">{children}</ul>
+      ),
+    }),
+    [onOpenFile, repoName]
+  )
 
   return (
-    <div className={cn("space-y-4", className)}>
-      {blocks.map((b, i) =>
-        b.kind === "code" ? (
-          <CodeBlock key={i} body={b.body} lang={b.lang} />
-        ) : (
-          <InlineProse
-            key={i}
-            text={b.body}
-            repoName={repoName}
-            onOpenFile={onOpenFile}
-          />
-        )
-      )}
+    <div className={cn("space-y-4 break-words", className)}>
+      <ReactMarkdown remarkPlugins={remarkPlugins} components={components}>
+        {normalizedText}
+      </ReactMarkdown>
     </div>
   )
 })
 
-function parseCodeLanguage(info: string) {
-  const lang = info.trim().split(/\s+/)[0]?.replace(/^\./, "").toLowerCase()
-  return lang || undefined
+function closeOpenCodeFence(value: string) {
+  const fenceCount = value.match(/(^|\n)```/g)?.length ?? 0
+  return fenceCount % 2 === 1 ? `${value}\n\`\`\`` : value
 }
-
-const InlineProse = memo(function InlineProse({
-  text,
-  onOpenFile,
-  repoName,
-}: {
-  text: string
-  onOpenFile: (path: string) => void
-  repoName: string | null
-}) {
-  const lines = text.split("\n")
-  const out: ReactNode[] = []
-  let buf: string[] = []
-  let listBuf: string[] = []
-
-  function flushPara() {
-    if (!buf.length) return
-    const body = buf.join("\n").trim()
-    buf = []
-    if (!body) return
-    out.push(
-      <p key={out.length} className="whitespace-pre-wrap">
-        {renderInline(body, { onOpenFile, repoName })}
-      </p>
-    )
-  }
-  function flushList() {
-    if (!listBuf.length) return
-    const items = listBuf
-    listBuf = []
-    out.push(
-      <ul key={out.length} className="list-disc space-y-1.5 pl-5">
-        {items.map((it, i) => (
-          <li key={i}>{renderInline(it, { onOpenFile, repoName })}</li>
-        ))}
-      </ul>
-    )
-  }
-
-  for (const line of lines) {
-    const heading = /^(#{1,3})\s+(.*)$/.exec(line)
-    const bullet = /^[-*]\s+(.*)$/.exec(line)
-    if (heading) {
-      flushPara()
-      flushList()
-      const level = heading[1].length
-      const content = heading[2]
-      const cls =
-        level === 1
-          ? "text-xl font-semibold"
-          : level === 2
-            ? "text-lg font-semibold"
-            : "text-base font-semibold"
-      out.push(
-        <div key={out.length} className={cls}>
-          {renderInline(content, { onOpenFile, repoName })}
-        </div>
-      )
-    } else if (bullet) {
-      flushPara()
-      listBuf.push(bullet[1])
-    } else if (line.trim() === "") {
-      flushPara()
-      flushList()
-    } else {
-      flushList()
-      buf.push(line)
-    }
-  }
-  flushPara()
-  flushList()
-
-  return <>{out}</>
-})
 
 type FileLinkContext = {
   onOpenFile: (path: string) => void
   repoName: string | null
-}
-
-function renderInline(text: string, context: FileLinkContext): ReactNode {
-  const parts: ReactNode[] = []
-  const re =
-    /(\[([^\]]+)\]\((<[^>]+>|[^)\s]+)\)|\bhttps?:\/\/[^\s<>()]+[^\s<>().,!?;:]|\*\*([^*]+)\*\*|`([^`]+)`)/g
-  let last = 0
-  let m: RegExpExecArray | null
-  let key = 0
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) parts.push(text.slice(last, m.index))
-    if (m[2] !== undefined && m[3] !== undefined) {
-      const href = normalizeLinkHref(m[3])
-      parts.push(
-        href ? (
-          <MarkdownLink key={key++} href={href} fileLinkContext={context}>
-            {renderInline(m[2], context)}
-          </MarkdownLink>
-        ) : (
-          m[0]
-        )
-      )
-    } else if (m[0].startsWith("http")) {
-      const href = normalizeLinkHref(m[0])
-      parts.push(
-        href ? (
-          <MarkdownLink key={key++} href={href} fileLinkContext={context}>
-            {m[0]}
-          </MarkdownLink>
-        ) : (
-          m[0]
-        )
-      )
-    } else if (m[4] !== undefined) {
-      parts.push(
-        <strong key={key++} className="font-semibold">
-          {m[4]}
-        </strong>
-      )
-    } else if (m[5] !== undefined) {
-      parts.push(
-        <code
-          key={key++}
-          className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]"
-        >
-          {m[5]}
-        </code>
-      )
-    }
-    last = m.index + m[0].length
-  }
-  if (last < text.length) parts.push(text.slice(last))
-  return <>{parts}</>
 }
 
 function MarkdownLink({

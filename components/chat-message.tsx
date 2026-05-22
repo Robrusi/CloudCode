@@ -10,7 +10,7 @@ import {
   Wrench,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
-import { memo, useState } from "react"
+import { memo, useMemo, useState } from "react"
 
 import { ChangedFiles } from "@/components/changed-files"
 import { Markdown } from "@/components/chat-markdown"
@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils"
 export type ChatMessage = {
   content: string
   error?: boolean
+  id?: string
   meta?: {
     branch?: string
     diff?: string
@@ -37,18 +38,25 @@ export type ChatRunLog = {
 }
 
 export const MessageBlock = memo(function MessageBlock({
-  logs,
   message,
   onOpenFile,
   onOpenFileDiff,
   repoName,
 }: {
-  logs: ChatRunLog[]
   message: ChatMessage
   onOpenFile: (path: string) => void
   onOpenFileDiff: (path: string, diff: string) => void
   repoName: string | null
 }) {
+  const logs = useMemo(
+    () =>
+      message.meta?.logs?.map((log, index) => ({
+        ...log,
+        id: `${message.id ?? "message"}-${log.time}-${index}`,
+      })) ?? [],
+    [message.id, message.meta?.logs]
+  )
+
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
@@ -141,31 +149,26 @@ const AssistantBody = memo(function AssistantBody({
   pending: boolean
   logs: ChatRunLog[]
 }) {
-  const segments = splitContentByToolMarkers(text)
-
-  // Backwards compat: if persisted content has no markers but logs do contain
-  // tool calls, render those after the text so they aren't lost.
-  const hasMarkers = segments.some((s) => s.kind === "tool")
-  const fallbackTools: ParsedLogDetail[] = []
-  if (!hasMarkers) {
-    for (const log of logs) {
-      const detail = parseLogDetail(log.detail)
-      if (
-        log.kind === "command" &&
-        (detail?.kind === "command_execution" || detail?.kind === "tool_call")
-      ) {
-        fallbackTools.push(detail)
-      }
-    }
+  if (pending) {
+    return (
+      <PendingAssistantBody
+        text={text}
+        error={error}
+        repoName={repoName}
+        onOpenFile={onOpenFile}
+        logs={logs}
+      />
+    )
   }
+
+  const segments = splitContentByToolMarkers(text)
+  const hasMarkers = segments.some((segment) => segment.kind === "tool")
+  const fallbackTools = hasMarkers ? [] : toolDetailsFromLogs(logs)
 
   const grouped: Array<
     | { kind: "text"; text: string }
     | { kind: "tools"; details: ParsedLogDetail[] }
   > = []
-  if (fallbackTools.length > 0) {
-    grouped.push({ kind: "tools", details: fallbackTools })
-  }
   let toolBuf: ParsedLogDetail[] = []
   function flushToolBuf() {
     if (toolBuf.length === 0) return
@@ -181,6 +184,9 @@ const AssistantBody = memo(function AssistantBody({
     }
   }
   flushToolBuf()
+  if (fallbackTools.length > 0) {
+    grouped.push({ kind: "tools", details: fallbackTools })
+  }
 
   let lastTextIndex = -1
   for (let i = grouped.length - 1; i >= 0; i--) {
@@ -195,7 +201,7 @@ const AssistantBody = memo(function AssistantBody({
     .some(
       (seg) => seg.kind === "tools" || (seg.kind === "text" && seg.text.trim())
     )
-  const showFinalSeparator = !pending && lastTextIndex > 0 && hasEarlierContent
+  const showFinalSeparator = lastTextIndex > 0 && hasEarlierContent
 
   const rendered: React.ReactNode[] = []
   grouped.forEach((seg, i) => {
@@ -233,6 +239,43 @@ const AssistantBody = memo(function AssistantBody({
   return <div className="space-y-3">{rendered}</div>
 })
 
+const PendingAssistantBody = memo(function PendingAssistantBody({
+  text,
+  error,
+  repoName,
+  onOpenFile,
+  logs,
+}: {
+  text: string
+  error: boolean
+  repoName: string | null
+  onOpenFile: (path: string) => void
+  logs: ChatRunLog[]
+}) {
+  const segments = splitContentByToolMarkers(text)
+  const hasMarkers = segments.some((segment) => segment.kind === "tool")
+  const fallbackTools = hasMarkers ? [] : toolDetailsFromLogs(logs)
+
+  return (
+    <div className="space-y-3">
+      {segments.map((segment, index) =>
+        segment.kind === "tool" ? (
+          <ToolGroup key={index} details={[segment.detail]} />
+        ) : segment.text.trim() ? (
+          <Markdown
+            key={index}
+            text={segment.text}
+            className={cn("text-[15px] leading-7", error && "text-destructive")}
+            repoName={repoName}
+            onOpenFile={onOpenFile}
+          />
+        ) : null
+      )}
+      {fallbackTools.length > 0 ? <ToolGroup details={fallbackTools} /> : null}
+    </div>
+  )
+})
+
 const RunSetupSummary = memo(function RunSetupSummary({
   contentStarted,
   logs,
@@ -254,7 +297,7 @@ const RunSetupSummary = memo(function RunSetupSummary({
       <button
         type="button"
         onClick={() => setOpen((currentOpen) => !currentOpen)}
-        className="flex w-full min-w-0 items-center gap-2 text-left transition-colors hover:text-foreground"
+        className="flex w-full min-w-0 items-center gap-2 rounded-md text-left transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none"
         aria-expanded={expanded}
       >
         <ChevronRight
@@ -267,9 +310,12 @@ const RunSetupSummary = memo(function RunSetupSummary({
           <Loader2 className="size-3.5 shrink-0 animate-spin" />
         ) : null}
         <span className="truncate text-[13px]">
-          {contentStarted
-            ? "Setup complete"
-            : (current?.message ?? "Starting Codex run")}
+          {pending
+            ? (current?.message ??
+              (contentStarted ? "Working..." : "Starting Codex run"))
+            : contentStarted
+              ? "Setup complete"
+              : (current?.message ?? "Starting Codex run")}
         </span>
       </button>
 
@@ -314,6 +360,15 @@ function parseLogDetail(detail?: string): ParsedLogDetail | null {
   } catch {
     return null
   }
+}
+
+function toolDetailsFromLogs(logs: ChatRunLog[]) {
+  return logs
+    .map((log) => (log.kind === "command" ? parseLogDetail(log.detail) : null))
+    .filter(
+      (detail): detail is ParsedLogDetail =>
+        detail?.kind === "command_execution" || detail?.kind === "tool_call"
+    )
 }
 
 const SetupLogRow = memo(function SetupLogRow({ log }: { log: ChatRunLog }) {
@@ -399,7 +454,7 @@ const ToolRow = memo(function ToolRow({ detail }: { detail: ParsedLogDetail }) {
         disabled={!hasDetails}
         aria-expanded={open}
         className={cn(
-          "flex w-full min-w-0 items-center gap-2 py-0.5 text-left text-[11.5px] leading-5 text-muted-foreground/70",
+          "flex w-full min-w-0 items-center gap-2 rounded-md py-0.5 text-left text-[11.5px] leading-5 text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none",
           hasDetails && "cursor-pointer hover:text-foreground"
         )}
       >

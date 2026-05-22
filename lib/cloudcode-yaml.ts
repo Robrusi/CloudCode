@@ -90,10 +90,7 @@ export function parseCloudcodeYaml(source: string): CloudcodeYamlConfig {
   const legacyKnowledge = normalizeCommands(root.knowledge)
 
   const config = {
-    checks: [
-      ...normalizeCommands(root.checks),
-      ...legacyKnowledge,
-    ],
+    checks: [...normalizeCommands(root.checks), ...legacyKnowledge],
     dev: normalizeDev(root.dev),
     global: {
       install: [

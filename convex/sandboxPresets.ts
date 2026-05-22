@@ -4,6 +4,7 @@ import { mutation, query } from "./_generated/server"
 import type { Id } from "./_generated/dataModel"
 import type { MutationCtx, QueryCtx } from "./_generated/server"
 import { ensureCurrentUser, getCurrentUser } from "./lib/users"
+import { requireWorkerSecret } from "./lib/workerAuth"
 
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 const ENCRYPTED_SECRET_PREFIX = "cloudcode:v1:"
@@ -423,6 +424,141 @@ export const getAutoEnvironmentForRun = query({
   },
 })
 
+export const getAutoEnvironmentForRunForWorker = query({
+  args: {
+    presetId: v.id("sandboxPresets"),
+    repoUrl: v.string(),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const preset = await ctx.db.get(args.presetId)
+    if (!preset || (preset.mode ?? "manual") !== "auto") return null
+
+    const environment = await ctx.db
+      .query("sandboxPresetEnvironments")
+      .withIndex("by_preset_repo", (q) =>
+        q
+          .eq("userId", preset.userId)
+          .eq("presetId", preset._id)
+          .eq("repoUrl", args.repoUrl)
+      )
+      .unique()
+
+    if (!environment) return null
+
+    return {
+      activeSandboxId: environment.activeSandboxId,
+      buildNumber: environment.buildNumber,
+      builtAt: environment.builtAt,
+      cloudcodeYaml: environment.cloudcodeYaml,
+      configHash: environment.configHash,
+      environmentSlug: environment.environmentSlug,
+      id: environment._id,
+      lastError: environment.lastError,
+      repoUrl: environment.repoUrl,
+      status: environment.status,
+      updatedAt: environment.updatedAt,
+    }
+  },
+})
+
+async function beginAutoEnvironmentBuildForUser(
+  ctx: MutationCtx,
+  args: {
+    baseBranch?: string
+    presetId: Id<"sandboxPresets">
+    repoUrl: string
+  },
+  userId: Id<"users">
+) {
+  const preset = await requireOwnedPreset(ctx, args.presetId, userId)
+  if ((preset.mode ?? "manual") !== "auto") {
+    throw new Error("Preset is not an auto environment preset.")
+  }
+
+  const repoUrl = args.repoUrl.trim()
+  if (!repoUrl) throw new Error("repoUrl is required.")
+
+  const now = Date.now()
+  let environment = await ctx.db
+    .query("sandboxPresetEnvironments")
+    .withIndex("by_preset_repo", (q) =>
+      q
+        .eq("userId", userId)
+        .eq("presetId", args.presetId)
+        .eq("repoUrl", repoUrl)
+    )
+    .unique()
+
+  const environmentSlug = slugify(
+    [
+      preset.environmentSlug && preset.environmentSlug !== "auto"
+        ? preset.environmentSlug
+        : preset.name,
+      repoSlug(repoUrl),
+    ]
+      .filter(Boolean)
+      .join("-")
+  )
+  const buildNumber = (environment?.buildNumber ?? 0) + 1
+
+  if (!environment) {
+    const environmentId = await ctx.db.insert("sandboxPresetEnvironments", {
+      ...(args.baseBranch?.trim()
+        ? { baseBranch: args.baseBranch.trim() }
+        : {}),
+      buildNumber,
+      createdAt: now,
+      environmentSlug,
+      presetId: args.presetId,
+      repoUrl,
+      status: "building",
+      updatedAt: now,
+      userId,
+    })
+    environment = (await ctx.db.get(environmentId))!
+  } else {
+    await ctx.db.patch(environment._id, {
+      ...(args.baseBranch?.trim()
+        ? { baseBranch: args.baseBranch.trim() }
+        : {}),
+      buildNumber,
+      environmentSlug,
+      lastError: undefined,
+      status: "building",
+      updatedAt: now,
+    })
+  }
+
+  const buildId = await ctx.db.insert("sandboxPresetBuilds", {
+    buildNumber,
+    createdAt: now,
+    environmentId: environment._id,
+    logs: [],
+    presetId: args.presetId,
+    repoUrl,
+    startedAt: now,
+    status: "building",
+    updatedAt: now,
+    userId,
+  })
+  await ctx.db.patch(environment._id, {
+    activeBuildId: buildId,
+    activeSandboxId: undefined,
+    activeSnapshot: undefined,
+    activeSnapshotId: undefined,
+    updatedAt: now,
+  })
+
+  return {
+    buildId,
+    buildNumber,
+    environmentId: environment._id,
+    environmentSlug,
+  }
+}
+
 export const beginAutoEnvironmentBuild = mutation({
   args: {
     baseBranch: v.optional(v.string()),
@@ -431,91 +567,22 @@ export const beginAutoEnvironmentBuild = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
-    const preset = await requireOwnedPreset(ctx, args.presetId, userId)
-    if ((preset.mode ?? "manual") !== "auto") {
-      throw new Error("Preset is not an auto environment preset.")
-    }
+    return await beginAutoEnvironmentBuildForUser(ctx, args, userId)
+  },
+})
 
-    const repoUrl = args.repoUrl.trim()
-    if (!repoUrl) throw new Error("repoUrl is required.")
-
-    const now = Date.now()
-    let environment = await ctx.db
-      .query("sandboxPresetEnvironments")
-      .withIndex("by_preset_repo", (q) =>
-        q
-          .eq("userId", userId)
-          .eq("presetId", args.presetId)
-          .eq("repoUrl", repoUrl)
-      )
-      .unique()
-
-    const environmentSlug = slugify(
-      [
-        preset.environmentSlug && preset.environmentSlug !== "auto"
-          ? preset.environmentSlug
-          : preset.name,
-        repoSlug(repoUrl),
-      ]
-        .filter(Boolean)
-        .join("-")
-    )
-    const buildNumber = (environment?.buildNumber ?? 0) + 1
-
-    if (!environment) {
-      const environmentId = await ctx.db.insert("sandboxPresetEnvironments", {
-        ...(args.baseBranch?.trim()
-          ? { baseBranch: args.baseBranch.trim() }
-          : {}),
-        buildNumber,
-        createdAt: now,
-        environmentSlug,
-        presetId: args.presetId,
-        repoUrl,
-        status: "building",
-        updatedAt: now,
-        userId,
-      })
-      environment = (await ctx.db.get(environmentId))!
-    } else {
-      await ctx.db.patch(environment._id, {
-        ...(args.baseBranch?.trim()
-          ? { baseBranch: args.baseBranch.trim() }
-          : {}),
-        buildNumber,
-        environmentSlug,
-        lastError: undefined,
-        status: "building",
-        updatedAt: now,
-      })
-    }
-
-    const buildId = await ctx.db.insert("sandboxPresetBuilds", {
-      buildNumber,
-      createdAt: now,
-      environmentId: environment._id,
-      logs: [],
-      presetId: args.presetId,
-      repoUrl,
-      startedAt: now,
-      status: "building",
-      updatedAt: now,
-      userId,
-    })
-    await ctx.db.patch(environment._id, {
-      activeBuildId: buildId,
-      activeSandboxId: undefined,
-      activeSnapshot: undefined,
-      activeSnapshotId: undefined,
-      updatedAt: now,
-    })
-
-    return {
-      buildId,
-      buildNumber,
-      environmentId: environment._id,
-      environmentSlug,
-    }
+export const beginAutoEnvironmentBuildForWorker = mutation({
+  args: {
+    baseBranch: v.optional(v.string()),
+    presetId: v.id("sandboxPresets"),
+    repoUrl: v.string(),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const preset = await ctx.db.get(args.presetId)
+    if (!preset) throw new Error("Preset not found.")
+    return await beginAutoEnvironmentBuildForUser(ctx, args, preset.userId)
   },
 })
 
@@ -531,6 +598,17 @@ async function requireOwnedBuild(
   return build
 }
 
+async function requireBuildForWorker(
+  ctx: MutationCtx,
+  buildId: Id<"sandboxPresetBuilds">
+) {
+  const build = await ctx.db.get(buildId)
+  if (!build) {
+    throw new Error("Environment build not found.")
+  }
+  return build
+}
+
 export const appendAutoEnvironmentBuildLogs = mutation({
   args: {
     buildId: v.id("sandboxPresetBuilds"),
@@ -540,6 +618,30 @@ export const appendAutoEnvironmentBuildLogs = mutation({
     if (args.logs.length === 0) return
     const userId = await ensureCurrentUser(ctx)
     const build = await requireOwnedBuild(ctx, args.buildId, userId)
+
+    const logs = args.logs.flatMap((log) => {
+      const compacted = compactRunLog(log)
+      return compacted ? [compacted] : []
+    })
+    if (logs.length === 0) return
+
+    await ctx.db.patch(args.buildId, {
+      logs: [...(build.logs ?? []), ...logs].slice(-MAX_STORED_BUILD_LOGS),
+      updatedAt: Date.now(),
+    })
+  },
+})
+
+export const appendAutoEnvironmentBuildLogsForWorker = mutation({
+  args: {
+    buildId: v.id("sandboxPresetBuilds"),
+    logs: v.array(runLog),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    if (args.logs.length === 0) return
+    const build = await requireBuildForWorker(ctx, args.buildId)
 
     const logs = args.logs.flatMap((log) => {
       const compacted = compactRunLog(log)
@@ -591,6 +693,44 @@ export const completeAutoEnvironmentBuild = mutation({
   },
 })
 
+export const completeAutoEnvironmentBuildForWorker = mutation({
+  args: {
+    buildId: v.id("sandboxPresetBuilds"),
+    cloudcodeYaml: v.string(),
+    configHash: v.string(),
+    sandboxId: v.optional(v.string()),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const build = await requireBuildForWorker(ctx, args.buildId)
+    const now = Date.now()
+
+    await ctx.db.patch(args.buildId, {
+      cloudcodeYaml: args.cloudcodeYaml,
+      configHash: args.configHash,
+      finishedAt: now,
+      sandboxId: args.sandboxId,
+      snapshotId: undefined,
+      snapshotName: undefined,
+      status: "ready",
+      updatedAt: now,
+    })
+    await ctx.db.patch(build.environmentId, {
+      activeBuildId: args.buildId,
+      activeSandboxId: args.sandboxId,
+      activeSnapshot: undefined,
+      activeSnapshotId: undefined,
+      builtAt: now,
+      cloudcodeYaml: args.cloudcodeYaml,
+      configHash: args.configHash,
+      lastError: undefined,
+      status: "ready",
+      updatedAt: now,
+    })
+  },
+})
+
 export const failAutoEnvironmentBuild = mutation({
   args: {
     buildId: v.id("sandboxPresetBuilds"),
@@ -599,6 +739,31 @@ export const failAutoEnvironmentBuild = mutation({
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
     const build = await requireOwnedBuild(ctx, args.buildId, userId)
+    const now = Date.now()
+
+    await ctx.db.patch(args.buildId, {
+      error: args.error,
+      finishedAt: now,
+      status: "failed",
+      updatedAt: now,
+    })
+    await ctx.db.patch(build.environmentId, {
+      lastError: args.error,
+      status: "failed",
+      updatedAt: now,
+    })
+  },
+})
+
+export const failAutoEnvironmentBuildForWorker = mutation({
+  args: {
+    buildId: v.id("sandboxPresetBuilds"),
+    error: v.string(),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const build = await requireBuildForWorker(ctx, args.buildId)
     const now = Date.now()
 
     await ctx.db.patch(args.buildId, {

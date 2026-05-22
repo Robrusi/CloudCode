@@ -61,10 +61,7 @@ import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { useStoreUserEffect } from "@/hooks/use-store-user-effect"
 import { getDiffStats } from "@/lib/diff-metadata"
-import {
-  readCodexRunResponse,
-  type CodexRunLog,
-} from "@/lib/codex-run-response"
+import type { CodexRunLog } from "@/lib/codex-run-log"
 import { buildResumeHandoff } from "@/lib/chat-resume-handoff"
 import {
   diffCacheKey,
@@ -117,10 +114,6 @@ type StoredRunLog = CodexRunLog & {
   time: number
 }
 
-type RunLog = StoredRunLog & {
-  id: string
-}
-
 type CachedRunState = {
   branch?: string
   codexThreadId?: string
@@ -156,6 +149,36 @@ type ChatRecord = {
   pending?: boolean
   createdAt: number
   updatedAt: number
+}
+
+type LiveRunRecord = {
+  assistantMessageId: Id<"messages">
+  branch?: string
+  codexThreadId?: string
+  content: string
+  error?: string
+  logs: StoredRunLog[]
+  pending: boolean
+  runId: Id<"codexRuns">
+  sandboxId?: string
+  sandboxState?: SandboxState
+  status: string
+  threadId: Id<"threads">
+  triggerRunId?: string
+  updatedAt: number
+}
+
+function cachedStateFromLiveRun(
+  liveRun: LiveRunRecord | null | undefined
+): CachedRunState | undefined {
+  if (!liveRun) return undefined
+
+  return {
+    ...(liveRun.branch ? { branch: liveRun.branch } : {}),
+    ...(liveRun.codexThreadId ? { codexThreadId: liveRun.codexThreadId } : {}),
+    ...(liveRun.sandboxId ? { sandboxId: liveRun.sandboxId } : {}),
+    ...(liveRun.sandboxState ? { sandboxState: liveRun.sandboxState } : {}),
+  }
 }
 
 type SandboxPresetSecretRecord = {
@@ -210,8 +233,8 @@ const ACTIVE_KEY = "cloudcode:activeChatId"
 const DRAFT_RUN_KEY = "__draft__"
 const DEFAULT_COMPOSER_HEIGHT = 144
 const THREAD_BOTTOM_CLEARANCE = 32
-const EMPTY_LOGS: RunLog[] = []
 const EMPTY_MESSAGES: Message[] = []
+const STREAM_TOOL_MARKER_REGEX = /<codex-tool>[\s\S]*?<\/codex-tool>/g
 
 function repoLabel(url: string) {
   if (!url) return "Untitled"
@@ -220,19 +243,29 @@ function repoLabel(url: string) {
     .replace(/\.git$/, "")
 }
 
-function inlineToolMarker(log: { kind: string; detail?: string }) {
-  if (log.kind !== "command" || !log.detail) return null
-  let parsed: { kind?: string } | null = null
-  try {
-    parsed = JSON.parse(log.detail) as { kind?: string }
-  } catch {
-    return null
+function splitStreamingTokens(delta: string) {
+  const tokens: string[] = []
+  let last = 0
+  let match: RegExpExecArray | null
+
+  STREAM_TOOL_MARKER_REGEX.lastIndex = 0
+  while ((match = STREAM_TOOL_MARKER_REGEX.exec(delta)) !== null) {
+    if (match.index > last) {
+      tokens.push(...splitTextStreamingTokens(delta.slice(last, match.index)))
+    }
+    tokens.push(match[0])
+    last = match.index + match[0].length
   }
-  if (parsed?.kind !== "command_execution" && parsed?.kind !== "tool_call") {
-    return null
+
+  if (last < delta.length) {
+    tokens.push(...splitTextStreamingTokens(delta.slice(last)))
   }
-  const encoded = encodeURIComponent(log.detail)
-  return `\n\n<codex-tool>${encoded}</codex-tool>\n\n`
+
+  return tokens
+}
+
+function splitTextStreamingTokens(delta: string) {
+  return delta.match(/\s+|[^\s]+/g) ?? [delta]
 }
 
 const PREFETCH_IMAGE_EXTENSIONS = new Set([
@@ -283,11 +316,9 @@ function ChatInner() {
     api.sandboxPresets.ensureDefaultPresets
   )
   const appendRunMessages = useMutation(api.chats.appendRunMessages)
-  const appendAssistantLogs = useMutation(api.chats.appendAssistantLogs)
   const completeAssistantMessage = useMutation(
     api.chats.completeAssistantMessage
   )
-  const updateAssistantContent = useMutation(api.chats.updateAssistantContent)
   const saveRunState = useMutation(api.chats.saveRunState)
   const clearSandbox = useMutation(api.chats.clearSandbox)
   const deleteThreadMutation = useMutation(api.chats.deleteThread)
@@ -302,6 +333,11 @@ function ChatInner() {
     activeId ? { threadId: activeId } : "skip"
   )
   const activeChat = rawActiveChat as ChatRecord | null | undefined
+  const rawLiveRun = useQuery(
+    api.codexRuns.liveForThread,
+    activeId ? { threadId: activeId } : "skip"
+  )
+  const liveRun = rawLiveRun as LiveRunRecord | null | undefined
   const chats = useMemo(() => {
     if (!activeChat) return chatSummaries
     const seen = new Set<string>()
@@ -374,20 +410,30 @@ function ChatInner() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [view, setView] = useState<"chat" | "settings">("chat")
   const [runningRunKeys, setRunningRunKeys] = useState<Record<string, true>>({})
-  const [runLogs, setRunLogs] = useState<Record<string, RunLog[]>>({})
-  const [streamedMessageContent, setStreamedMessageContent] = useState<
-    Record<string, string>
-  >({})
   const [liveRunStates, setLiveRunStates] = useState<
     Record<string, CachedRunState>
+  >({})
+  const [lastLiveRun, setLastLiveRun] = useState<LiveRunRecord | null>(null)
+  const [revealedLiveRunContent, setRevealedLiveRunContent] = useState<
+    Record<string, string>
   >({})
   const [optimisticRuns, setOptimisticRuns] = useState<
     Record<string, OptimisticRun>
   >({})
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
   const [authError, setAuthError] = useState("")
-  const runControllersRef = useRef<Record<string, AbortController>>({})
   const runningRunKeysRef = useRef<Set<string>>(new Set())
+  const liveRevealRef = useRef<
+    Record<
+      string,
+      {
+        queue: string[]
+        target: string
+        timer?: ReturnType<typeof setTimeout>
+        visible: string
+      }
+    >
+  >({})
   const threadRunStateRef = useRef<Record<string, CachedRunState>>({})
   const autoPresetDefaultedRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -430,28 +476,162 @@ function ChatInner() {
     [settleThreadAtBottom]
   )
 
+  const revealNextLiveToken = useCallback(function revealNextLiveToken(
+    key: string
+  ) {
+    const state = liveRevealRef.current[key]
+    if (!state) return
+
+    const token = state.queue.shift()
+    if (token === undefined) {
+      state.timer = undefined
+      return
+    }
+
+    state.visible += token
+    setRevealedLiveRunContent((current) =>
+      current[key] === state.visible
+        ? current
+        : { ...current, [key]: state.visible }
+    )
+
+    const isToolMarker = token.startsWith("<codex-tool>")
+    const delay = isToolMarker ? 0 : token.trim() ? 16 : 4
+    state.timer = setTimeout(() => revealNextLiveToken(key), delay)
+  }, [])
+
+  const scheduleLiveReveal = useCallback(
+    (key: string) => {
+      const state = liveRevealRef.current[key]
+      if (!state || state.timer) return
+      state.timer = setTimeout(() => revealNextLiveToken(key), 0)
+    },
+    [revealNextLiveToken]
+  )
+
   const active = useMemo(
     () => chats.find((c) => c.id === activeId) ?? null,
     [chats, activeId]
   )
+  useEffect(() => {
+    if (liveRun) setLastLiveRun(liveRun)
+  }, [liveRun])
+  const visibleLiveRun = useMemo(() => {
+    if (liveRun) return liveRun
+    if (!active || !lastLiveRun || active.id !== lastLiveRun.threadId) {
+      return null
+    }
+
+    const liveMessage = active.messages.find(
+      (message) => message.id === lastLiveRun.assistantMessageId
+    )
+
+    return liveMessage?.pending || !liveMessage?.content.trim()
+      ? lastLiveRun
+      : null
+  }, [active, lastLiveRun, liveRun])
+  useEffect(() => {
+    if (liveRun || !lastLiveRun || !active) return
+
+    const liveMessage = active.messages.find(
+      (message) => message.id === lastLiveRun.assistantMessageId
+    )
+    if (liveMessage && !liveMessage.pending && liveMessage.content.trim()) {
+      setLastLiveRun(null)
+    }
+  }, [active, lastLiveRun, liveRun])
+  useEffect(() => {
+    if (!visibleLiveRun) return
+
+    const key = visibleLiveRun.runId as string
+    const threadKey = visibleLiveRun.threadId as string
+    const target = visibleLiveRun.content
+    const current = liveRevealRef.current[key]
+    const shouldAnimateInitial = Boolean(runningRunKeys[threadKey])
+
+    if (!current) {
+      if (target && !shouldAnimateInitial) {
+        liveRevealRef.current[key] = {
+          queue: [],
+          target,
+          visible: target,
+        }
+        setRevealedLiveRunContent((state) => ({ ...state, [key]: target }))
+        return
+      }
+
+      liveRevealRef.current[key] = {
+        queue: splitStreamingTokens(target),
+        target,
+        visible: "",
+      }
+      scheduleLiveReveal(key)
+      return
+    }
+
+    if (current.target === target) return
+
+    if (!target.startsWith(current.visible)) {
+      if (current.timer) clearTimeout(current.timer)
+      liveRevealRef.current[key] = {
+        queue: [],
+        target,
+        visible: target,
+      }
+      setRevealedLiveRunContent((state) => ({ ...state, [key]: target }))
+      return
+    }
+
+    current.target = target
+    current.queue = splitStreamingTokens(target.slice(current.visible.length))
+    scheduleLiveReveal(key)
+  }, [runningRunKeys, scheduleLiveReveal, visibleLiveRun])
+  useEffect(() => {
+    if (visibleLiveRun) return
+
+    for (const state of Object.values(liveRevealRef.current)) {
+      if (state.timer) clearTimeout(state.timer)
+    }
+    liveRevealRef.current = {}
+    setRevealedLiveRunContent({})
+  }, [visibleLiveRun])
+  useEffect(() => {
+    return () => {
+      for (const state of Object.values(liveRevealRef.current)) {
+        if (state.timer) clearTimeout(state.timer)
+      }
+    }
+  }, [])
+  const liveActiveRunState = useMemo(
+    () => cachedStateFromLiveRun(visibleLiveRun),
+    [visibleLiveRun]
+  )
   const sidebarChats = useMemo(
     () =>
       chats.map((chat) => {
+        const isLiveThread = Boolean(
+          visibleLiveRun && chat.id === visibleLiveRun.threadId
+        )
         return {
           ...chat,
           ...(liveRunStates[chat.id as string] ?? {}),
+          ...(isLiveThread ? (liveActiveRunState ?? {}) : {}),
           pending:
+            isLiveThread ||
             Boolean(runningRunKeys[chat.id as string]) ||
             Boolean(chat.pending) ||
             chat.messages.some((m) => m.pending),
           lastUserMessageAt: chat.lastUserMessageAt || chat.updatedAt,
         }
       }),
-    [chats, liveRunStates, runningRunKeys]
+    [chats, liveActiveRunState, liveRunStates, runningRunKeys, visibleLiveRun]
   )
   const activeRunKey = activeId ? (activeId as string) : DRAFT_RUN_KEY
   const activeRunState = activeId
-    ? liveRunStates[activeId as string]
+    ? {
+        ...(liveRunStates[activeId as string] ?? {}),
+        ...(liveActiveRunState ?? {}),
+      }
     : undefined
   const activeSandboxId = hasCachedRunKey(activeRunState, "sandboxId")
     ? (activeRunState?.sandboxId ?? null)
@@ -467,7 +647,32 @@ function ChatInner() {
     activeSandboxId && rawActiveSandboxState === "deleted"
       ? undefined
       : rawActiveSandboxState
-  const serverMessages = active?.messages ?? []
+  const baseServerMessages = active?.messages ?? EMPTY_MESSAGES
+  const serverMessages = useMemo(() => {
+    if (!visibleLiveRun) return baseServerMessages
+    const liveRunKey = visibleLiveRun.runId as string
+    const revealedContent = revealedLiveRunContent[liveRunKey] ?? ""
+
+    return baseServerMessages.map((message) => {
+      if (message.id !== visibleLiveRun.assistantMessageId) return message
+
+      const liveMeta = {
+        ...message.meta,
+        ...(visibleLiveRun.branch ? { branch: visibleLiveRun.branch } : {}),
+        ...(visibleLiveRun.logs.length ? { logs: visibleLiveRun.logs } : {}),
+        ...(visibleLiveRun.status ? { status: visibleLiveRun.status } : {}),
+      }
+
+      return {
+        ...message,
+        content:
+          revealedContent || (visibleLiveRun.content ? "" : message.content),
+        error: Boolean(visibleLiveRun.error) || message.error,
+        meta: liveMeta,
+        pending: true,
+      }
+    })
+  }, [baseServerMessages, revealedLiveRunContent, visibleLiveRun])
   const optimisticRun = optimisticRuns[activeRunKey]
   const optimisticMessages =
     optimisticRun &&
@@ -476,11 +681,12 @@ function ChatInner() {
       ? optimisticRun.messages
       : EMPTY_MESSAGES
   const messages = [...serverMessages, ...optimisticMessages]
-  const activeLocalRunPending = Boolean(runningRunKeys[activeRunKey])
+  const activeLocalRunPending =
+    Boolean(runningRunKeys[activeRunKey]) || Boolean(visibleLiveRun)
   const activeMessagePending =
     Boolean(active?.pending) || messages.some((message) => message.pending)
   const activeRunPending = activeLocalRunPending || activeMessagePending
-  const canStopActiveRun = Boolean(runControllersRef.current[activeRunKey])
+  const canStopActiveRun = Boolean(active && activeRunPending)
   const terminalVisible = terminalOpen && Boolean(activeSandboxId)
   const threadBottomInset =
     Math.max(composerHeight, DEFAULT_COMPOSER_HEIGHT) +
@@ -627,6 +833,28 @@ function ChatInner() {
   }, [chats])
 
   useEffect(() => {
+    const liveThreadKey = visibleLiveRun?.threadId as string | undefined
+    let changed = false
+    const nextKeys = { ...runningRunKeys }
+
+    for (const chat of chats) {
+      const key = chat.id as string
+      const stillRunning =
+        key === liveThreadKey ||
+        Boolean(chat.pending) ||
+        chat.messages.some((message) => message.pending)
+
+      if (!stillRunning && nextKeys[key]) {
+        delete nextKeys[key]
+        runningRunKeysRef.current.delete(key)
+        changed = true
+      }
+    }
+
+    if (changed) setRunningRunKeys(nextKeys)
+  }, [chats, runningRunKeys, visibleLiveRun?.threadId])
+
+  useEffect(() => {
     const el = textareaRef.current
     if (!el) return
     el.style.height = "0px"
@@ -711,32 +939,6 @@ function ChatInner() {
     return () => observer.disconnect()
   }, [activeId, activeFilePath, scrollThreadToBottom])
 
-  function appendRunLog(messageId: Id<"messages">, log: RunLog) {
-    setRunLogs((current) => {
-      const key = messageId as string
-      const logs = [...(current[key] ?? []), log].slice(-500)
-      return { ...current, [key]: logs }
-    })
-  }
-
-  function renderLogs(message: Message) {
-    const liveLogs = runLogs[message.id as string]
-    if (liveLogs) return liveLogs
-
-    return (
-      message.meta?.logs?.map((log, index) => ({
-        ...log,
-        id: `${message.id}-${log.time}-${index}`,
-      })) ?? EMPTY_LOGS
-    )
-  }
-
-  function renderMessage(message: Message) {
-    const streamedContent = streamedMessageContent[message.id as string]
-    if (streamedContent === undefined) return message
-    return { ...message, content: streamedContent }
-  }
-
   function mergeThreadRunState(threadId: Id<"threads">, patch: CachedRunState) {
     const key = threadId as string
     const next = {
@@ -764,8 +966,7 @@ function ChatInner() {
     })
   }
 
-  function markRunActive(runKey: string, controller: AbortController) {
-    runControllersRef.current[runKey] = controller
+  function markRunActive(runKey: string) {
     runningRunKeysRef.current.add(runKey)
     setRunningRunKeys((current) => ({ ...current, [runKey]: true }))
   }
@@ -813,11 +1014,6 @@ function ChatInner() {
   function transferRunKey(previousKey: string, nextKey: string) {
     if (previousKey === nextKey) return nextKey
 
-    const controller = runControllersRef.current[previousKey]
-    if (controller) {
-      delete runControllersRef.current[previousKey]
-      runControllersRef.current[nextKey] = controller
-    }
     runningRunKeysRef.current.delete(previousKey)
     runningRunKeysRef.current.add(nextKey)
     setRunningRunKeys((current) => {
@@ -837,7 +1033,6 @@ function ChatInner() {
   }
 
   function clearRunKey(runKey: string) {
-    delete runControllersRef.current[runKey]
     runningRunKeysRef.current.delete(runKey)
     setRunningRunKeys((current) => {
       if (!current[runKey]) return current
@@ -953,7 +1148,7 @@ function ChatInner() {
     setPendingDeleteId(null)
     void (async () => {
       const sandboxId = threadSandboxId(id)
-      runControllersRef.current[id as string]?.abort()
+      await cancelCodexRun(id)
       clearRunKey(id as string)
       if (sandboxId) closeBrowserTerminalSession(sandboxId)
 
@@ -1011,11 +1206,11 @@ function ChatInner() {
     let chatId = active?.id ?? null
     let assistantMessageId: Id<"messages"> | null = null
     let runKey = initialRunKey
+    let queued = false
 
     setInput("")
 
-    const controller = new AbortController()
-    markRunActive(runKey, controller)
+    markRunActive(runKey)
     showOptimisticRun(
       runKey,
       trimmed,
@@ -1056,23 +1251,6 @@ function ChatInner() {
         throw new Error("Unable to create a thread for this run.")
       }
 
-      const startingLog: StoredRunLog = {
-        kind: "setup",
-        message: "Starting Codex request",
-        time: Date.now(),
-      }
-      appendRunLog(assistantMessageId, {
-        ...startingLog,
-        id: `client-start-${startingLog.time}`,
-      })
-      void appendAssistantLogs({
-        logs: [startingLog],
-        messageId: assistantMessageId,
-        threadId: chatId,
-      }).catch((error) => {
-        console.warn("Unable to persist starting log.", error)
-      })
-
       const previousAssistant = active?.messages
         .toReversed()
         .find((m) => m.role === "assistant" && (m.meta?.branch || m.meta?.diff))
@@ -1105,6 +1283,7 @@ function ChatInner() {
             (active?.baseBranch ?? draftBaseBranch).trim() || undefined,
           branchName,
           codexThreadId: cachedRunState?.codexThreadId ?? active?.codexThreadId,
+          assistantMessageId,
           previousDiff,
           prompt: trimmed,
           reasoningEffort: thinking,
@@ -1113,212 +1292,24 @@ function ChatInner() {
           sandboxId: runSandboxId,
           sandboxPresetId: runSandboxPresetId || undefined,
           speed,
+          threadId: chatId,
           model,
         }),
-        signal: controller.signal,
       })
-      const runMessageId = assistantMessageId
-      let pendingLogWrites: StoredRunLog[] = []
-      let logWriteTimer: ReturnType<typeof setTimeout> | undefined
-      let streamedContent = ""
-      let contentWriteTimer: ReturnType<typeof setTimeout> | undefined
-      let tokenWriteTimer: ReturnType<typeof setTimeout> | undefined
-      const tokenQueue: string[] = []
-      const tokenDrainResolvers = new Set<() => void>()
 
-      function splitStreamingTokens(delta: string) {
-        return delta.match(/\s+|[^\s]+/g) ?? [delta]
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(data.error ?? "Unable to queue Codex run.")
       }
 
-      async function flushLogWrites() {
-        if (logWriteTimer) clearTimeout(logWriteTimer)
-        logWriteTimer = undefined
-        if (!chatId || pendingLogWrites.length === 0) return
-
-        const logs = pendingLogWrites
-        pendingLogWrites = []
-        await appendAssistantLogs({
-          logs,
-          messageId: runMessageId,
-          threadId: chatId,
-        }).catch((error) => {
-          console.warn("Unable to persist Codex run logs.", error)
-          pendingLogWrites = [...logs, ...pendingLogWrites].slice(-500)
-        })
-      }
-
-      function scheduleLogWrite(log: StoredRunLog) {
-        pendingLogWrites = [...pendingLogWrites, log].slice(-500)
-        if (logWriteTimer) return
-        logWriteTimer = setTimeout(() => {
-          void flushLogWrites()
-        }, 350)
-      }
-
-      async function flushContentWrite() {
-        if (contentWriteTimer) clearTimeout(contentWriteTimer)
-        contentWriteTimer = undefined
-        if (!chatId) return
-
-        await updateAssistantContent({
-          content: streamedContent,
-          messageId: runMessageId,
-          threadId: chatId,
-        }).catch((error) => {
-          console.warn("Unable to persist streaming assistant content.", error)
-        })
-      }
-
-      function scheduleContentWrite() {
-        if (contentWriteTimer) return
-        contentWriteTimer = setTimeout(() => {
-          void flushContentWrite()
-        }, 250)
-      }
-
-      function revealNextToken() {
-        const token = tokenQueue.shift()
-        if (token === undefined) {
-          tokenWriteTimer = undefined
-          for (const resolve of tokenDrainResolvers) resolve()
-          tokenDrainResolvers.clear()
-          return
-        }
-
-        streamedContent += token
-        setStreamedMessageContent((current) => ({
-          ...current,
-          [runMessageId as string]: streamedContent,
-        }))
-        scheduleContentWrite()
-
-        const delay = token.trim() ? 16 : 4
-        tokenWriteTimer = setTimeout(revealNextToken, delay)
-      }
-
-      function scheduleTokenReveal(delta: string) {
-        tokenQueue.push(...splitStreamingTokens(delta))
-        if (tokenWriteTimer) return
-        tokenWriteTimer = setTimeout(revealNextToken, 0)
-      }
-
-      async function waitForTokenReveal() {
-        if (tokenQueue.length > 0 || tokenWriteTimer) {
-          await new Promise<void>((resolve) => {
-            tokenDrainResolvers.add(resolve)
-          })
-        }
-
-        if (streamedContent) await flushContentWrite()
-      }
-
-      const data = await readCodexRunResponse(
-        res,
-        (log, time) => {
-          const stampedLog: RunLog = {
-            ...log,
-            id: `${time ?? Date.now()}-${Math.random().toString(36).slice(2)}`,
-            time: time ?? Date.now(),
-          }
-          appendRunLog(runMessageId, stampedLog)
-          scheduleLogWrite({
-            detail: stampedLog.detail,
-            kind: stampedLog.kind,
-            message: stampedLog.message,
-            time: stampedLog.time,
-          })
-
-          const inlineMarker = inlineToolMarker(log)
-          if (inlineMarker) {
-            tokenQueue.push(inlineMarker)
-            if (!tokenWriteTimer) {
-              tokenWriteTimer = setTimeout(revealNextToken, 0)
-            }
-          }
-
-          if (
-            chatId &&
-            log.kind === "setup" &&
-            log.detail &&
-            /sandbox/i.test(log.message)
-          ) {
-            mergeThreadRunState(chatId, {
-              sandboxId: log.detail,
-              sandboxState: "running",
-            })
-            void saveRunState({
-              sandboxId: log.detail,
-              sandboxState: "running",
-              threadId: chatId,
-            }).catch((error) => {
-              console.warn("Unable to save live sandbox id.", error)
-            })
-          }
-        },
-        (delta) => {
-          if (!delta) return
-          scheduleTokenReveal(delta)
-        }
-      )
-      await flushLogWrites()
-      await waitForTokenReveal()
-      const content =
-        streamedContent.trim() ||
-        (typeof data.lastMessage === "string" && data.lastMessage.trim()) ||
-        (typeof data.stdout === "string" && data.stdout.trim()) ||
-        (typeof data.stderr === "string" && data.stderr.trim()) ||
-        "(no output)"
-      const nextRunState: CachedRunState = {
-        ...(typeof data.branchName === "string"
-          ? { branch: data.branchName }
-          : {}),
-        ...(typeof data.codexThreadId === "string"
-          ? {
-              codexThreadId: data.codexThreadId,
-            }
-          : {}),
-        ...(typeof data.diff === "string" ? { diff: data.diff } : {}),
-        ...(typeof data.sandboxId === "string"
-          ? { sandboxId: data.sandboxId, sandboxState: "running" }
-          : {}),
-      }
-      mergeThreadRunState(chatId, nextRunState)
-      await completeAssistantMessage({
-        content,
-        messageId: assistantMessageId,
-        meta: {
-          branch: nextRunState.branch,
-          diff: nextRunState.diff,
-          status: typeof data.status === "string" ? data.status : undefined,
-        },
-        sandboxId: nextRunState.sandboxId,
-        sandboxState: nextRunState.sandboxState,
-        threadId: chatId,
-      })
-      if (nextRunState.codexThreadId || nextRunState.sandboxId) {
-        try {
-          await saveRunState({
-            codexThreadId: nextRunState.codexThreadId,
-            sandboxId: nextRunState.sandboxId,
-            sandboxState: nextRunState.sandboxState,
-            threadId: chatId,
-          })
-        } catch (error) {
-          console.warn("Unable to save Codex run state.", error)
-        }
-      }
+      queued = true
     } catch (err) {
-      const aborted = err instanceof DOMException && err.name === "AbortError"
-      const msg = aborted
-        ? "_Stopped._"
-        : err instanceof Error
-          ? err.message
-          : "Request failed."
+      const msg = err instanceof Error ? err.message : "Request failed."
       if (chatId && assistantMessageId) {
         const liveRunState = threadRunStateRef.current[chatId as string]
         await completeAssistantMessage({
           content: msg,
-          error: !aborted,
+          error: true,
           messageId: assistantMessageId,
           sandboxId: liveRunState?.sandboxId,
           threadId: chatId,
@@ -1336,19 +1327,28 @@ function ChatInner() {
         clearOptimisticRun(runKey)
       }
     } finally {
-      clearRunKey(runKey)
+      if (!queued) clearRunKey(runKey)
     }
   }
 
+  async function cancelCodexRun(threadId: Id<"threads">) {
+    clearRunKey(threadId as string)
+    await fetch("/api/codex-run/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ threadId }),
+    }).catch((error) => {
+      console.warn("Unable to cancel Codex run.", error)
+    })
+  }
+
   function stopActiveRun() {
-    const runKey = active ? (active.id as string) : DRAFT_RUN_KEY
-    runControllersRef.current[runKey]?.abort()
-    if (!activeSandboxId) return
-    if (active) {
-      void persistSandboxState(active.id, activeSandboxId, "running")
+    if (!active) return
+    void cancelCodexRun(active.id)
+    if (activeSandboxId) {
+      closeBrowserTerminalSession(activeSandboxId)
+      setTerminalOpen(false)
     }
-    closeBrowserTerminalSession(activeSandboxId)
-    setTerminalOpen(false)
   }
 
   function normalizeSandboxActionState(
@@ -1392,7 +1392,7 @@ function ChatInner() {
     const sandboxId = activeSandboxId
     setSandboxAction(action)
     if (action === "pause") {
-      runControllersRef.current[threadId as string]?.abort()
+      void cancelCodexRun(threadId)
       closeBrowserTerminalSession(sandboxId)
       setTerminalOpen(false)
     }
@@ -1450,7 +1450,7 @@ function ChatInner() {
     if (!threadId || !sandboxId || sandboxAction) return
 
     setSandboxAction("delete")
-    runControllersRef.current[threadId as string]?.abort()
+    void cancelCodexRun(threadId)
     clearRunKey(threadId as string)
     closeBrowserTerminalSession(sandboxId)
     setTerminalOpen(false)
@@ -1521,6 +1521,9 @@ function ChatInner() {
           <textarea
             ref={textareaRef}
             value={input}
+            aria-label="Message"
+            autoComplete="off"
+            name="message"
             onChange={(e: ChangeEvent<HTMLTextAreaElement>) =>
               setInput(e.target.value)
             }
@@ -1566,9 +1569,7 @@ function ChatInner() {
                   onClick={stopActiveRun}
                   disabled={!canStopActiveRun}
                   aria-label="Stop"
-                  title={
-                    canStopActiveRun ? "Stop" : "Run finishing elsewhere"
-                  }
+                  title={canStopActiveRun ? "Stop" : "Run finishing elsewhere"}
                 >
                   <Square className="size-3.5 fill-current" />
                 </Button>
@@ -1741,8 +1742,7 @@ function ChatInner() {
                       {messages.map((m) => (
                         <MessageBlock
                           key={m.id}
-                          message={renderMessage(m)}
-                          logs={renderLogs(m)}
+                          message={m}
                           repoName={activeRepoName}
                           onOpenFile={openFile}
                           onOpenFileDiff={openFileDiff}

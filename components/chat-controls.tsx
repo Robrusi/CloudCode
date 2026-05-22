@@ -397,7 +397,10 @@ export function Pill<T extends string>({
   )
 }
 
-export function ThinkingSpeedPill<TThinking extends string, TSpeed extends string>({
+export function ThinkingSpeedPill<
+  TThinking extends string,
+  TSpeed extends string,
+>({
   thinking,
   thinkingOptions,
   formatThinking,
@@ -439,7 +442,9 @@ export function ThinkingSpeedPill<TThinking extends string, TSpeed extends strin
         className={cn(chipTrigger, "gap-1.5 text-foreground")}
       >
         <span className="text-foreground/80">{formatThinking(thinking)}</span>
-        <span aria-hidden className="text-muted-foreground/50">·</span>
+        <span aria-hidden className="text-muted-foreground/50">
+          ·
+        </span>
         <span className="text-muted-foreground">{formatSpeed(speed)}</span>
         <ChevronDown className="size-3 opacity-60" />
       </button>
