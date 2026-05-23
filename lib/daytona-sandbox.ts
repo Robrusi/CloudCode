@@ -708,3 +708,123 @@ export async function getDaytonaTerminalUrl(sandboxId: string) {
   const signed = await sandbox.getSignedPreviewUrl(DAYTONA_TERMINAL_PORT, 3600)
   return signed.url
 }
+
+export type SandboxPreviewTarget = {
+  hash: string
+  pathname: string
+  port: number
+  search: string
+}
+
+const SANDBOX_PREVIEW_HOSTNAMES = new Set([
+  "0.0.0.0",
+  "127.0.0.1",
+  "::1",
+  "[::1]",
+  "localhost",
+])
+
+export class SandboxPreviewTargetError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "SandboxPreviewTargetError"
+  }
+}
+
+export function normalizeDaytonaSandboxPreviewTarget(
+  input: string
+): SandboxPreviewTarget {
+  const value = input.trim()
+  if (!value) throw new SandboxPreviewTargetError("URL required.")
+
+  const candidate = /^[0-9]{1,5}(?:[/?#].*)?$/.test(value)
+    ? `http://localhost:${value}`
+    : value.startsWith(":")
+      ? `http://localhost${value}`
+      : /^[a-z][a-z0-9+.-]*:\/\//i.test(value)
+        ? value
+        : `http://${value}`
+
+  let url: URL
+  try {
+    url = new URL(candidate)
+  } catch {
+    throw new SandboxPreviewTargetError(
+      "Use a sandbox-local URL like localhost:3000."
+    )
+  }
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new SandboxPreviewTargetError(
+      "Only HTTP URLs can be opened from the sandbox."
+    )
+  }
+
+  const hostname = url.hostname.toLowerCase()
+  if (!SANDBOX_PREVIEW_HOSTNAMES.has(hostname)) {
+    throw new SandboxPreviewTargetError(
+      "Use a sandbox-local URL like localhost:3000."
+    )
+  }
+
+  const port = Number(url.port || (url.protocol === "https:" ? "443" : "80"))
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new SandboxPreviewTargetError("Port must be between 1 and 65535.")
+  }
+
+  return {
+    hash: url.hash,
+    pathname: url.pathname === "/" ? "" : url.pathname,
+    port,
+    search: url.search,
+  }
+}
+
+function mergeSignedPreviewUrl(
+  signedUrl: string,
+  target: SandboxPreviewTarget
+) {
+  const url = new URL(signedUrl)
+  const params = new URLSearchParams(url.search)
+  const targetParams = new URLSearchParams(target.search)
+
+  for (const [key, value] of targetParams) params.append(key, value)
+
+  if (target.pathname) {
+    const basePath =
+      url.pathname === "/" ? "" : url.pathname.replace(/\/+$/, "")
+    url.pathname = `${basePath}${target.pathname}`
+  }
+  url.search = params.toString()
+  url.hash = target.hash
+  return url.toString()
+}
+
+export async function getDaytonaSandboxPreviewUrl(
+  sandboxId: string,
+  targetUrl: string
+) {
+  const target = normalizeDaytonaSandboxPreviewTarget(targetUrl)
+  const signedUrl = await getDaytonaSandboxPreviewSignedUrl(
+    sandboxId,
+    target.port
+  )
+  return mergeSignedPreviewUrl(signedUrl, target)
+}
+
+export async function getDaytonaSandboxPreviewSignedUrl(
+  sandboxId: string,
+  port: number
+) {
+  const sandbox = await getStartedDaytonaSandbox(sandboxId)
+  const signed = await sandbox.getSignedPreviewUrl(port, 3600)
+  return signed.url
+}
+
+export async function getDaytonaSandboxPreviewLink(
+  sandboxId: string,
+  port: number
+) {
+  const sandbox = await getStartedDaytonaSandbox(sandboxId)
+  return await sandbox.getPreviewLink(port)
+}
