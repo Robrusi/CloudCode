@@ -28,10 +28,11 @@ import {
   readCachedFileList,
   writeCachedFileList,
 } from "@/lib/sandbox-file-cache"
+import { EnvironmentPanel } from "@/components/environment-panel"
 
 type FileEntry = { path: string; type: "file" | "dir" }
 export type FileBrowserOpenMode = "diff" | "file" | "preview"
-type BrowserView = "diffs" | "files"
+type BrowserView = "diffs" | "env" | "files"
 
 type ListResponse = {
   root: string
@@ -416,7 +417,11 @@ export function FileBrowser({
     >
       <header className="flex h-[3.25rem] shrink-0 items-center gap-2 border-b border-border/60 px-3">
         <span className="text-sm font-medium text-foreground/85">
-          {view === "diffs" ? "Diffs" : "Files"}
+          {view === "diffs"
+            ? "Diffs"
+            : view === "env"
+              ? "Environment"
+              : "Files"}
         </span>
         {loading ? (
           <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
@@ -465,10 +470,18 @@ export function FileBrowser({
             onOpenAllDiffs?.()
           }}
         />
+        <div aria-hidden className="w-px self-stretch bg-border/60" />
+        <ViewButton
+          active={view === "env"}
+          label="Environment"
+          onClick={() => setView("env")}
+        />
       </div>
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        {!sandboxId && filePaths.length === 0 ? (
+        {view === "env" ? (
+          <EnvironmentPanel sandboxId={sandboxId} />
+        ) : !sandboxId && filePaths.length === 0 ? (
           <EmptyState message="No cached files yet." />
         ) : error ? (
           <EmptyState
