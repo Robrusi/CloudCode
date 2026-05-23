@@ -207,12 +207,7 @@ const AssistantBody = memo(function AssistantBody({
   grouped.forEach((seg, i) => {
     if (showFinalSeparator && i === lastTextIndex) {
       rendered.push(
-        <div
-          key={`sep-${i}`}
-          role="separator"
-          aria-label="Response"
-          className="flex items-center gap-4 py-4"
-        >
+        <div key={`sep-${i}`} className="flex items-center gap-4 py-4">
           <div className="h-px flex-1 bg-border" />
           <span className="text-[10px] font-medium tracking-wider text-muted-foreground/60 uppercase">
             Response

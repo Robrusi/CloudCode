@@ -99,17 +99,19 @@ export function SettingsScreen({
                     </div>
                   ) : null}
                 </div>
-                <a
-                  href="/api/codex-auth/login"
-                  className={cn(
-                    "inline-flex h-7 shrink-0 items-center justify-center rounded-md px-3 text-xs font-medium transition-colors",
-                    connected
-                      ? "border border-border/60 text-foreground/80 hover:bg-muted"
-                      : "bg-foreground text-background hover:opacity-85"
-                  )}
-                >
-                  {connected ? "Reconnect" : "Connect"}
-                </a>
+                <form action="/api/codex-auth/login" method="get">
+                  <button
+                    type="submit"
+                    className={cn(
+                      "inline-flex h-7 shrink-0 items-center justify-center rounded-md px-3 text-xs font-medium transition-colors",
+                      connected
+                        ? "border border-border/60 text-foreground/80 hover:bg-muted"
+                        : "bg-foreground text-background hover:opacity-85"
+                    )}
+                  >
+                    {connected ? "Reconnect" : "Connect"}
+                  </button>
+                </form>
               </div>
             </div>
           </div>
@@ -393,6 +395,7 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
             <label className="grid gap-1.5 text-xs font-medium text-foreground/80">
               Name
               <input
+                aria-label="Preset name"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 placeholder="Node 22 workspace"
@@ -434,6 +437,7 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                 <label className="grid gap-1.5 text-xs font-medium text-foreground/80">
                   PATH setup script
                   <textarea
+                    aria-label="PATH setup script"
                     value={pathInstallScript}
                     onChange={(event) =>
                       setPathInstallScript(event.target.value)
@@ -453,6 +457,7 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                 <label className="grid gap-1.5 text-xs font-medium text-foreground/80">
                   Repo install script
                   <textarea
+                    aria-label="Repo install script"
                     value={installScript}
                     onChange={(event) => setInstallScript(event.target.value)}
                     placeholder={"pnpm install\npnpm test -- --runInBand"}
@@ -512,6 +517,7 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
 
               <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
                 <input
+                  aria-label="Secret name"
                   value={secretName}
                   onChange={(event) => setSecretName(event.target.value)}
                   placeholder="SUPABASE_SERVICE_ROLE_KEY"
@@ -519,6 +525,7 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                   spellCheck={false}
                 />
                 <input
+                  aria-label="Secret value"
                   value={secretValue}
                   onChange={(event) => setSecretValue(event.target.value)}
                   placeholder="Value"

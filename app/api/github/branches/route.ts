@@ -65,25 +65,39 @@ export async function GET(request: Request) {
       )
     }
 
-    for (let page = 1; page <= 5; page++) {
-      const res = await fetch(
-        `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/branches?per_page=100&page=${page}`,
-        { headers, cache: "no-store" }
-      )
-      if (!res.ok) {
-        const remaining = res.headers.get("x-ratelimit-remaining")
-        const isRateLimited =
-          (res.status === 403 || res.status === 429) && remaining === "0"
-        return NextResponse.json(
-          {
-            error: isRateLimited
-              ? "GitHub rate limit hit. Set GITHUB_TOKEN or try again later."
-              : `GitHub API error: ${res.status}`,
-          },
-          { status: res.status }
+    const branchResponses = await Promise.all(
+      Array.from({ length: 5 }, (_, index) =>
+        fetch(
+          `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/branches?per_page=100&page=${index + 1}`,
+          { headers, cache: "no-store" }
         )
-      }
-      const items = (await res.json()) as Array<{ name: string }>
+      )
+    )
+    const failedBranchResponse = branchResponses.find((res) => !res.ok)
+    if (failedBranchResponse) {
+      const remaining = failedBranchResponse.headers.get(
+        "x-ratelimit-remaining"
+      )
+      const isRateLimited =
+        (failedBranchResponse.status === 403 ||
+          failedBranchResponse.status === 429) &&
+        remaining === "0"
+      return NextResponse.json(
+        {
+          error: isRateLimited
+            ? "GitHub rate limit hit. Set GITHUB_TOKEN or try again later."
+            : `GitHub API error: ${failedBranchResponse.status}`,
+        },
+        { status: failedBranchResponse.status }
+      )
+    }
+
+    const branchPages = await Promise.all(
+      branchResponses.map(
+        (res) => res.json() as Promise<Array<{ name: string }>>
+      )
+    )
+    for (const items of branchPages) {
       for (const item of items) {
         if (typeof item.name === "string") branches.push(item.name)
       }

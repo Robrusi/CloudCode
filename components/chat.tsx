@@ -32,11 +32,11 @@ import {
 
 import { GeistPixelSquare } from "geist/font/pixel"
 
+import { SandboxTerminalPanel } from "@/components/sandbox-terminal"
 import {
   closeBrowserTerminalSession,
-  SandboxTerminalPanel,
   warmBrowserTerminal,
-} from "@/components/sandbox-terminal"
+} from "@/components/sandbox-terminal-session"
 import { SettingsScreen } from "@/components/settings-screen"
 import { Sidebar } from "@/components/chat-sidebar"
 import {
@@ -614,8 +614,8 @@ function ChatInner() {
         )
         return {
           ...chat,
-          ...(liveRunStates[chat.id as string] ?? {}),
-          ...(isLiveThread ? (liveActiveRunState ?? {}) : {}),
+          ...liveRunStates[chat.id as string],
+          ...(isLiveThread ? liveActiveRunState : undefined),
           pending:
             isLiveThread ||
             Boolean(runningRunKeys[chat.id as string]) ||
@@ -629,8 +629,8 @@ function ChatInner() {
   const activeRunKey = activeId ? (activeId as string) : DRAFT_RUN_KEY
   const activeRunState = activeId
     ? {
-        ...(liveRunStates[activeId as string] ?? {}),
-        ...(liveActiveRunState ?? {}),
+        ...liveRunStates[activeId as string],
+        ...liveActiveRunState,
       }
     : undefined
   const activeSandboxId = hasCachedRunKey(activeRunState, "sandboxId")
@@ -888,17 +888,17 @@ function ChatInner() {
     let cancelled = false
     const queue = [...new Set(activeChangedTextPaths)]
 
-    async function worker() {
-      while (!cancelled) {
-        const path = queue.shift()
-        if (!path) return
-        await fetchSandboxTextFileIntoCache({
-          diffKey: activeDiffKey,
-          path,
-          sandboxId: activeSandboxId!,
-          scope: activeFileCacheScope!,
-        }).catch(() => undefined)
-      }
+    async function worker(): Promise<void> {
+      if (cancelled) return
+      const path = queue.shift()
+      if (!path) return
+      await fetchSandboxTextFileIntoCache({
+        diffKey: activeDiffKey,
+        path,
+        sandboxId: activeSandboxId!,
+        scope: activeFileCacheScope!,
+      }).catch(() => undefined)
+      return worker()
     }
 
     for (let i = 0; i < Math.min(4, queue.length); i += 1) {
@@ -949,7 +949,7 @@ function ChatInner() {
     setLiveRunStates((current) => ({
       ...current,
       [key]: {
-        ...(current[key] ?? {}),
+        ...current[key],
         ...patch,
       },
     }))
@@ -2159,8 +2159,10 @@ function SandboxMenu({
       {open && canAct && menuPos && typeof document !== "undefined"
         ? createPortal(
             <>
-              <div
-                className="fixed inset-0 z-[60]"
+              <button
+                type="button"
+                aria-label="Close sandbox menu"
+                className="fixed inset-0 z-[60] cursor-default border-0 bg-transparent p-0"
                 onClick={closeMenu}
                 onContextMenu={(event) => {
                   event.preventDefault()
@@ -2169,9 +2171,9 @@ function SandboxMenu({
               />
               <div
                 role="menu"
+                tabIndex={-1}
                 style={{ top: menuPos.top, right: menuPos.right }}
                 className="fixed z-[61] min-w-44 overflow-hidden rounded-2xl border border-black/[0.06] bg-popover p-1.5 text-popover-foreground shadow-[0_10px_30px_-12px_rgba(0,0,0,0.18)] dark:border-white/10"
-                onClick={(event) => event.stopPropagation()}
               >
                 <button
                   type="button"
@@ -2219,22 +2221,35 @@ function ConfirmDialog({
   onConfirm: () => void
   onCancel: () => void
 }) {
+  useEffect(() => {
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") onCancel()
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [onCancel])
+
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
-      onClick={onCancel}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") onCancel()
-        if (e.key === "Enter") onConfirm()
+    <dialog
+      open
+      className="fixed inset-0 z-50 m-0 flex h-screen max-h-none w-screen max-w-none items-center justify-center border-0 bg-black/40 p-0 backdrop-blur-sm"
+      onCancel={(e) => {
+        e.preventDefault()
+        onCancel()
       }}
-      role="dialog"
       aria-modal="true"
+      aria-label={title}
       tabIndex={-1}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-sm overflow-hidden rounded-2xl border border-black/[0.06] bg-popover p-5 text-popover-foreground shadow-[0_10px_30px_-12px_rgba(0,0,0,0.18)] dark:border-white/10"
-      >
+      <button
+        type="button"
+        aria-label="Cancel dialog"
+        tabIndex={-1}
+        className="absolute inset-0 cursor-default border-0 bg-transparent p-0"
+        onClick={onCancel}
+      />
+      <div className="relative z-10 w-full max-w-sm overflow-hidden rounded-2xl border border-black/[0.06] bg-popover p-5 text-popover-foreground shadow-[0_10px_30px_-12px_rgba(0,0,0,0.18)] dark:border-white/10">
         <div className="text-base font-medium text-foreground">{title}</div>
         {description ? (
           <p className="mt-1.5 text-sm text-muted-foreground">{description}</p>
@@ -2262,6 +2277,6 @@ function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </dialog>
   )
 }

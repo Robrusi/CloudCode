@@ -297,9 +297,14 @@ async function failAutoEnvironmentBuild(
   )
 }
 
+const ANSI_ESCAPE_PATTERN = new RegExp(
+  String.raw`\u001B\[[0-?]*[ -/]*[@-~]`,
+  "g"
+)
+
 function compactLine(value: string, max = 260) {
   const line = value
-    .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(ANSI_ESCAPE_PATTERN, "")
     .replace(/\s+/g, " ")
     .trim()
   return line.length > max ? `${line.slice(0, max - 3)}...` : line
@@ -307,7 +312,7 @@ function compactLine(value: string, max = 260) {
 
 function compactTail(value: string, max = 900) {
   const line = value
-    .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(ANSI_ESCAPE_PATTERN, "")
     .replace(/\s+/g, " ")
     .trim()
   return line.length > max ? `...${line.slice(-(max - 3))}` : line
@@ -383,10 +388,16 @@ function createBuildLogEmitter(
     clearFlushTimer()
     const deadline = Date.now() + BUILD_LOG_FINAL_FLUSH_TIMEOUT_MS
 
-    while ((pending.length > 0 || flushPromise) && Date.now() < deadline) {
+    const flushUntilDone = async (): Promise<void> => {
+      if ((pending.length === 0 && !flushPromise) || Date.now() >= deadline) {
+        return
+      }
       if (pending.length > 0) void flush()
       await (flushPromise ?? Promise.resolve())
+      return flushUntilDone()
     }
+
+    await flushUntilDone()
   }
 
   return {
@@ -986,7 +997,7 @@ async function buildAutoEnvironmentSandbox({
   const emit = buildLogs.emit
 
   try {
-    await emit({
+    void emit({
       kind: "setup",
       message: "Creating Daytona sandbox",
     })
@@ -1006,12 +1017,12 @@ async function buildAutoEnvironmentSandbox({
       ...presetSecretEnv(input.sandboxPreset),
     }
 
-    await emit({
+    void emit({
       detail: sandbox.id,
       kind: "setup",
-      message: "Daytona sandbox ready",
+      message: "Auto environment sandbox ready",
     })
-    await emit({
+    void emit({
       kind: "setup",
       message: "Cloning repository",
     })
@@ -1023,7 +1034,7 @@ async function buildAutoEnvironmentSandbox({
       signal: input.signal,
       paths,
     })
-    await emit({
+    void emit({
       kind: "setup",
       message: "Repository cloned",
     })
@@ -1032,6 +1043,7 @@ async function buildAutoEnvironmentSandbox({
       paths,
       input.signal
     )
+    const rawYamlPromise = readRepoCloudcodeYaml(sandbox, paths)
     await trustMiseConfigFiles({
       configFiles: miseConfigFiles,
       env: terminalEnv,
@@ -1039,15 +1051,15 @@ async function buildAutoEnvironmentSandbox({
       sandbox,
       signal: input.signal,
     })
-    let rawYaml = await readRepoCloudcodeYaml(sandbox, paths)
+    let rawYaml = await rawYamlPromise
     if (rawYaml) {
-      await emit({
+      void emit({
         kind: "setup",
         message: "Found cloudcode.yaml",
       })
     } else {
       await prepareBuilderCodex(sandbox, paths, input.authJson, input.signal)
-      await emit({
+      void emit({
         kind: "setup",
         message: "Starting environment scan",
       })
@@ -1057,7 +1069,7 @@ async function buildAutoEnvironmentSandbox({
       if (!rawYaml) {
         throw new Error("Environment scanner did not create cloudcode.yaml.")
       }
-      await emit({
+      void emit({
         kind: "setup",
         message: "cloudcode.yaml generated",
       })
@@ -1129,12 +1141,13 @@ async function buildAutoEnvironmentSandbox({
     }
 
     await writeEnvironmentGitExcludes(sandbox, paths, input.signal)
-    const hashInputs = await readBuildHashInputs(sandbox, paths, input.signal)
+    const [hashInputs, updatedAuthJson] = await Promise.all([
+      readBuildHashInputs(sandbox, paths, input.signal),
+      readDaytonaTextFile(sandbox, `${paths.codexHome}/auth.json`).catch(
+        () => input.authJson
+      ),
+    ])
     const configHash = cloudcodeYamlHash(cloudcodeYaml, hashInputs)
-    const updatedAuthJson = await readDaytonaTextFile(
-      sandbox,
-      `${paths.codexHome}/auth.json`
-    ).catch(() => input.authJson)
     await cleanupBuilderFiles(sandbox, paths, input.signal)
 
     await completeAutoEnvironmentBuild(

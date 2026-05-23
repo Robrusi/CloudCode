@@ -360,27 +360,27 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
-    await requireOwnedPreset(ctx, args.presetId, userId)
-
-    await ctx.db.patch(args.presetId, {
-      autoSaveSnapshot: undefined,
-      cpuCount: undefined,
-      customToolingCommands: undefined,
-      ...(Object.prototype.hasOwnProperty.call(args, "daytonaSnapshot")
-        ? { daytonaSnapshot: cleanDaytonaSnapshot(args.daytonaSnapshot) }
-        : {}),
-      ...(Object.prototype.hasOwnProperty.call(args, "environmentSlug")
-        ? { environmentSlug: cleanEnvironmentSlug(args.environmentSlug) }
-        : {}),
-      installScript: cleanInstallScript(args.installScript),
-      memoryMB: undefined,
-      name: cleanName(args.name),
-      pathInstallScript: cleanInstallScript(args.pathInstallScript),
-      snapshotId: undefined,
-      toolVersions: undefined,
-      tools: undefined,
-      updatedAt: Date.now(),
-    })
+    await requireOwnedPreset(ctx, args.presetId, userId).then(() =>
+      ctx.db.patch(args.presetId, {
+        autoSaveSnapshot: undefined,
+        cpuCount: undefined,
+        customToolingCommands: undefined,
+        ...(Object.prototype.hasOwnProperty.call(args, "daytonaSnapshot")
+          ? { daytonaSnapshot: cleanDaytonaSnapshot(args.daytonaSnapshot) }
+          : {}),
+        ...(Object.prototype.hasOwnProperty.call(args, "environmentSlug")
+          ? { environmentSlug: cleanEnvironmentSlug(args.environmentSlug) }
+          : {}),
+        installScript: cleanInstallScript(args.installScript),
+        memoryMB: undefined,
+        name: cleanName(args.name),
+        pathInstallScript: cleanInstallScript(args.pathInstallScript),
+        snapshotId: undefined,
+        toolVersions: undefined,
+        tools: undefined,
+        updatedAt: Date.now(),
+      })
+    )
   },
 })
 
@@ -793,28 +793,27 @@ export const remove = mutation({
       .withIndex("by_preset", (q) => q.eq("presetId", args.presetId))
       .collect()
 
-    for (const secret of secrets) {
-      await ctx.db.delete(secret._id)
-    }
+    await Promise.all(secrets.map((secret) => ctx.db.delete(secret._id)))
 
     const environments = await ctx.db
       .query("sandboxPresetEnvironments")
       .withIndex("by_user_updated", (q) => q.eq("userId", userId))
       .collect()
 
-    for (const environment of environments) {
-      if (environment.presetId !== args.presetId) continue
-      const builds = await ctx.db
-        .query("sandboxPresetBuilds")
-        .withIndex("by_environment_updated", (q) =>
-          q.eq("environmentId", environment._id)
-        )
-        .collect()
-      for (const build of builds) {
-        await ctx.db.delete(build._id)
-      }
-      await ctx.db.delete(environment._id)
-    }
+    await Promise.all(
+      environments
+        .filter((environment) => environment.presetId === args.presetId)
+        .map(async (environment) => {
+          const builds = await ctx.db
+            .query("sandboxPresetBuilds")
+            .withIndex("by_environment_updated", (q) =>
+              q.eq("environmentId", environment._id)
+            )
+            .collect()
+          await Promise.all(builds.map((build) => ctx.db.delete(build._id)))
+          await ctx.db.delete(environment._id)
+        })
+    )
 
     await ctx.db.delete(args.presetId)
   },

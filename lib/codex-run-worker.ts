@@ -203,10 +203,12 @@ export async function failWorkerRun(
 
 export async function cancelWorkerRun(
   client: ConvexHttpClient,
-  runId: Id<"codexRuns">
+  runId: Id<"codexRuns">,
+  sandboxId?: string
 ) {
   return await client.mutation(api.codexRuns.workerCancel, {
     runId,
+    sandboxId,
     workerSecret: getWorkerSecret(),
   })
 }

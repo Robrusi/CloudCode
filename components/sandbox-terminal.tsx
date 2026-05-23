@@ -12,6 +12,7 @@ import {
   useState,
 } from "react"
 
+import { registerTerminalCloser } from "@/components/sandbox-terminal-session"
 import { cn } from "@/lib/utils"
 
 type TerminalStatus = "connecting" | "ready" | "reconnecting" | "error"
@@ -89,29 +90,6 @@ const lightPalette: TerminalPalette = {
   selectionForeground: "#1f2328",
   white: "#57606a",
   yellow: "#bf8700",
-}
-
-const terminalClosers = new Map<string, Set<() => void>>()
-
-function registerTerminalCloser(sandboxId: string, close: () => void) {
-  const closers = terminalClosers.get(sandboxId) ?? new Set<() => void>()
-  closers.add(close)
-  terminalClosers.set(sandboxId, closers)
-
-  return () => {
-    closers.delete(close)
-    if (closers.size === 0) terminalClosers.delete(sandboxId)
-  }
-}
-
-export function warmBrowserTerminal(sandboxId?: string | null) {
-  void sandboxId
-  // Daytona PTYs are opened on demand when the panel mounts.
-}
-
-export function closeBrowserTerminalSession(sandboxId?: string) {
-  if (!sandboxId) return
-  for (const close of terminalClosers.get(sandboxId) ?? []) close()
 }
 
 export function SandboxTerminalPanel({
@@ -386,7 +364,7 @@ export function SandboxTerminalPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, sandboxId, sessionVersion])
 
-  function handleResizeStart(e: ReactMouseEvent<HTMLDivElement>) {
+  function handleResizeStart(e: ReactMouseEvent<HTMLButtonElement>) {
     e.preventDefault()
     dragStartRef.current = { h: height, y: e.clientY }
 
@@ -432,18 +410,17 @@ export function SandboxTerminalPanel({
       className="absolute inset-x-0 bottom-0 z-20 flex min-h-0 flex-col overflow-hidden border-t border-border/70"
       style={{ height, background: surfaceBg, color: palette.foreground }}
     >
-      <div
-        role="separator"
-        aria-orientation="horizontal"
+      <button
+        type="button"
         aria-label="Resize terminal"
         onMouseDown={handleResizeStart}
-        className="group absolute top-0 right-0 left-0 z-30 h-2 -translate-y-1 cursor-row-resize"
+        className="group absolute top-0 right-0 left-0 z-30 h-2 -translate-y-1 cursor-row-resize border-0 bg-transparent p-0"
       >
         <span
           aria-hidden
           className="pointer-events-none absolute top-1 right-0 left-0 h-px bg-border/50 transition-colors group-hover:bg-primary/40"
         />
-      </div>
+      </button>
       <div
         className="absolute top-2 right-2 z-20 flex items-center gap-1"
         aria-live="polite"

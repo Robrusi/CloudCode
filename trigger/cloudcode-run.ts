@@ -29,11 +29,15 @@ function errorMessage(error: unknown) {
 }
 
 function sandboxIdFromLog(log: RunCodexLog) {
-  if (log.kind !== "setup" || !log.detail || !/sandbox/i.test(log.message)) {
+  if (log.kind !== "setup" || !log.detail) {
     return undefined
   }
 
-  return log.detail
+  return log.message === "Daytona sandbox ready" ||
+    log.message === "Recovered with a fresh Daytona sandbox" ||
+    log.message === "Using prepared auto environment sandbox"
+    ? log.detail
+    : undefined
 }
 
 function wait(ms: number) {
@@ -44,26 +48,20 @@ async function withMutationRetries<T>(
   label: string,
   operation: () => Promise<T>
 ) {
-  let lastError: unknown
-
-  for (
-    let attempt = 0;
-    attempt <= MUTATION_RETRY_DELAYS_MS.length;
-    attempt += 1
-  ) {
+  const attemptOperation = async (attempt: number): Promise<T> => {
     try {
       return await operation()
     } catch (error) {
-      lastError = error
       const delay = MUTATION_RETRY_DELAYS_MS[attempt]
-      if (delay === undefined) break
+      if (delay === undefined) {
+        throw error instanceof Error ? error : new Error(`Unable to ${label}.`)
+      }
       await wait(delay)
+      return attemptOperation(attempt + 1)
     }
   }
 
-  throw lastError instanceof Error
-    ? lastError
-    : new Error(`Unable to ${label}.`)
+  return attemptOperation(0)
 }
 
 function createLogBuffer(
@@ -135,14 +133,21 @@ function createLogBuffer(
     async flush() {
       clearFlushTimer()
       const deadline = Date.now() + FINAL_FLUSH_TIMEOUT_MS
-      while ((pending.length > 0 || flushPromise) && Date.now() < deadline) {
+
+      const flushUntilDone = async (): Promise<void> => {
+        if ((pending.length === 0 && !flushPromise) || Date.now() >= deadline) {
+          return
+        }
         if (pending.length > 0) {
           void flush().catch((error) => {
             flushError = error
           })
         }
         await (flushPromise ?? Promise.resolve())
+        return flushUntilDone()
       }
+
+      await flushUntilDone()
       if (pending.length > 0 || flushError) {
         throw flushError instanceof Error
           ? flushError
@@ -234,16 +239,23 @@ function createContentBuffer(
     async flush() {
       clearFlushTimer()
       const deadline = Date.now() + FINAL_FLUSH_TIMEOUT_MS
-      while (
-        (content !== flushedContent || flushPromise) &&
-        Date.now() < deadline
-      ) {
+
+      const flushUntilDone = async (): Promise<void> => {
+        if (
+          (content === flushedContent && !flushPromise) ||
+          Date.now() >= deadline
+        ) {
+          return
+        }
         if (content !== flushedContent) {
           await flush()
         } else {
           await (flushPromise ?? Promise.resolve())
         }
+        return flushUntilDone()
       }
+
+      await flushUntilDone()
       if (content !== flushedContent || flushError) {
         throw flushError instanceof Error
           ? flushError
@@ -345,7 +357,7 @@ export const cloudcodeRun = task({
       await Promise.allSettled([logBuffer.flush(), contentBuffer.flush()])
 
       if (signal.aborted) {
-        await cancelWorkerRun(client, payload.runId)
+        await cancelWorkerRun(client, payload.runId, latestSandboxId)
         return { canceled: true }
       }
 

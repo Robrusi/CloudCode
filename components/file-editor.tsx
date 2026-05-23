@@ -222,7 +222,7 @@ export function FileEditorPanel({
   const [width, setWidth] = useState<number>(DEFAULT_PANEL_WIDTH)
   const dragStartRef = useRef<{ x: number; w: number } | null>(null)
 
-  function handleResizeStart(e: ReactMouseEvent<HTMLDivElement>) {
+  function handleResizeStart(e: ReactMouseEvent<HTMLButtonElement>) {
     e.preventDefault()
     dragStartRef.current = { x: e.clientX, w: width }
 
@@ -283,13 +283,13 @@ export function FileEditorPanel({
       {sidePlacement ? (
         // Drag handle on the left edge: an invisible lane that shows a subtle
         // divider accent on hover.
-        <div
-          role="separator"
-          aria-orientation="vertical"
+        <button
+          type="button"
           aria-label="Resize file viewer"
           onMouseDown={handleResizeStart}
           className={cn(
             "absolute top-0 bottom-0 -left-1 z-10 w-2 cursor-col-resize",
+            "border-0 bg-transparent p-0",
             "before:absolute before:inset-y-0 before:left-1 before:w-px",
             "before:bg-transparent hover:before:bg-border"
           )}

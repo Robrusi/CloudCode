@@ -1,4 +1,4 @@
-import { tasks } from "@trigger.dev/sdk"
+import { runs, tasks } from "@trigger.dev/sdk"
 import { ConvexHttpClient } from "convex/browser"
 import { NextResponse } from "next/server"
 
@@ -157,7 +157,10 @@ export async function POST(request: Request) {
     })
     if (attached.canceled) {
       // The run was canceled in the small window between creation and trigger id
-      // attachment. The task will observe the canceled Convex state on start.
+      // attachment. Cancel the queued Trigger run too so it cannot wake up later.
+      await runs.cancel(handle.id).catch((error) => {
+        console.warn("Unable to cancel canceled Trigger.dev run.", error)
+      })
       return NextResponse.json({ runId, triggerRunId: handle.id })
     }
 

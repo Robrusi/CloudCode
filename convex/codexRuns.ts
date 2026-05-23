@@ -190,28 +190,60 @@ export const liveForThread = query({
 })
 
 function sandboxIdFromLog(log: StoredRunLog) {
-  if (log.kind !== "setup" || !log.detail || !/sandbox/i.test(log.message)) {
+  if (log.kind !== "setup" || !log.detail) {
     return undefined
   }
 
-  return log.detail
+  return log.message === "Daytona sandbox ready" ||
+    log.message === "Recovered with a fresh Daytona sandbox" ||
+    log.message === "Using prepared auto environment sandbox"
+    ? log.detail
+    : undefined
+}
+
+function latestSandboxIdForRun(
+  run: Pick<Doc<"codexRuns">, "logs" | "sandboxId">
+) {
+  if (run.sandboxId) return run.sandboxId
+
+  for (let index = (run.logs?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const sandboxId = sandboxIdFromLog(run.logs![index])
+    if (sandboxId) return sandboxId
+  }
+
+  return undefined
 }
 
 async function markRunCanceled(
   ctx: MutationCtx,
   run: Doc<"codexRuns">,
-  content = "_Stopped._"
+  content = "_Stopped._",
+  sandboxIdOverride?: string
 ) {
   const now = Date.now()
+  const sandboxId = sandboxIdOverride ?? latestSandboxIdForRun(run)
+  const sandboxState =
+    run.sandboxState ?? (sandboxId ? ("running" as const) : undefined)
   const canceledContent = run.content?.trim()
     ? `${run.content.trimEnd()}\n\n${content}`
     : content
+
+  const sandboxPatch = {
+    ...(sandboxId ? { sandboxId } : {}),
+    ...(sandboxState ? { sandboxState } : {}),
+  }
 
   if (!TERMINAL_RUN_STATUSES.has(run.status)) {
     await ctx.db.patch(run._id, {
       content: canceledContent,
       finishedAt: now,
+      ...sandboxPatch,
       status: "canceled",
+      updatedAt: now,
+    })
+  } else if (sandboxId && run.sandboxId !== sandboxId) {
+    await ctx.db.patch(run._id, {
+      ...sandboxPatch,
       updatedAt: now,
     })
   }
@@ -242,14 +274,14 @@ async function markRunCanceled(
 
   await ctx.db.patch(run.threadId, {
     hasPendingMessage: false,
-    ...(run.sandboxId ? { sandboxId: run.sandboxId } : {}),
-    ...(run.sandboxState
-      ? { sandboxState: run.sandboxState }
-      : run.sandboxId
-        ? { sandboxState: "running" as const }
-        : {}),
+    ...sandboxPatch,
     updatedAt: now,
   })
+
+  return {
+    sandboxId,
+    sandboxState,
+  }
 }
 
 export const create = mutation({
@@ -363,22 +395,24 @@ export const failBeforeStart = mutation({
     if (TERMINAL_RUN_STATUSES.has(run.status)) return
 
     const now = Date.now()
-    await ctx.db.patch(args.runId, {
-      content: args.error,
-      error: args.error,
-      finishedAt: now,
-      status: "failed",
-      updatedAt: now,
-    })
-    await ctx.db.patch(run.assistantMessageId, {
-      content: args.error,
-      error: true,
-      pending: false,
-    })
-    await ctx.db.patch(run.threadId, {
-      hasPendingMessage: false,
-      updatedAt: now,
-    })
+    await Promise.all([
+      ctx.db.patch(args.runId, {
+        content: args.error,
+        error: args.error,
+        finishedAt: now,
+        status: "failed",
+        updatedAt: now,
+      }),
+      ctx.db.patch(run.assistantMessageId, {
+        content: args.error,
+        error: true,
+        pending: false,
+      }),
+      ctx.db.patch(run.threadId, {
+        hasPendingMessage: false,
+        updatedAt: now,
+      }),
+    ])
   },
 })
 
@@ -388,15 +422,17 @@ export const cancelActiveForThread = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
-    await requireOwnedThread(ctx, args.threadId, userId)
-    const run = await activeRunForThread(ctx, args.threadId)
+    const [, run] = await Promise.all([
+      requireOwnedThread(ctx, args.threadId, userId),
+      activeRunForThread(ctx, args.threadId),
+    ])
     if (!run) return null
 
-    await markRunCanceled(ctx, run)
+    const canceled = await markRunCanceled(ctx, run)
 
     return {
       runId: run._id,
-      sandboxId: run.sandboxId,
+      sandboxId: canceled.sandboxId,
       triggerRunId: run.triggerRunId,
     }
   },
@@ -477,21 +513,26 @@ export const workerStartAndGetInput = mutation({
     const run = await ctx.db.get(args.runId)
     if (!run) throw new Error("Run not found.")
     if (run.status === "canceled") return { canceled: true as const }
-    if (TERMINAL_RUN_STATUSES.has(run.status)) {
-      throw new Error(`Run is already ${run.status}.`)
+    if (run.status !== "queued") {
+      return { canceled: true as const }
+    }
+    if (run.triggerRunId && run.triggerRunId !== args.triggerRunId) {
+      return { canceled: true as const }
     }
 
     const now = Date.now()
-    await ctx.db.patch(args.runId, {
-      startedAt: run.startedAt ?? now,
-      status: "running",
-      triggerRunId: run.triggerRunId ?? args.triggerRunId,
-      updatedAt: now,
-    })
-    await ctx.db.patch(run.threadId, {
-      hasPendingMessage: true,
-      updatedAt: now,
-    })
+    await Promise.all([
+      ctx.db.patch(args.runId, {
+        startedAt: run.startedAt ?? now,
+        status: "running",
+        triggerRunId: run.triggerRunId ?? args.triggerRunId,
+        updatedAt: now,
+      }),
+      ctx.db.patch(run.threadId, {
+        hasPendingMessage: true,
+        updatedAt: now,
+      }),
+    ])
 
     const updatedRun = await ctx.db.get(args.runId)
     if (!updatedRun) throw new Error("Run not found.")
@@ -512,9 +553,25 @@ export const workerAppendLogs = mutation({
 
     const run = await ctx.db.get(args.runId)
     if (!run) throw new Error("Run not found.")
-    if (run.status === "canceled") return { canceled: true }
 
     const sandboxId = args.logs.map(sandboxIdFromLog).find(Boolean)
+    if (run.status === "canceled") {
+      if (sandboxId && run.sandboxId !== sandboxId) {
+        const now = Date.now()
+        await ctx.db.patch(args.runId, {
+          sandboxId,
+          sandboxState: run.sandboxState ?? "running",
+          updatedAt: now,
+        })
+        await ctx.db.patch(run.threadId, {
+          sandboxId,
+          sandboxState: run.sandboxState ?? "running",
+          updatedAt: now,
+        })
+      }
+      return { canceled: true }
+    }
+
     const nextLogs = compactRunLogs([...(run.logs ?? []), ...args.logs])
     const now = Date.now()
     await ctx.db.patch(args.runId, {
@@ -645,27 +702,29 @@ export const workerFail = mutation({
 
     const now = Date.now()
     const runLogs = compactRunLogs(run.logs)
-    await ctx.db.patch(args.runId, {
-      content: args.error,
-      error: args.error,
-      finishedAt: now,
-      ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
-      ...(args.sandboxId ? { sandboxState: "running" as const } : {}),
-      status: "failed",
-      updatedAt: now,
-    })
-    await ctx.db.patch(run.assistantMessageId, {
-      content: args.error,
-      error: true,
-      meta: runLogs.length ? { logs: runLogs } : undefined,
-      pending: false,
-    })
-    await ctx.db.patch(run.threadId, {
-      hasPendingMessage: false,
-      ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
-      ...(args.sandboxId ? { sandboxState: "running" as const } : {}),
-      updatedAt: now,
-    })
+    await Promise.all([
+      ctx.db.patch(args.runId, {
+        content: args.error,
+        error: args.error,
+        finishedAt: now,
+        ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
+        ...(args.sandboxId ? { sandboxState: "running" as const } : {}),
+        status: "failed",
+        updatedAt: now,
+      }),
+      ctx.db.patch(run.assistantMessageId, {
+        content: args.error,
+        error: true,
+        meta: runLogs.length ? { logs: runLogs } : undefined,
+        pending: false,
+      }),
+      ctx.db.patch(run.threadId, {
+        hasPendingMessage: false,
+        ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
+        ...(args.sandboxId ? { sandboxState: "running" as const } : {}),
+        updatedAt: now,
+      }),
+    ])
 
     return { canceled: false }
   },
@@ -674,12 +733,13 @@ export const workerFail = mutation({
 export const workerCancel = mutation({
   args: {
     runId: v.id("codexRuns"),
+    sandboxId: v.optional(v.string()),
     workerSecret: v.string(),
   },
   handler: async (ctx, args) => {
     requireWorkerSecret(args.workerSecret)
     const run = await ctx.db.get(args.runId)
     if (!run) return
-    await markRunCanceled(ctx, run)
+    await markRunCanceled(ctx, run, "_Stopped._", args.sandboxId)
   },
 })

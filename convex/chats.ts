@@ -284,28 +284,31 @@ export const appendRunMessages = mutation({
     await requireOwnedThread(ctx, args.threadId, userId)
     const now = Date.now()
 
-    await ctx.db.insert("messages", {
-      content: args.prompt,
-      role: "user",
-      threadId: args.threadId,
-      userId,
-    })
-
-    const assistantMessageId = await ctx.db.insert("messages", {
-      content: "",
-      pending: true,
-      role: "assistant",
-      speed: args.speed,
-      thinking: args.thinking,
-      threadId: args.threadId,
-      userId,
-    })
-
-    await ctx.db.patch(args.threadId, {
-      hasPendingMessage: true,
-      lastUserMessageAt: now,
-      updatedAt: now,
-    })
+    const [assistantMessageId] = await Promise.all([
+      ctx.db
+        .insert("messages", {
+          content: args.prompt,
+          role: "user",
+          threadId: args.threadId,
+          userId,
+        })
+        .then(() =>
+          ctx.db.insert("messages", {
+            content: "",
+            pending: true,
+            role: "assistant",
+            speed: args.speed,
+            thinking: args.thinking,
+            threadId: args.threadId,
+            userId,
+          })
+        ),
+      ctx.db.patch(args.threadId, {
+        hasPendingMessage: true,
+        lastUserMessageAt: now,
+        updatedAt: now,
+      }),
+    ])
 
     return { assistantMessageId }
   },
@@ -323,9 +326,11 @@ export const completeAssistantMessage = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
-    await requireOwnedThread(ctx, args.threadId, userId)
 
-    const message = await ctx.db.get(args.messageId)
+    const [, message] = await Promise.all([
+      requireOwnedThread(ctx, args.threadId, userId),
+      ctx.db.get(args.messageId),
+    ])
     if (
       !message ||
       message.threadId !== args.threadId ||
@@ -343,22 +348,24 @@ export const completeAssistantMessage = mutation({
           }
         : undefined
 
-    await ctx.db.patch(args.messageId, {
-      content: args.content,
-      error: args.error,
-      meta: nextMeta,
-      pending: false,
-    })
-    await ctx.db.patch(args.threadId, {
-      hasPendingMessage: false,
-      ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
-      ...(args.sandboxState
-        ? { sandboxState: args.sandboxState }
-        : args.sandboxId
-          ? { sandboxState: "running" as const }
-          : {}),
-      updatedAt: Date.now(),
-    })
+    await Promise.all([
+      ctx.db.patch(args.messageId, {
+        content: args.content,
+        error: args.error,
+        meta: nextMeta,
+        pending: false,
+      }),
+      ctx.db.patch(args.threadId, {
+        hasPendingMessage: false,
+        ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
+        ...(args.sandboxState
+          ? { sandboxState: args.sandboxState }
+          : args.sandboxId
+            ? { sandboxState: "running" as const }
+            : {}),
+        updatedAt: Date.now(),
+      }),
+    ])
   },
 })
 
@@ -397,13 +404,13 @@ export const clearSandbox = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
-    await requireOwnedThread(ctx, args.threadId, userId)
-
-    await ctx.db.patch(args.threadId, {
-      sandboxId: undefined,
-      sandboxState: "deleted",
-      updatedAt: Date.now(),
-    })
+    await requireOwnedThread(ctx, args.threadId, userId).then(() =>
+      ctx.db.patch(args.threadId, {
+        sandboxId: undefined,
+        sandboxState: "deleted",
+        updatedAt: Date.now(),
+      })
+    )
   },
 })
 
@@ -434,25 +441,29 @@ export const deleteThread = mutation({
     threadId: v.id("threads"),
   },
   handler: async (ctx, args) => {
-    const userId = await ensureCurrentUser(ctx)
-    await requireOwnedThread(ctx, args.threadId, userId)
-
-    const messages = await ctx.db
-      .query("messages")
-      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
-      .collect()
-    const runs = await ctx.db
-      .query("codexRuns")
-      .withIndex("by_thread_updated", (q) => q.eq("threadId", args.threadId))
-      .collect()
-
-    for (const run of runs) {
-      await ctx.db.delete(run._id)
-    }
-    for (const message of messages) {
-      await ctx.db.delete(message._id)
-    }
-
-    await ctx.db.delete(args.threadId)
+    await ensureCurrentUser(ctx).then((userId) =>
+      requireOwnedThread(ctx, args.threadId, userId)
+        .then(() =>
+          Promise.all([
+            ctx.db
+              .query("messages")
+              .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+              .collect(),
+            ctx.db
+              .query("codexRuns")
+              .withIndex("by_thread_updated", (q) =>
+                q.eq("threadId", args.threadId)
+              )
+              .collect(),
+          ])
+        )
+        .then(([messages, runs]) =>
+          Promise.all([
+            ...runs.map((run) => ctx.db.delete(run._id)),
+            ...messages.map((message) => ctx.db.delete(message._id)),
+          ])
+        )
+        .then(() => ctx.db.delete(args.threadId))
+    )
   },
 })

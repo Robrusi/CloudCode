@@ -774,31 +774,34 @@ async function createDefaultBranch(
   paths: DaytonaSandboxPaths,
   branchName: string
 ) {
-  let lastError: unknown
-
-  for (const candidate of shuffledCityBranchNames(branchName)) {
+  const tryCandidates = async (
+    candidates: string[],
+    index = 0,
+    lastError?: unknown
+  ): Promise<string> => {
+    const candidate = candidates[index]
+    if (!candidate) {
+      throw lastError instanceof Error
+        ? lastError
+        : new Error("Unable to create a default branch.")
+    }
     try {
       await createBranch(sandbox, input, paths, candidate)
       return candidate
     } catch (error) {
-      lastError = error
+      return tryCandidates(candidates, index + 1, error)
     }
   }
 
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const candidate = defaultBranchNameWithSuffix()
-
-    try {
-      await createBranch(sandbox, input, paths, candidate)
-      return candidate
-    } catch (error) {
-      lastError = error
-    }
+  try {
+    return await tryCandidates(shuffledCityBranchNames(branchName))
+  } catch (error) {
+    return tryCandidates(
+      Array.from({ length: 5 }, () => defaultBranchNameWithSuffix()),
+      0,
+      error
+    )
   }
-
-  throw lastError instanceof Error
-    ? lastError
-    : new Error("Unable to create a default branch.")
 }
 
 async function connectOrCreateSandbox(input: RunCodexInSandboxInput) {
@@ -1027,22 +1030,22 @@ async function prepareSandboxRuntime(
     ].join(" && "),
     { signal: input.signal, timeoutMs: 10_000 }
   )
-  await installDaytonaTarWrapper(sandbox, paths)
-  await writeDaytonaTextFile(
-    sandbox,
-    paths.presetEnvPath,
-    presetProfileSnippet(paths, input.sandboxPreset)
-  )
   const runtimeProfile = runtimeShellProfileSnippet(paths, input.sandboxPreset)
-  await Promise.all(
-    [".bash_profile", ".bash_login", ".profile", ".bashrc"].map((file) =>
+  await Promise.all([
+    installDaytonaTarWrapper(sandbox, paths),
+    writeDaytonaTextFile(
+      sandbox,
+      paths.presetEnvPath,
+      presetProfileSnippet(paths, input.sandboxPreset)
+    ),
+    ...[".bash_profile", ".bash_login", ".profile", ".bashrc"].map((file) =>
       writeDaytonaTextFile(
         sandbox,
         `${paths.runtimeHome}/${file}`,
         runtimeProfile
       )
-    )
-  )
+    ),
+  ])
   await runDaytonaCommand(
     sandbox,
     [
@@ -1418,18 +1421,20 @@ async function cloneRepo({
   sandbox: Sandbox
   paths: DaytonaSandboxPaths
 }) {
-  await emitLog(input, {
-    detail: baseBranch ? `branch ${baseBranch}` : undefined,
-    kind: "command",
-    message: `git clone ${repoUrl}`,
-  })
-  await runDaytonaCommand(
-    sandbox,
-    `rm -rf ${shellQuote(paths.repoPath)} && mkdir -p ${shellQuote(
-      paths.repoPath.replace(/\/[^/]+$/, "")
-    )}`,
-    { signal: input.signal, timeoutMs: 60_000 }
-  )
+  await Promise.all([
+    emitLog(input, {
+      detail: baseBranch ? `branch ${baseBranch}` : undefined,
+      kind: "command",
+      message: `git clone ${repoUrl}`,
+    }),
+    runDaytonaCommand(
+      sandbox,
+      `rm -rf ${shellQuote(paths.repoPath)} && mkdir -p ${shellQuote(
+        paths.repoPath.replace(/\/[^/]+$/, "")
+      )}`,
+      { signal: input.signal, timeoutMs: 60_000 }
+    ),
+  ])
   await sandbox.git.clone(
     repoUrl,
     paths.repoPath,
@@ -1443,7 +1448,7 @@ async function cloneRepo({
     return requestedBranchName
   }
 
-  return await createDefaultBranch(sandbox, input, paths, branchName)
+  return createDefaultBranch(sandbox, input, paths, branchName)
 }
 
 async function prepareExistingRepoForFreshRun({
@@ -1528,35 +1533,40 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     "codexThreadId"
   )
 
-  await emitLog(input, {
-    kind: "setup",
-    message: input.sandboxId
-      ? input.preparedSandboxFresh
-        ? "Connecting to prepared Daytona sandbox"
-        : "Connecting to Daytona sandbox"
-      : input.sandboxPreset?.daytonaSnapshot
-        ? "Creating Daytona sandbox from preset snapshot"
-        : "Creating Daytona sandbox",
-  })
-
-  const { createdSandbox, recoveredSandbox, sandbox } =
-    await connectOrCreateSandbox(input)
+  const [, sandboxConnection] = await Promise.all([
+    emitLog(input, {
+      kind: "setup",
+      message: input.sandboxId
+        ? input.preparedSandboxFresh
+          ? "Connecting to prepared Daytona sandbox"
+          : "Connecting to Daytona sandbox"
+        : input.sandboxPreset?.daytonaSnapshot
+          ? "Creating Daytona sandbox from preset snapshot"
+          : "Creating Daytona sandbox",
+    }),
+    connectOrCreateSandbox(input),
+  ])
+  const { createdSandbox, recoveredSandbox, sandbox } = sandboxConnection
   const paths = await resolveDaytonaPaths(sandbox)
 
   try {
-    await emitLog(input, {
-      detail: sandbox.id,
-      kind: "setup",
-      message: recoveredSandbox
-        ? "Recovered with a fresh Daytona sandbox"
-        : "Daytona sandbox ready",
-    })
-    await emitLog(input, {
-      detail: sandbox.snapshot,
-      kind: "setup",
-      message: `Sandbox resources: ${sandbox.cpu} CPU, ${sandbox.memory} GB RAM`,
-    })
-    await setDaytonaRunAutostop(sandbox, timeoutMs)
+    const repoAlreadyExistsPromise = repoExists(sandbox, paths)
+
+    await Promise.all([
+      emitLog(input, {
+        detail: sandbox.id,
+        kind: "setup",
+        message: recoveredSandbox
+          ? "Recovered with a fresh Daytona sandbox"
+          : "Daytona sandbox ready",
+      }),
+      emitLog(input, {
+        detail: sandbox.snapshot,
+        kind: "setup",
+        message: `Sandbox resources: ${sandbox.cpu} CPU, ${sandbox.memory} GB RAM`,
+      }),
+      setDaytonaRunAutostop(sandbox, timeoutMs),
+    ])
 
     const codexThreadIdToResume = !recoveredSandbox
       ? existingCodexThreadId
@@ -1582,29 +1592,37 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       await updateCodexCli(sandbox, input, paths)
     }
 
-    await emitLog(input, { kind: "setup", message: "Preparing Codex auth" })
-    await runDaytonaCommand(
-      sandbox,
-      `mkdir -p ${shellQuote(paths.codexHome)} && chmod 700 ${shellQuote(
-        paths.codexHome
-      )}`,
-      { signal: input.signal, timeoutMs: 10_000 }
-    )
-    await writeDaytonaTextFile(
-      sandbox,
-      `${paths.codexHome}/auth.json`,
-      input.authJson
-    )
-    await writeDaytonaTextFile(sandbox, paths.promptPath, prompt)
-    await runDaytonaCommand(
-      sandbox,
-      `chmod 600 ${shellQuote(`${paths.codexHome}/auth.json`)} ${shellQuote(
-        paths.promptPath
-      )}`,
-      { timeoutMs: 10_000 }
-    )
+    await Promise.all([
+      emitLog(input, { kind: "setup", message: "Preparing Codex auth" }),
+      runDaytonaCommand(
+        sandbox,
+        `mkdir -p ${shellQuote(paths.codexHome)} && chmod 700 ${shellQuote(
+          paths.codexHome
+        )}`,
+        { signal: input.signal, timeoutMs: 10_000 }
+      )
+        .then(() =>
+          Promise.all([
+            writeDaytonaTextFile(
+              sandbox,
+              `${paths.codexHome}/auth.json`,
+              input.authJson
+            ),
+            writeDaytonaTextFile(sandbox, paths.promptPath, prompt),
+          ])
+        )
+        .then(() =>
+          runDaytonaCommand(
+            sandbox,
+            `chmod 600 ${shellQuote(`${paths.codexHome}/auth.json`)} ${shellQuote(
+              paths.promptPath
+            )}`,
+            { timeoutMs: 10_000 }
+          )
+        ),
+    ])
 
-    const repoAlreadyExists = await repoExists(sandbox, paths)
+    const repoAlreadyExists = await repoAlreadyExistsPromise
     let preparedFreshRepo = false
     if (!repoAlreadyExists) {
       branchName = await cloneRepo({
@@ -1642,15 +1660,17 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       })
     }
     if (preparedFreshRepo && input.previousDiff?.trim()) {
-      await emitLog(input, {
-        kind: "command",
-        message: "git apply previous changes",
-      })
-      await writeDaytonaTextFile(
-        sandbox,
-        paths.previousDiffPath,
-        input.previousDiff
-      )
+      await Promise.all([
+        emitLog(input, {
+          kind: "command",
+          message: "git apply previous changes",
+        }),
+        writeDaytonaTextFile(
+          sandbox,
+          paths.previousDiffPath,
+          input.previousDiff
+        ),
+      ])
       const applyResult = await runDaytonaCommand(
         sandbox,
         `git -C ${shellQuote(
@@ -1668,18 +1688,25 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       }
     }
 
-    await prepareSandboxRuntime(sandbox, input, paths)
-    await runPathInstallScript(sandbox, input, paths)
-    await runPresetInstallScript(sandbox, input, paths)
-
-    await emitLog(input, {
-      kind: "setup",
-      message: "Reading Codex CLI capabilities",
-    })
-    const help = await getCodexExecHelp(sandbox, paths)
-    const resumeHelp = codexThreadIdToResume
-      ? await getCodexResumeHelp(sandbox, paths)
-      : ""
+    const [help, resumeHelp] = await prepareSandboxRuntime(
+      sandbox,
+      input,
+      paths
+    )
+      .then(() => runPathInstallScript(sandbox, input, paths))
+      .then(() => runPresetInstallScript(sandbox, input, paths))
+      .then(() =>
+        Promise.all([
+          getCodexExecHelp(sandbox, paths),
+          codexThreadIdToResume
+            ? getCodexResumeHelp(sandbox, paths)
+            : Promise.resolve(""),
+          emitLog(input, {
+            kind: "setup",
+            message: "Reading Codex CLI capabilities",
+          }),
+        ])
+      )
     const modelFlag =
       model && (helpIncludes(help, "--model") || helpIncludes(help, "-m,"))
         ? `--model ${shellQuote(model)}`
@@ -1801,7 +1828,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       `export MISE_TRUSTED_CONFIG_PATHS=${shellQuote(paths.repoPath)}`,
       codexCommand,
       "code=$?",
-      `printf '\\n${EXIT_MARKER}%s\\n' \"$code\"`,
+      `printf '\\n${EXIT_MARKER}%s\\n' "$code"`,
       "exit 0",
     ].join("\n")
 
@@ -1833,22 +1860,27 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     )
     stdoutLogger.flush()
 
-    await emitLog(input, {
-      detail: String(result.exitCode),
-      kind: result.exitCode === 0 ? "setup" : "stderr",
-      message: `Codex exited with code ${result.exitCode}`,
-    })
-
-    await emitLog(input, {
-      kind: "command",
-      message: "git diff --binary base",
-    })
-    const lastMessage = await readLastMessage(sandbox, paths)
-    const updatedAuthJson = await readDaytonaTextFile(
-      sandbox,
-      `${paths.codexHome}/auth.json`
-    )
-    await cleanupRunFiles(sandbox, paths, input.signal)
+    const [, runArtifacts] = await Promise.all([
+      Promise.all([
+        emitLog(input, {
+          detail: String(result.exitCode),
+          kind: result.exitCode === 0 ? "setup" : "stderr",
+          message: `Codex exited with code ${result.exitCode}`,
+        }),
+        emitLog(input, {
+          kind: "command",
+          message: "git diff --binary base",
+        }),
+      ]),
+      Promise.all([
+        readLastMessage(sandbox, paths),
+        readDaytonaTextFile(sandbox, `${paths.codexHome}/auth.json`),
+      ]).then(async ([lastMessage, updatedAuthJson]) => {
+        await cleanupRunFiles(sandbox, paths, input.signal)
+        return { lastMessage, updatedAuthJson }
+      }),
+    ])
+    const { lastMessage, updatedAuthJson } = runArtifacts
 
     const target = createSandboxTarget(sandbox, paths, input.signal)
     const { diff, status } = await withoutCloudcodeEnvLocal(
@@ -1878,12 +1910,8 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
             }
           )
         ).stdout
-        await emitLog(input, {
-          kind: "command",
-          message: "git status --short --branch",
-        })
-        const status = (
-          await runDaytonaCommand(
+        const [status] = await Promise.all([
+          runDaytonaCommand(
             sandbox,
             `git -C ${shellQuote(paths.repoPath)} status --short --branch`,
             {
@@ -1891,8 +1919,12 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
               signal: input.signal,
               timeoutMs: 60_000,
             }
-          )
-        ).stdout
+          ).then((result) => result.stdout),
+          emitLog(input, {
+            kind: "command",
+            message: "git status --short --branch",
+          }),
+        ])
         await emitLog(input, {
           kind: "result",
           message:

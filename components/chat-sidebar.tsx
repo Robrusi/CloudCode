@@ -9,7 +9,7 @@ import {
   SquarePen,
   User,
 } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 
 import type { Id } from "@/convex/_generated/dataModel"
 import { cn } from "@/lib/utils"
@@ -294,6 +294,13 @@ function SidebarItem({
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(chat.title || "")
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!editing) return
+    inputRef.current?.focus()
+    inputRef.current?.select()
+  }, [editing])
 
   function startRename() {
     setDraft(chat.title || "")
@@ -321,7 +328,8 @@ function SidebarItem({
     >
       {editing ? (
         <input
-          autoFocus
+          ref={inputRef}
+          aria-label="Chat title"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={(e) => commit(e.target.value)}
@@ -390,8 +398,10 @@ function ContextMenu({
 }) {
   return (
     <>
-      <div
-        className="fixed inset-0 z-40"
+      <button
+        type="button"
+        aria-label="Close menu"
+        className="fixed inset-0 z-40 cursor-default border-0 bg-transparent p-0"
         onClick={onClose}
         onContextMenu={(e) => {
           e.preventDefault()
@@ -400,9 +410,9 @@ function ContextMenu({
       />
       <div
         role="menu"
+        tabIndex={-1}
         style={{ top: y, left: x }}
         className="fixed z-50 min-w-44 overflow-hidden rounded-2xl border border-black/[0.06] bg-popover p-1.5 text-popover-foreground shadow-[0_10px_30px_-12px_rgba(0,0,0,0.18)] dark:border-white/10"
-        onClick={(e) => e.stopPropagation()}
       >
         {items.map((item) => (
           <button

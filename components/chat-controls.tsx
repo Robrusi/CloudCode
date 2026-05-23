@@ -105,6 +105,7 @@ export function RepoChip({
         <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
         <input
           ref={inputRef}
+          aria-label="Repository URL"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={commit}
@@ -178,6 +179,7 @@ export function BranchChip({
         <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
         <input
           ref={inputRef}
+          aria-label="Branch name"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={commit}
