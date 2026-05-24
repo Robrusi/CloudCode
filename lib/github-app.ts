@@ -410,9 +410,16 @@ export function createGitHubAppInstallUrl({
   return url.toString()
 }
 
-export function createGitHubAppUserLoginUrl({ state }: { state: string }) {
+export function createGitHubAppUserLoginUrl({
+  redirectUri,
+  state,
+}: {
+  redirectUri: string
+  state: string
+}) {
   const url = new URL("https://github.com/login/oauth/authorize")
   url.searchParams.set("client_id", getGitHubAppClientId())
+  url.searchParams.set("redirect_uri", redirectUri)
   url.searchParams.set("state", state)
   url.searchParams.set("prompt", "select_account")
   return url.toString()
@@ -478,14 +485,23 @@ async function requestGitHubAppUserToken(body: URLSearchParams) {
   return normalizeUserTokenResponse(data)
 }
 
-async function exchangeGitHubAppUserCode({ code }: { code: string }) {
-  return requestGitHubAppUserToken(
-    new URLSearchParams({
-      client_id: getGitHubAppClientId(),
-      client_secret: getGitHubAppClientSecret(),
-      code,
-    })
-  )
+async function exchangeGitHubAppUserCode({
+  code,
+  redirectUri,
+}: {
+  code: string
+  redirectUri?: string
+}) {
+  const body = new URLSearchParams({
+    client_id: getGitHubAppClientId(),
+    client_secret: getGitHubAppClientSecret(),
+    code,
+  })
+  if (redirectUri) {
+    body.set("redirect_uri", redirectUri)
+  }
+
+  return requestGitHubAppUserToken(body)
 }
 
 async function refreshGitHubAppUserToken(refreshToken: string) {
@@ -603,11 +619,14 @@ async function saveGitHubAppUserAuth(input: {
 
 export async function completeGitHubAppUserAuthorization({
   code,
+  redirectUri,
 }: {
   code: string
+  redirectUri?: string
 }) {
   const token = await exchangeGitHubAppUserCode({
     code,
+    redirectUri,
   })
   const user = await fetchGitHubAppUser(token.token)
 
@@ -1010,7 +1029,7 @@ async function createGitHubInstallationAccessToken({
 }: {
   installationId: string
   permissions?: Record<string, "read" | "write">
-  repositoryIds?: string[]
+  repositoryIds?: number[]
   repositories?: string[]
 }) {
   const body = {
@@ -1209,11 +1228,17 @@ async function userRepoWriteAccess({
   })
 
   const repositoryId =
-    typeof data?.id === "number" || typeof data?.id === "string"
-      ? String(data.id)
-      : undefined
+    typeof data?.id === "number"
+      ? data.id
+      : typeof data?.id === "string"
+        ? Number(data.id)
+        : NaN
 
-  if (!data || !repositoryId || !hasGitHubWritePermission(data.permissions)) {
+  if (
+    !data ||
+    !Number.isFinite(repositoryId) ||
+    !hasGitHubWritePermission(data.permissions)
+  ) {
     return null
   }
 

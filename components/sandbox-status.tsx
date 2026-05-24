@@ -49,9 +49,11 @@ export type UseSandboxInfoResult = {
 }
 
 export function useSandboxInfo({
+  onMissing,
   onStateChange,
   sandboxId,
 }: {
+  onMissing?: (sandboxId: string) => void
   onStateChange?: (
     state: SandboxInfo["state"],
     sandboxId: string,
@@ -62,11 +64,13 @@ export function useSandboxInfo({
   const [info, setInfo] = useState<SandboxInfo | null>(null)
   const [missing, setMissing] = useState(false)
   const [loading, setLoading] = useState(true)
+  const onMissingRef = useRef(onMissing)
   const onStateChangeRef = useRef(onStateChange)
 
   useEffect(() => {
+    onMissingRef.current = onMissing
     onStateChangeRef.current = onStateChange
-  }, [onStateChange])
+  }, [onMissing, onStateChange])
 
   useEffect(() => {
     let cancelled = false
@@ -97,7 +101,9 @@ export function useSandboxInfo({
         const data = await res.json()
         if (cancelled) return
         if (!res.ok) {
-          setMissing(Boolean(data?.notFound))
+          const notFound = Boolean(data?.notFound)
+          setMissing(notFound)
+          if (notFound) onMissingRef.current?.(sandboxId)
           return
         }
         applyInfo(parseSandboxInfo(data))
@@ -124,6 +130,7 @@ export function useSandboxInfo({
           setInfo(null)
           setMissing(true)
           setLoading(false)
+          onMissingRef.current?.(sandboxId)
           source.close()
           return
         }

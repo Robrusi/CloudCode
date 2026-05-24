@@ -36,7 +36,7 @@ const MAX_STORED_RUN_LOGS = 80
 const MAX_STORED_LOG_MESSAGE_LENGTH = 500
 const MAX_STORED_LOG_DETAIL_LENGTH = 1_500
 const TERMINAL_RUN_STATUSES = new Set(["succeeded", "failed", "canceled"])
-const ACTIVE_RUN_STATUSES = new Set(["queued", "running"])
+const ACTIVE_RUN_STATUSES = new Set(["queued", "running", "canceling"])
 const STORED_LOG_KINDS = new Set<string>([
   "setup",
   "command",
@@ -488,11 +488,38 @@ export const cancelActiveForThread = mutation({
     ])
     if (!run) return null
 
-    const canceled = await markRunCanceled(ctx, run)
+    if (!run.triggerRunId) {
+      const canceled = await markRunCanceled(ctx, run)
+
+      return {
+        runId: run._id,
+        sandboxId: canceled.sandboxId,
+        triggerRunId: run.triggerRunId,
+      }
+    }
+
+    const now = Date.now()
+    const sandboxId = latestSandboxIdForRun(run)
+    const sandboxState =
+      run.sandboxState ?? (sandboxId ? ("running" as const) : undefined)
+    await Promise.all([
+      ctx.db.patch(run._id, {
+        ...(sandboxId ? { sandboxId } : {}),
+        ...(sandboxState ? { sandboxState } : {}),
+        status: "canceling",
+        updatedAt: now,
+      }),
+      ctx.db.patch(run.threadId, {
+        hasPendingMessage: true,
+        ...(sandboxId ? { sandboxId } : {}),
+        ...(sandboxState ? { sandboxState } : {}),
+        updatedAt: now,
+      }),
+    ])
 
     return {
       runId: run._id,
-      sandboxId: canceled.sandboxId,
+      sandboxId,
       triggerRunId: run.triggerRunId,
     }
   },
@@ -573,6 +600,10 @@ export const workerStartAndGetInput = mutation({
     const run = await ctx.db.get(args.runId)
     if (!run) throw new Error("Run not found.")
     if (run.status === "canceled") return { canceled: true as const }
+    if (run.status === "canceling") {
+      await markRunCanceled(ctx, run)
+      return { canceled: true as const }
+    }
     if (run.status !== "queued") {
       return { canceled: true as const }
     }
@@ -615,10 +646,11 @@ export const workerAppendLogs = mutation({
     if (!run) throw new Error("Run not found.")
 
     const sandboxId = args.logs.map(sandboxIdFromLog).find(Boolean)
-    if (run.status === "canceled") {
+    if (run.status === "canceled" || run.status === "canceling") {
       if (sandboxId && run.sandboxId !== sandboxId) {
         const now = Date.now()
         await ctx.db.patch(args.runId, {
+          logs: compactRunLogs([...(run.logs ?? []), ...args.logs]),
           sandboxId,
           sandboxState: run.sandboxState ?? "running",
           updatedAt: now,
@@ -663,7 +695,9 @@ export const workerUpdateContent = mutation({
     requireWorkerSecret(args.workerSecret)
     const run = await ctx.db.get(args.runId)
     if (!run) throw new Error("Run not found.")
-    if (run.status === "canceled") return { canceled: true }
+    if (run.status === "canceled" || run.status === "canceling") {
+      return { canceled: true }
+    }
 
     await ctx.db.patch(args.runId, {
       content: args.content,
@@ -691,6 +725,10 @@ export const workerComplete = mutation({
     const run = await ctx.db.get(args.runId)
     if (!run) throw new Error("Run not found.")
     if (run.status === "canceled") return { canceled: true }
+    if (run.status === "canceling") {
+      await markRunCanceled(ctx, run, "_Stopped._", args.sandboxId)
+      return { canceled: true }
+    }
 
     const now = Date.now()
     const nextStatus = args.exitCode === 0 ? "succeeded" : "failed"
@@ -759,6 +797,10 @@ export const workerFail = mutation({
     const run = await ctx.db.get(args.runId)
     if (!run) throw new Error("Run not found.")
     if (run.status === "canceled") return { canceled: true }
+    if (run.status === "canceling") {
+      await markRunCanceled(ctx, run, "_Stopped._", args.sandboxId)
+      return { canceled: true }
+    }
 
     const now = Date.now()
     const runLogs = compactRunLogs(run.logs)
