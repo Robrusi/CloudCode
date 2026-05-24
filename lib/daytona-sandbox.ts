@@ -18,6 +18,8 @@ const DEFAULT_DAYTONA_IMAGE =
   "mcr.microsoft.com/devcontainers/universal:2-linux"
 const DEFAULT_COMMAND_STATUS_POLL_MS = 2_000
 const DEFAULT_COMMAND_STATUS_MAX_POLL_MS = 5_000
+const DAYTONA_ACTIVITY_HEARTBEAT_MAX_MS = 60_000
+const DAYTONA_ACTIVITY_HEARTBEAT_MIN_MS = 15_000
 const DAYTONA_SYSTEM_PATH_ENTRIES = [
   "/home/codespace/.dotnet",
   "/home/codespace/nvm/current/bin",
@@ -164,11 +166,6 @@ export function defaultDaytonaSandboxResources() {
       Math.round(envNumber("DAYTONA_SANDBOX_MEMORY", DEFAULT_SANDBOX_MEMORY))
     ),
   }
-}
-
-function daytonaAutostopMinutesForRun(timeoutMs: number) {
-  const requested = Math.ceil(timeoutMs / 60_000) + 10
-  return Math.max(defaultDaytonaAutostopMinutes(), requested)
 }
 
 export function defaultDaytonaSnapshot() {
@@ -439,25 +436,35 @@ export async function resumeDaytonaSandbox(sandboxId: string) {
   return await readDaytonaSandboxInfo(sandboxId)
 }
 
-export async function setDaytonaRunAutostop(
-  sandbox: Sandbox,
-  timeoutMs: number
-) {
-  await sandbox
-    .setAutostopInterval(daytonaAutostopMinutesForRun(timeoutMs))
-    .catch(() => undefined)
-  await sandbox.refreshActivity().catch(() => undefined)
-}
+export function startDaytonaActivityHeartbeat(sandbox: Sandbox) {
+  const intervalMs = Math.min(
+    DAYTONA_ACTIVITY_HEARTBEAT_MAX_MS,
+    Math.max(
+      DAYTONA_ACTIVITY_HEARTBEAT_MIN_MS,
+      Math.floor((defaultDaytonaAutostopMinutes() * 60_000) / 2)
+    )
+  )
+  let stopped = false
 
-export async function restoreDaytonaAutostop(sandbox: Sandbox) {
-  await sandbox
-    .setAutostopInterval(defaultDaytonaAutostopMinutes())
-    .catch(() => undefined)
-  await sandbox.refreshActivity().catch(() => undefined)
+  const refreshActivity = () => {
+    if (stopped) return
+    void sandbox.refreshActivity().catch(() => undefined)
+  }
+
+  refreshActivity()
+  const heartbeat = setInterval(refreshActivity, intervalMs)
+  heartbeat.unref?.()
+
+  return () => {
+    stopped = true
+    clearInterval(heartbeat)
+  }
 }
 
 function timeoutSeconds(timeoutMs?: number) {
-  if (!timeoutMs) return undefined
+  if (!Number.isFinite(timeoutMs) || !timeoutMs || timeoutMs <= 0) {
+    return undefined
+  }
   return Math.max(1, Math.ceil(timeoutMs / 1000))
 }
 
@@ -586,13 +593,19 @@ async function waitForCommandExit(
   signal?: AbortSignal,
   timeoutMs?: number
 ) {
-  const deadline = Date.now() + (timeoutMs ?? 10 * 60 * 1000)
+  const deadline =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? Date.now() + timeoutMs
+      : undefined
   const initialPollMs = commandStatusPollMs()
   const maxPollMs = commandStatusMaxPollMs()
   let pollMs = initialPollMs
   let command = await sandbox.process.getSessionCommand(sessionId, commandId)
 
-  while (command.exitCode === undefined && Date.now() < deadline) {
+  while (
+    command.exitCode === undefined &&
+    (deadline === undefined || Date.now() < deadline)
+  ) {
     if (signal?.aborted) {
       await sandbox.process.deleteSession(sessionId).catch(() => undefined)
       throw new Error("Run was canceled.")
