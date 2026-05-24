@@ -149,6 +149,10 @@ function isLegacyDefaultPreset(
   )
 }
 
+function isAutoPreset(preset: { mode?: "manual" | "auto" }) {
+  return preset.mode === "auto"
+}
+
 export const list = query({
   args: {},
   handler: async (ctx) => {
@@ -787,7 +791,10 @@ export const remove = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
-    await requireOwnedPreset(ctx, args.presetId, userId)
+    const preset = await requireOwnedPreset(ctx, args.presetId, userId)
+    if (isAutoPreset(preset)) {
+      throw new Error("Auto environment presets cannot be deleted.")
+    }
 
     const secrets = await ctx.db
       .query("sandboxPresetSecrets")
@@ -834,7 +841,10 @@ export const upsertSecret = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
-    await requireOwnedPreset(ctx, args.presetId, userId)
+    const preset = await requireOwnedPreset(ctx, args.presetId, userId)
+    if (isAutoPreset(preset)) {
+      throw new Error("Secrets cannot be added to auto environment presets.")
+    }
 
     const name = cleanEnvName(args.name)
     const value = args.value

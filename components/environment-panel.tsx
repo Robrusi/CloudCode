@@ -608,9 +608,6 @@ function RowIconButton({
 function EmptyState({ onAdd }: { onAdd: () => void }) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-border/60 bg-background px-6 py-10 text-center">
-      <div className="flex size-9 items-center justify-center rounded-full border border-dashed border-border/70 text-muted-foreground">
-        <Plus className="size-4" />
-      </div>
       <div className="flex flex-col gap-0.5">
         <p className="text-xs font-medium text-foreground/80">No secrets yet</p>
         <p className="text-[11px] text-muted-foreground">
