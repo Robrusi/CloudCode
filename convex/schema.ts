@@ -44,6 +44,7 @@ const sandboxSnapshotStatus = v.union(
 const codexRunStatus = v.union(
   v.literal("queued"),
   v.literal("running"),
+  v.literal("canceling"),
   v.literal("succeeded"),
   v.literal("failed"),
   v.literal("canceled")

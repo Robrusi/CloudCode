@@ -149,7 +149,7 @@ async function threadSummaryRecord(ctx: QueryCtx, thread: Doc<"threads">) {
     codexThreadId: thread.codexThreadId,
     createdAt: thread.createdAt,
     id: thread._id,
-    lastUserMessageAt: thread.lastUserMessageAt ?? thread.updatedAt,
+    lastUserMessageAt: thread.lastUserMessageAt ?? thread.createdAt,
     messages: [],
     model: thread.model,
     pending: Boolean(thread.hasPendingMessage),

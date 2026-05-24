@@ -685,7 +685,7 @@ function ChatInner() {
             Boolean(runningRunKeys[chat.id as string]) ||
             Boolean(chat.pending) ||
             chat.messages.some((m) => m.pending),
-          lastUserMessageAt: chat.lastUserMessageAt || chat.updatedAt,
+          lastUserMessageAt: chat.lastUserMessageAt ?? chat.createdAt,
         }
       }),
     [chats, liveActiveRunState, liveRunStates, runningRunKeys, visibleLiveRun]
@@ -1593,6 +1593,30 @@ function ChatInner() {
     })
   }
 
+  function handleSandboxMissing(sandboxId: string) {
+    if (!active) return
+
+    const key = active.id as string
+    const currentSandboxId =
+      threadRunStateRef.current[key]?.sandboxId ?? active.sandboxId
+    if (currentSandboxId !== sandboxId) return
+
+    mergeThreadRunState(active.id, {
+      sandboxId,
+      sandboxState: "deleted",
+    })
+
+    if (activeRunPending) return
+
+    void saveRunState({
+      sandboxId,
+      sandboxState: "deleted",
+      threadId: active.id,
+    }).catch((error) => {
+      console.warn("Unable to save missing sandbox state.", error)
+    })
+  }
+
   function onSubmit(e: FormEvent) {
     e.preventDefault()
     send(input)
@@ -1779,6 +1803,7 @@ function ChatInner() {
           terminalOpen={terminalVisible}
           onToggleTerminal={() => setTerminalOpen((v) => !v)}
           onSandboxStateChange={handleSandboxStateChange}
+          onSandboxMissing={handleSandboxMissing}
           sandboxAction={sandboxAction}
           onDeleteSandbox={requestDeleteActiveSandbox}
           onPauseSandbox={pauseActiveSandbox}
@@ -1981,6 +2006,7 @@ function TopBar({
   canOpenFiles,
   onToggleFiles,
   onSandboxStateChange,
+  onSandboxMissing,
   sandboxAction,
   onDeleteSandbox,
   onPauseSandbox,
@@ -2001,6 +2027,7 @@ function TopBar({
   canOpenFiles: boolean
   onToggleFiles: () => void
   onSandboxStateChange: (state: SandboxState, sandboxId: string) => void
+  onSandboxMissing: (sandboxId: string) => void
   sandboxAction: SandboxAction | null
   onDeleteSandbox: () => void
   onPauseSandbox: () => void
@@ -2056,6 +2083,7 @@ function TopBar({
             sandboxState={sandboxState}
             sandboxAction={sandboxAction}
             onSandboxStateChange={onSandboxStateChange}
+            onSandboxMissing={onSandboxMissing}
             onPauseSandbox={onPauseSandbox}
             onResumeSandbox={onResumeSandbox}
             onDeleteSandbox={onDeleteSandbox}
@@ -2353,6 +2381,7 @@ function SandboxMenu({
   sandboxState,
   sandboxAction,
   onSandboxStateChange,
+  onSandboxMissing,
   onPauseSandbox,
   onResumeSandbox,
   onDeleteSandbox,
@@ -2362,11 +2391,13 @@ function SandboxMenu({
   sandboxState?: SandboxState
   sandboxAction: SandboxAction | null
   onSandboxStateChange: (state: SandboxState, sandboxId: string) => void
+  onSandboxMissing: (sandboxId: string) => void
   onPauseSandbox: () => void
   onResumeSandbox: () => void
   onDeleteSandbox: () => void
 }) {
   const { info, loading, missing } = useSandboxInfo({
+    onMissing: onSandboxMissing,
     onStateChange: onSandboxStateChange,
     sandboxId,
   })
@@ -2400,12 +2431,14 @@ function SandboxMenu({
   }
 
   let display: DisplayState
-  if (sandboxPending && sandboxId && !info) {
-    display = "running"
-  } else if (sandboxPending && !sandboxId) {
+  if (sandboxPending && missing) {
     display = "starting"
   } else if (missing) {
     display = "deleted"
+  } else if (sandboxPending && sandboxId && !info) {
+    display = "running"
+  } else if (sandboxPending && !sandboxId) {
+    display = "starting"
   } else if (info) {
     display = info.state
   } else if (sandboxState === "deleted") {
