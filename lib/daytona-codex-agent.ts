@@ -19,10 +19,9 @@ import {
   installDaytonaTarWrapper,
   readDaytonaTextFile,
   resolveDaytonaPaths,
-  restoreDaytonaAutostop,
   runDaytonaCommand,
-  setDaytonaRunAutostop,
   shellQuote,
+  startDaytonaActivityHeartbeat,
   writeDaytonaTextFile,
   type DaytonaCommandResult,
   type DaytonaSandboxPaths,
@@ -42,7 +41,6 @@ import {
 } from "./sandbox-github-auth"
 
 const EXIT_MARKER = "__CLOUDCODE_CODEX_EXIT__"
-const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60 * 1000
 const CODEX_UPDATE_TIMEOUT_MS = 3 * 60 * 1000
 const PRESET_INSTALL_TIMEOUT_MS = 10 * 60 * 1000
 const MISE_CONFIG_FILES = [
@@ -104,7 +102,6 @@ export type RunCodexInSandboxInput = {
   signal?: AbortSignal
   speed?: CodexSpeed
   threadId?: string
-  timeoutMs?: number
 }
 
 export type RunCodexInSandboxResult = {
@@ -1564,7 +1561,6 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
   let branchName = requestedBranchName ?? defaultBranchName()
   const githubToken = input.githubToken?.trim()
   const speed = parseSpeed(input.speed)
-  const timeoutMs = input.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS
   const existingCodexThreadId = parseOpaqueId(
     input.codexThreadId,
     "codexThreadId"
@@ -1593,8 +1589,10 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
   })
   const paths = await resolveDaytonaPaths(sandbox)
   let gitAuth: SandboxGitHubAuth | null = null
+  let stopDaytonaActivityHeartbeat: (() => void) | undefined
 
   try {
+    stopDaytonaActivityHeartbeat = startDaytonaActivityHeartbeat(sandbox)
     gitAuth = await setupSandboxGitHubAuth({
       githubToken,
       githubUserEmail: input.githubUserEmail,
@@ -1607,14 +1605,11 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     })
     const repoAlreadyExistsPromise = repoExists(sandbox, paths)
 
-    await Promise.all([
-      emitLog(input, {
-        detail: sandbox.snapshot,
-        kind: "setup",
-        message: `Sandbox resources: ${sandbox.cpu} CPU, ${sandbox.memory} GB RAM`,
-      }),
-      setDaytonaRunAutostop(sandbox, timeoutMs),
-    ])
+    await emitLog(input, {
+      detail: sandbox.snapshot,
+      kind: "setup",
+      message: `Sandbox resources: ${sandbox.cpu} CPU, ${sandbox.memory} GB RAM`,
+    })
 
     const codexThreadIdToResume = !recoveredSandbox
       ? existingCodexThreadId
@@ -1915,7 +1910,6 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         },
         onStdout: (data) => stdoutLogger.chunk(data),
         signal: input.signal,
-        timeoutMs,
       }),
       paths
     )
@@ -2013,13 +2007,10 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       recoveredSandbox,
     } satisfies RunCodexInSandboxResult
   } finally {
-    try {
-      await Promise.all([
-        cleanupRunFiles(sandbox, paths, input.signal),
-        gitAuth?.cleanup() ?? Promise.resolve(),
-      ])
-    } finally {
-      await restoreDaytonaAutostop(sandbox)
-    }
+    stopDaytonaActivityHeartbeat?.()
+    await Promise.all([
+      cleanupRunFiles(sandbox, paths, input.signal),
+      gitAuth?.cleanup() ?? Promise.resolve(),
+    ])
   }
 }
