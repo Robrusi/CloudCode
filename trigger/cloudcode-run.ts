@@ -9,6 +9,7 @@ import {
   completeWorkerRun,
   failWorkerRun,
   getWorkerSecret,
+  isWorkerRunCanceledError,
   saveWorkerAuthJson,
   startAndLoadWorkerRun,
   updateWorkerRunContent,
@@ -52,6 +53,7 @@ async function withMutationRetries<T>(
     try {
       return await operation()
     } catch (error) {
+      if (isWorkerRunCanceledError(error)) throw error
       const delay = MUTATION_RETRY_DELAYS_MS[attempt]
       if (delay === undefined) {
         throw error instanceof Error ? error : new Error(`Unable to ${label}.`)
@@ -94,6 +96,7 @@ function createLogBuffer(
       })
       .catch((error) => {
         flushError = error
+        if (isWorkerRunCanceledError(error)) throw error
         pending.unshift(...logs)
         console.warn("Unable to append Codex run logs.", error)
         scheduleFlush()
@@ -120,11 +123,16 @@ function createLogBuffer(
 
   return {
     emit(log: RunCodexLog) {
+      if (isWorkerRunCanceledError(flushError)) throw flushError
       const sandboxId = sandboxIdFromLog(log)
       if (sandboxId) onSandboxId(sandboxId)
 
       pending.push({ ...log, time: Date.now() })
-      if (pending.length >= LOG_BATCH_SIZE) {
+      if (sandboxId) {
+        void flush().catch((error) => {
+          flushError = error
+        })
+      } else if (pending.length >= LOG_BATCH_SIZE) {
         void flush().catch((error) => {
           flushError = error
         })
@@ -135,6 +143,7 @@ function createLogBuffer(
       const deadline = Date.now() + FINAL_FLUSH_TIMEOUT_MS
 
       const flushUntilDone = async (): Promise<void> => {
+        if (isWorkerRunCanceledError(flushError)) throw flushError
         if ((pending.length === 0 && !flushPromise) || Date.now() >= deadline) {
           return
         }
@@ -198,6 +207,7 @@ function createContentBuffer(
       })
       .catch((error) => {
         flushError = error
+        if (isWorkerRunCanceledError(error)) return
         console.warn("Unable to update Codex run content.", error)
         scheduleFlush(500)
       })
@@ -222,6 +232,7 @@ function createContentBuffer(
   }
 
   const appendRaw = (value: string, options: { immediate?: boolean } = {}) => {
+    if (isWorkerRunCanceledError(flushError)) throw flushError
     if (!value) return
     content += value
     if (
@@ -251,6 +262,7 @@ function createContentBuffer(
       const deadline = Date.now() + FINAL_FLUSH_TIMEOUT_MS
 
       const flushUntilDone = async (): Promise<void> => {
+        if (isWorkerRunCanceledError(flushError)) throw flushError
         if (
           (content === flushedContent && !flushPromise) ||
           Date.now() >= deadline
@@ -380,7 +392,7 @@ export const cloudcodeRun = task({
     } catch (error) {
       await Promise.allSettled([logBuffer.flush(), contentBuffer.flush()])
 
-      if (signal.aborted) {
+      if (signal.aborted || isWorkerRunCanceledError(error)) {
         await cancelWorkerRun(client, payload.runId, latestSandboxId)
         return { canceled: true }
       }

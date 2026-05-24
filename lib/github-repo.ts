@@ -6,8 +6,13 @@ export type GitHubRepo = {
 export function parseGitHubRepoUrl(input: string): GitHubRepo | null {
   const value = input.trim().replace(/\.git$/, "")
 
-  const shorthand = value.match(/^git@github\.com:([^/\s]+)\/([^/\s]+?)\/?$/i)
-  if (shorthand) return { owner: shorthand[1], repo: shorthand[2] }
+  const sshShorthand = value.match(
+    /^git@github\.com:([^/\s]+)\/([^/\s]+?)\/?$/i
+  )
+  if (sshShorthand) return { owner: sshShorthand[1], repo: sshShorthand[2] }
+
+  const ownerRepo = value.match(/^([^/\s:@]+)\/([^/\s:@]+?)\/?$/)
+  if (ownerRepo) return { owner: ownerRepo[1], repo: ownerRepo[2] }
 
   try {
     const url = new URL(value)

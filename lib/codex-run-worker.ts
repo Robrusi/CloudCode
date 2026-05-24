@@ -57,6 +57,13 @@ type WorkerRunInputResponse =
       sandboxPreset?: WorkerPresetRecord
     }
 
+export class WorkerRunCanceledError extends Error {
+  constructor() {
+    super("Codex run was canceled.")
+    this.name = "WorkerRunCanceledError"
+  }
+}
+
 export type LoadedWorkerRun = {
   authJson: string
   input: Omit<
@@ -67,6 +74,23 @@ export type LoadedWorkerRun = {
   }
   profile?: string
   userId: Id<"users">
+}
+
+export function isWorkerRunCanceledError(
+  error: unknown
+): error is WorkerRunCanceledError {
+  return error instanceof WorkerRunCanceledError
+}
+
+function throwIfCanceled(response: unknown) {
+  if (
+    response &&
+    typeof response === "object" &&
+    "canceled" in response &&
+    response.canceled === true
+  ) {
+    throw new WorkerRunCanceledError()
+  }
 }
 
 function getConvexUrl() {
@@ -145,9 +169,11 @@ export async function startAndLoadWorkerRun(
       reasoningEffort: response.run.reasoningEffort,
       repoUrl: response.run.repoUrl,
       resumeContext: response.run.resumeContext,
+      runId: runId as string,
       sandboxId: response.run.sandboxId,
       sandboxPreset,
       speed: response.run.speed,
+      threadId: response.run.threadId as string,
     },
     profile: response.run.profile,
     userId: response.run.userId,
@@ -159,11 +185,13 @@ export async function appendWorkerRunLogs(
   runId: Id<"codexRuns">,
   logs: Array<RunCodexLog & { time: number }>
 ) {
-  return await client.mutation(api.codexRuns.workerAppendLogs, {
+  const response = await client.mutation(api.codexRuns.workerAppendLogs, {
     logs,
     runId,
     workerSecret: getWorkerSecret(),
   })
+  throwIfCanceled(response)
+  return response
 }
 
 export async function updateWorkerRunContent(
@@ -171,11 +199,13 @@ export async function updateWorkerRunContent(
   runId: Id<"codexRuns">,
   content: string
 ) {
-  return await client.mutation(api.codexRuns.workerUpdateContent, {
+  const response = await client.mutation(api.codexRuns.workerUpdateContent, {
     content,
     runId,
     workerSecret: getWorkerSecret(),
   })
+  throwIfCanceled(response)
+  return response
 }
 
 export async function completeWorkerRun(
@@ -184,7 +214,7 @@ export async function completeWorkerRun(
   content: string,
   result: RunCodexInSandboxResult
 ) {
-  return await client.mutation(api.codexRuns.workerComplete, {
+  const response = await client.mutation(api.codexRuns.workerComplete, {
     branchName: result.branchName,
     codexThreadId: result.codexThreadId,
     content,
@@ -195,6 +225,8 @@ export async function completeWorkerRun(
     statusText: result.status,
     workerSecret: getWorkerSecret(),
   })
+  throwIfCanceled(response)
+  return response
 }
 
 export async function failWorkerRun(

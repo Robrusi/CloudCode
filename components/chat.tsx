@@ -484,6 +484,8 @@ function ChatInner() {
     null
   )
   const [githubAuthError, setGithubAuthError] = useState("")
+  const cancelRequestedThreadIdsRef = useRef<Set<string>>(new Set())
+  const queueingRunKeysRef = useRef<Set<string>>(new Set())
   const runningRunKeysRef = useRef<Set<string>>(new Set())
   const liveRevealRef = useRef<
     Record<
@@ -934,12 +936,15 @@ function ChatInner() {
     for (const chat of chats) {
       const key = chat.id as string
       const stillRunning =
+        queueingRunKeysRef.current.has(key) ||
         key === liveThreadKey ||
         Boolean(chat.pending) ||
         chat.messages.some((message) => message.pending)
 
       if (!stillRunning && nextKeys[key]) {
         delete nextKeys[key]
+        cancelRequestedThreadIdsRef.current.delete(key)
+        queueingRunKeysRef.current.delete(key)
         runningRunKeysRef.current.delete(key)
         changed = true
       }
@@ -1108,6 +1113,10 @@ function ChatInner() {
   function transferRunKey(previousKey: string, nextKey: string) {
     if (previousKey === nextKey) return nextKey
 
+    if (queueingRunKeysRef.current.has(previousKey)) {
+      queueingRunKeysRef.current.delete(previousKey)
+      queueingRunKeysRef.current.add(nextKey)
+    }
     runningRunKeysRef.current.delete(previousKey)
     runningRunKeysRef.current.add(nextKey)
     setRunningRunKeys((current) => {
@@ -1127,6 +1136,7 @@ function ChatInner() {
   }
 
   function clearRunKey(runKey: string) {
+    queueingRunKeysRef.current.delete(runKey)
     runningRunKeysRef.current.delete(runKey)
     setRunningRunKeys((current) => {
       if (!current[runKey]) return current
@@ -1304,6 +1314,7 @@ function ChatInner() {
 
     setInput("")
 
+    queueingRunKeysRef.current.add(runKey)
     markRunActive(runKey)
     showOptimisticRun(
       runKey,
@@ -1397,6 +1408,9 @@ function ChatInner() {
       }
 
       queued = true
+      if (cancelRequestedThreadIdsRef.current.has(chatId as string)) {
+        await cancelCodexRun(chatId)
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Request failed."
       if (chatId && assistantMessageId) {
@@ -1421,19 +1435,36 @@ function ChatInner() {
         clearOptimisticRun(runKey)
       }
     } finally {
-      if (!queued) clearRunKey(runKey)
+      queueingRunKeysRef.current.delete(runKey)
+      if (!queued) {
+        cancelRequestedThreadIdsRef.current.delete(runKey)
+        clearRunKey(runKey)
+      }
     }
   }
 
   async function cancelCodexRun(threadId: Id<"threads">) {
-    clearRunKey(threadId as string)
-    await fetch("/api/codex-run/cancel", {
+    const key = threadId as string
+    cancelRequestedThreadIdsRef.current.add(key)
+    markRunActive(key)
+
+    const res = await fetch("/api/codex-run/cancel", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ threadId }),
     }).catch((error) => {
       console.warn("Unable to cancel Codex run.", error)
+      return null
     })
+
+    if (!res?.ok) return
+
+    const data = (await res.json().catch(() => null)) as {
+      canceled?: boolean
+    } | null
+    if (data?.canceled === false) {
+      return
+    }
   }
 
   function stopActiveRun() {
@@ -1717,6 +1748,7 @@ function ChatInner() {
             <span aria-hidden className="h-3.5 w-px bg-border/70" />
             <BranchChip
               value={baseBranch}
+              repoUrl={repoUrl}
               onChange={persistBaseBranch}
               locked={false}
             />
