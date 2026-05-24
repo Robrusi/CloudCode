@@ -1933,7 +1933,7 @@ function ChatInner() {
                 ref={composerRef}
                 className={cn(
                   "pointer-events-none absolute inset-x-0 z-10 flex justify-center bg-background px-4 pt-3 pb-6",
-                  activeFilePath && "hidden"
+                  (activeFilePath || allDiffsOpen) && "hidden"
                 )}
                 style={{ bottom: terminalVisible ? terminalHeight : 0 }}
               >
