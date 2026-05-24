@@ -16,6 +16,7 @@ import {
 } from "react"
 
 import type { Id } from "@/convex/_generated/dataModel"
+import { canonicalGitHubRepoUrl, parseGitHubRepoUrl } from "@/lib/github-repo"
 import { cn } from "@/lib/utils"
 
 const chipTrigger =
@@ -40,6 +41,8 @@ type GitHubRepoOption = {
 
 function repoLabel(url: string) {
   if (!url) return "Untitled"
+  const parsed = parseGitHubRepoUrl(url)
+  if (parsed) return `${parsed.owner}/${parsed.repo}`
   return url
     .replace(/^https?:\/\/(www\.)?github\.com\//, "")
     .replace(/\.git$/, "")
@@ -133,7 +136,13 @@ export function RepoChip({
   }, [editing])
 
   function commit() {
-    onChange(draft.trim())
+    const trimmed = draft.trim()
+    if (!trimmed) {
+      onChange("")
+      setEditing(false)
+      return
+    }
+    onChange(canonicalGitHubRepoUrl(trimmed) ?? trimmed)
     setEditing(false)
   }
 
@@ -148,11 +157,14 @@ export function RepoChip({
 
     return (
       <div className="relative">
-        <div className="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background pr-1 pl-2.5 text-xs">
-          <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
+        <div className="flex h-8 items-center rounded-lg border border-border bg-background pr-1 pl-2.5 text-xs focus-within:ring-3 focus-within:ring-ring/30">
+          <GitBranch className="mr-1.5 size-3.5 shrink-0 text-muted-foreground" />
+          <span className="text-muted-foreground/70 select-none">
+            github.com/
+          </span>
           <input
             ref={setFocusedInputRef}
-            aria-label="Repository URL"
+            aria-label="Repository"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={commit}
@@ -166,12 +178,12 @@ export function RepoChip({
                 setEditing(false)
               }
             }}
-            placeholder="https://github.com/owner/repo.git"
-            className="w-52 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60"
+            placeholder="owner/repo"
+            className="w-44 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60"
             spellCheck={false}
           />
           {reposLoading ? (
-            <LoaderCircle className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+            <LoaderCircle className="ml-1.5 size-3.5 shrink-0 animate-spin text-muted-foreground" />
           ) : null}
         </div>
         {visibleRepos.length || reposError ? (
@@ -219,11 +231,12 @@ export function RepoChip({
       type="button"
       onClick={() => {
         if (!locked) {
-          setDraft(value)
+          setDraft(value ? repoLabel(value) : "")
           setEditing(true)
         }
       }}
       disabled={locked}
+      aria-haspopup="dialog"
       className={cn(
         chipTrigger,
         "max-w-[14rem]",
@@ -238,20 +251,72 @@ export function RepoChip({
 
 export function BranchChip({
   value,
+  repoUrl,
   onChange,
   locked,
 }: {
   value: string
+  repoUrl?: string
   onChange: (v: string) => void
   locked?: boolean
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState("")
+  const [branches, setBranches] = useState<string[]>([])
+  const [defaultBranch, setDefaultBranch] = useState<string | undefined>()
+  const [branchesError, setBranchesError] = useState("")
+  const [branchesLoading, setBranchesLoading] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const setFocusedInputRef = useCallback((node: HTMLInputElement | null) => {
     inputRef.current = node
     node?.focus()
   }, [])
+
+  useEffect(() => {
+    if (!editing) return
+    const repo = repoUrl?.trim()
+    if (!repo) return
+
+    let cancelled = false
+
+    async function loadBranches() {
+      setBranchesLoading(true)
+      setBranchesError("")
+      try {
+        const response = await fetch(
+          `/api/github/branches?repoUrl=${encodeURIComponent(repo!)}`,
+          { cache: "no-store" }
+        )
+        const data = (await response.json()) as {
+          error?: string
+          branches?: string[]
+          defaultBranch?: string
+        }
+        if (!response.ok) {
+          throw new Error(data.error ?? "Unable to load branches.")
+        }
+        if (!cancelled) {
+          setBranches(data.branches ?? [])
+          setDefaultBranch(data.defaultBranch)
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setBranchesError(
+            error instanceof Error ? error.message : "Unable to load branches."
+          )
+          setBranches([])
+        }
+      } finally {
+        if (!cancelled) setBranchesLoading(false)
+      }
+    }
+
+    void loadBranches()
+
+    return () => {
+      cancelled = true
+    }
+  }, [editing, repoUrl])
 
   function commit() {
     onChange(draft.trim())
@@ -259,29 +324,78 @@ export function BranchChip({
   }
 
   if (editing) {
+    const needle = draft.trim().toLowerCase()
+    const sorted = [...branches].sort((a, b) => {
+      if (a === defaultBranch) return -1
+      if (b === defaultBranch) return 1
+      return a.localeCompare(b)
+    })
+    const visibleBranches = sorted
+      .filter((branch) => !needle || branch.toLowerCase().includes(needle))
+      .slice(0, 8)
+
     return (
-      <div className="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background pr-1 pl-2.5 text-xs">
-        <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
-        <input
-          ref={setFocusedInputRef}
-          aria-label="Branch name"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault()
-              commit()
-            }
-            if (e.key === "Escape") {
-              setDraft(value)
-              setEditing(false)
-            }
-          }}
-          placeholder="default branch"
-          className="w-24 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60"
-          spellCheck={false}
-        />
+      <div className="relative">
+        <div className="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background pr-1 pl-2.5 text-xs focus-within:ring-3 focus-within:ring-ring/30">
+          <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
+          <input
+            ref={setFocusedInputRef}
+            aria-label="Branch name"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault()
+                commit()
+              }
+              if (e.key === "Escape") {
+                setDraft(value)
+                setEditing(false)
+              }
+            }}
+            placeholder={defaultBranch ?? "default branch"}
+            className="w-32 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60"
+            spellCheck={false}
+          />
+          {branchesLoading ? (
+            <LoaderCircle className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+          ) : null}
+        </div>
+        {visibleBranches.length || branchesError ? (
+          <div
+            className={cn(
+              popoverPanel,
+              "top-10 left-0 w-60 max-w-[calc(100vw-2rem)]"
+            )}
+          >
+            {visibleBranches.map((branch) => (
+              <button
+                key={branch}
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  onChange(branch)
+                  setDraft(branch)
+                  setEditing(false)
+                }}
+                className={popoverItem}
+              >
+                <span className="min-w-0 truncate">{branch}</span>
+                {branch === defaultBranch ? (
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    default
+                  </span>
+                ) : null}
+              </button>
+            ))}
+            {branchesError ? (
+              <div className="px-3 py-2 text-xs leading-4 text-destructive">
+                {branchesError}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     )
   }
@@ -298,6 +412,7 @@ export function BranchChip({
         }
       }}
       disabled={locked}
+      aria-haspopup="dialog"
       title={
         locked ? "Base branch is locked once a chat starts" : "Base branch"
       }

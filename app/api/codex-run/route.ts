@@ -5,6 +5,7 @@ import { NextResponse } from "next/server"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { getConvexAuthToken } from "@/lib/codex-auth"
+import { findDaytonaSandboxInfoForRun } from "@/lib/daytona-sandbox"
 import type { CodexSpeed, ReasoningEffort } from "@/lib/daytona-codex-agent"
 import { maybeGetCurrentGitHubRepoCredential } from "@/lib/github-auth"
 import { requireSameOrigin } from "@/lib/request-security"
@@ -67,6 +68,32 @@ function getWorkerSecret() {
   }
 
   return workerSecret
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function syncDiscoveredSandbox(
+  client: ConvexHttpClient,
+  runId: Id<"codexRuns">
+) {
+  for (const delay of [0, 250, 750, 1_500]) {
+    if (delay) await wait(delay)
+    const info = await findDaytonaSandboxInfoForRun(runId as string).catch(
+      () => null
+    )
+    if (!info) continue
+
+    await client.mutation(api.codexRuns.syncRunSandbox, {
+      runId,
+      sandboxId: info.sandboxId,
+      sandboxState: info.state,
+    })
+    return info
+  }
+
+  return undefined
 }
 
 export async function POST(request: Request) {
@@ -182,7 +209,14 @@ export async function POST(request: Request) {
       // The run was canceled in the small window between creation and trigger id
       // attachment. Cancel the queued Trigger run too so it cannot wake up later.
       await runs.cancel(handle.id).catch((error) => {
-        console.warn("Unable to cancel canceled Trigger.dev run.", error)
+        console.warn("Unable to cancel queued Trigger.dev run.", error)
+      })
+      const sandbox = await syncDiscoveredSandbox(client, runId)
+      await client.mutation(api.codexRuns.finishQueuedCancel, {
+        runId,
+        sandboxId: sandbox?.sandboxId,
+        sandboxState: sandbox?.state,
+        triggerRunId: handle.id,
       })
       return NextResponse.json({ runId, triggerRunId: handle.id })
     }

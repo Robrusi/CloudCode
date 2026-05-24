@@ -75,6 +75,8 @@ export type DaytonaSandboxInfo = {
   updatedAt: number | null
 }
 
+const CLOUDCODE_RUN_LABEL = "cloudcode-run-id"
+
 export type DaytonaCommandResult = {
   exitCode: number
   stderr: string
@@ -295,6 +297,10 @@ export async function readDaytonaSandboxInfo(
   const sandbox = await getDaytonaSandbox(sandboxId)
   await sandbox.refreshData().catch(() => undefined)
 
+  return daytonaSandboxInfo(sandbox)
+}
+
+function daytonaSandboxInfo(sandbox: Sandbox): DaytonaSandboxInfo {
   return {
     autoArchiveInterval: sandbox.autoArchiveInterval ?? null,
     autoDeleteInterval: sandbox.autoDeleteInterval ?? null,
@@ -306,6 +312,30 @@ export async function readDaytonaSandboxInfo(
     state: normalizeDaytonaState(sandbox.state),
     updatedAt: timeValue(sandbox.updatedAt),
   }
+}
+
+export async function findDaytonaSandboxInfoForRun(runId: string) {
+  const trimmedRunId = runId.trim()
+  if (!trimmedRunId) return null
+
+  const result = await getDaytonaClient().list(
+    {
+      [CLOUDCODE_RUN_LABEL]: trimmedRunId,
+      app: "cloudcode",
+    },
+    1,
+    10
+  )
+  const candidates = result.items
+    .filter((sandbox) => normalizeDaytonaState(sandbox.state) !== "deleted")
+    .sort(
+      (a, b) => (timeValue(b.createdAt) ?? 0) - (timeValue(a.createdAt) ?? 0)
+    )
+
+  const sandbox = candidates[0]
+  if (!sandbox) return null
+  await sandbox.refreshData().catch(() => undefined)
+  return daytonaSandboxInfo(sandbox)
 }
 
 export async function ensureDaytonaSandboxStarted(sandbox: Sandbox) {
@@ -324,10 +354,12 @@ export async function ensureDaytonaSandboxStarted(sandbox: Sandbox) {
 
 export async function createDaytonaSandbox({
   envVars,
+  labels,
   name,
   snapshot,
 }: {
   envVars?: Record<string, string>
+  labels?: Record<string, string | undefined>
   name?: string
   snapshot?: string
 }) {
@@ -343,6 +375,11 @@ export async function createDaytonaSandbox({
     language: "typescript",
     labels: {
       app: "cloudcode",
+      ...Object.fromEntries(
+        Object.entries(labels ?? {}).filter(
+          (entry): entry is [string, string] => Boolean(entry[1]?.trim())
+        )
+      ),
       ...(name ? { preset: name } : {}),
     },
     public: false,

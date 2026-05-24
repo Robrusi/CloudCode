@@ -19,6 +19,12 @@ const thinking = v.union(
   v.literal("high"),
   v.literal("xhigh")
 )
+const sandboxState = v.union(
+  v.literal("running"),
+  v.literal("stopped"),
+  v.literal("deleted"),
+  v.literal("error")
+)
 const runLog = v.object({
   detail: v.optional(v.string()),
   kind: v.union(
@@ -330,6 +336,33 @@ async function markRunCanceled(
   }
 }
 
+async function markRunCanceling(ctx: MutationCtx, run: Doc<"codexRuns">) {
+  const now = Date.now()
+  const sandboxId = latestSandboxIdForRun(run)
+  const sandboxState =
+    run.sandboxState ?? (sandboxId ? ("running" as const) : undefined)
+
+  await Promise.all([
+    ctx.db.patch(run._id, {
+      ...(sandboxId ? { sandboxId } : {}),
+      ...(sandboxState ? { sandboxState } : {}),
+      status: "canceling",
+      updatedAt: now,
+    }),
+    ctx.db.patch(run.threadId, {
+      hasPendingMessage: true,
+      ...(sandboxId ? { sandboxId } : {}),
+      ...(sandboxState ? { sandboxState } : {}),
+      updatedAt: now,
+    }),
+  ])
+
+  return {
+    sandboxId,
+    sandboxState,
+  }
+}
+
 export const create = mutation({
   args: {
     assistantMessageId: v.id("messages"),
@@ -437,7 +470,88 @@ export const attachTriggerRun = mutation({
       updatedAt: Date.now(),
     })
 
-    return { canceled: run.status === "canceled" }
+    return { canceled: run.status === "canceled" || run.status === "canceling" }
+  },
+})
+
+export const finishQueuedCancel = mutation({
+  args: {
+    runId: v.id("codexRuns"),
+    sandboxId: v.optional(v.string()),
+    sandboxState: v.optional(sandboxState),
+    triggerRunId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const [userId, run] = await Promise.all([
+      ensureCurrentUser(ctx),
+      ctx.db.get(args.runId),
+    ])
+    if (!run || run.userId !== userId) throw new Error("Run not found.")
+    if (run.triggerRunId !== args.triggerRunId) return { canceled: false }
+    if (run.status === "canceled") {
+      if (args.sandboxId && run.sandboxId !== args.sandboxId) {
+        const now = Date.now()
+        await Promise.all([
+          ctx.db.patch(run._id, {
+            sandboxId: args.sandboxId,
+            ...(args.sandboxState ? { sandboxState: args.sandboxState } : {}),
+            updatedAt: now,
+          }),
+          ctx.db.patch(run.threadId, {
+            sandboxId: args.sandboxId,
+            ...(args.sandboxState ? { sandboxState: args.sandboxState } : {}),
+            updatedAt: now,
+          }),
+        ])
+      }
+      return { canceled: true }
+    }
+    if (run.status !== "canceling" || run.startedAt) {
+      return { canceled: false }
+    }
+
+    await markRunCanceled(
+      ctx,
+      {
+        ...run,
+        ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
+        ...(args.sandboxState ? { sandboxState: args.sandboxState } : {}),
+      },
+      "_Stopped._",
+      args.sandboxId
+    )
+    return { canceled: true }
+  },
+})
+
+export const syncRunSandbox = mutation({
+  args: {
+    runId: v.id("codexRuns"),
+    sandboxId: v.string(),
+    sandboxState,
+  },
+  handler: async (ctx, args) => {
+    const [userId, run] = await Promise.all([
+      ensureCurrentUser(ctx),
+      ctx.db.get(args.runId),
+    ])
+    if (!run || run.userId !== userId) throw new Error("Run not found.")
+
+    const now = Date.now()
+    await Promise.all([
+      ctx.db.patch(run._id, {
+        sandboxId: args.sandboxId,
+        sandboxState: args.sandboxState,
+        updatedAt: now,
+      }),
+      ctx.db.patch(run.threadId, {
+        sandboxId: args.sandboxId,
+        sandboxState: args.sandboxState,
+        updatedAt: now,
+      }),
+    ])
+
+    return { synced: true }
   },
 })
 
@@ -453,6 +567,10 @@ export const failBeforeStart = mutation({
     ])
     if (!run || run.userId !== userId) throw new Error("Run not found.")
     if (TERMINAL_RUN_STATUSES.has(run.status)) return
+    if (run.status === "canceling") {
+      await markRunCanceled(ctx, run)
+      return
+    }
 
     const now = Date.now()
     await Promise.all([
@@ -488,38 +606,11 @@ export const cancelActiveForThread = mutation({
     ])
     if (!run) return null
 
-    if (!run.triggerRunId) {
-      const canceled = await markRunCanceled(ctx, run)
-
-      return {
-        runId: run._id,
-        sandboxId: canceled.sandboxId,
-        triggerRunId: run.triggerRunId,
-      }
-    }
-
-    const now = Date.now()
-    const sandboxId = latestSandboxIdForRun(run)
-    const sandboxState =
-      run.sandboxState ?? (sandboxId ? ("running" as const) : undefined)
-    await Promise.all([
-      ctx.db.patch(run._id, {
-        ...(sandboxId ? { sandboxId } : {}),
-        ...(sandboxState ? { sandboxState } : {}),
-        status: "canceling",
-        updatedAt: now,
-      }),
-      ctx.db.patch(run.threadId, {
-        hasPendingMessage: true,
-        ...(sandboxId ? { sandboxId } : {}),
-        ...(sandboxState ? { sandboxState } : {}),
-        updatedAt: now,
-      }),
-    ])
+    const canceled = await markRunCanceling(ctx, run)
 
     return {
       runId: run._id,
-      sandboxId,
+      sandboxId: canceled.sandboxId,
       triggerRunId: run.triggerRunId,
     }
   },
@@ -601,7 +692,16 @@ export const workerStartAndGetInput = mutation({
     if (!run) throw new Error("Run not found.")
     if (run.status === "canceled") return { canceled: true as const }
     if (run.status === "canceling") {
-      await markRunCanceled(ctx, run)
+      if (!run.triggerRunId) {
+        await ctx.db.patch(args.runId, {
+          triggerRunId: args.triggerRunId,
+          updatedAt: Date.now(),
+        })
+      }
+      await markRunCanceled(ctx, {
+        ...run,
+        triggerRunId: run.triggerRunId ?? args.triggerRunId,
+      })
       return { canceled: true as const }
     }
     if (run.status !== "queued") {
@@ -647,14 +747,14 @@ export const workerAppendLogs = mutation({
 
     const sandboxId = args.logs.map(sandboxIdFromLog).find(Boolean)
     if (run.status === "canceled" || run.status === "canceling") {
-      if (sandboxId && run.sandboxId !== sandboxId) {
-        const now = Date.now()
-        await ctx.db.patch(args.runId, {
-          logs: compactRunLogs([...(run.logs ?? []), ...args.logs]),
-          sandboxId,
-          sandboxState: run.sandboxState ?? "running",
-          updatedAt: now,
-        })
+      const now = Date.now()
+      await ctx.db.patch(args.runId, {
+        logs: compactRunLogs([...(run.logs ?? []), ...args.logs]),
+        ...(sandboxId ? { sandboxId } : {}),
+        ...(sandboxId ? { sandboxState: run.sandboxState ?? "running" } : {}),
+        updatedAt: now,
+      })
+      if (sandboxId) {
         await ctx.db.patch(run.threadId, {
           sandboxId,
           sandboxState: run.sandboxState ?? "running",

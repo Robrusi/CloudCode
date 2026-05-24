@@ -98,10 +98,12 @@ export type RunCodexInSandboxInput = {
   resumeContext?: string
   repoUrl: string
   preparedSandboxFresh?: boolean
+  runId?: string
   sandboxId?: string
   sandboxPreset?: SandboxPresetInput
   signal?: AbortSignal
   speed?: CodexSpeed
+  threadId?: string
   timeoutMs?: number
 }
 
@@ -823,6 +825,10 @@ async function connectOrCreateSandbox(input: RunCodexInSandboxInput) {
   const createNewSandbox = () =>
     createDaytonaSandbox({
       envVars: presetSecretEnv(input.sandboxPreset?.secrets),
+      labels: {
+        "cloudcode-run-id": input.runId,
+        "cloudcode-thread-id": input.threadId,
+      },
       name: input.sandboxPreset?.name,
       snapshot: input.sandboxPreset?.daytonaSnapshot,
     })
@@ -1578,6 +1584,13 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     connectOrCreateSandbox(input),
   ])
   const { createdSandbox, recoveredSandbox, sandbox } = sandboxConnection
+  await emitLog(input, {
+    detail: sandbox.id,
+    kind: "setup",
+    message: recoveredSandbox
+      ? "Recovered with a fresh Daytona sandbox"
+      : "Daytona sandbox ready",
+  })
   const paths = await resolveDaytonaPaths(sandbox)
   let gitAuth: SandboxGitHubAuth | null = null
 
@@ -1595,13 +1608,6 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     const repoAlreadyExistsPromise = repoExists(sandbox, paths)
 
     await Promise.all([
-      emitLog(input, {
-        detail: sandbox.id,
-        kind: "setup",
-        message: recoveredSandbox
-          ? "Recovered with a fresh Daytona sandbox"
-          : "Daytona sandbox ready",
-      }),
       emitLog(input, {
         detail: sandbox.snapshot,
         kind: "setup",

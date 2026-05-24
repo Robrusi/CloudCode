@@ -5,6 +5,7 @@ import { NextResponse } from "next/server"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { getConvexAuthToken } from "@/lib/codex-auth"
+import { findDaytonaSandboxInfoForRun } from "@/lib/daytona-sandbox"
 import { requireSameOrigin } from "@/lib/request-security"
 
 export const runtime = "nodejs"
@@ -23,6 +24,32 @@ async function convexClient() {
   const client = new ConvexHttpClient(getConvexUrl())
   client.setAuth(await getConvexAuthToken())
   return client
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function syncDiscoveredSandbox(
+  client: ConvexHttpClient,
+  runId: Id<"codexRuns">
+) {
+  for (const delay of [0, 250, 750, 1_500]) {
+    if (delay) await wait(delay)
+    const info = await findDaytonaSandboxInfoForRun(runId as string).catch(
+      () => null
+    )
+    if (!info) continue
+
+    await client.mutation(api.codexRuns.syncRunSandbox, {
+      runId,
+      sandboxId: info.sandboxId,
+      sandboxState: info.state,
+    })
+    return info
+  }
+
+  return undefined
 }
 
 export async function POST(request: Request) {
@@ -54,11 +81,14 @@ export async function POST(request: Request) {
         console.warn("Unable to cancel Trigger.dev run.", error)
       })
     }
+    const discoveredSandbox = canceled?.runId
+      ? await syncDiscoveredSandbox(client, canceled.runId)
+      : undefined
 
     return NextResponse.json({
       canceled: Boolean(canceled),
       runId: canceled?.runId,
-      sandboxId: canceled?.sandboxId,
+      sandboxId: discoveredSandbox?.sandboxId ?? canceled?.sandboxId,
       triggerRunId: canceled?.triggerRunId,
     })
   } catch (error) {
