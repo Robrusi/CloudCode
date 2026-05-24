@@ -10,10 +10,6 @@ export type CloudcodeCommand = {
 
 export type CloudcodeYamlConfig = {
   checks: CloudcodeCommand[]
-  dev?: {
-    command: string
-    port?: number
-  }
   global: {
     install: CloudcodeCommand[]
   }
@@ -69,19 +65,6 @@ function normalizeCommands(value: unknown) {
     .slice(0, 80)
 }
 
-function normalizeDev(value: unknown) {
-  const record = asRecord(value)
-  const command = asString(record.command) ?? asString(record.run)
-  if (!command) return undefined
-
-  return {
-    command,
-    ...(typeof record.port === "number" && Number.isFinite(record.port)
-      ? { port: Math.round(record.port) }
-      : {}),
-  }
-}
-
 export function parseCloudcodeYaml(source: string): CloudcodeYamlConfig {
   const parsed = YAML.parse(source) as unknown
   const root = asRecord(parsed)
@@ -91,7 +74,6 @@ export function parseCloudcodeYaml(source: string): CloudcodeYamlConfig {
 
   const config = {
     checks: [...normalizeCommands(root.checks), ...legacyKnowledge],
-    dev: normalizeDev(root.dev),
     global: {
       install: [
         ...normalizeCommands(root.global),
@@ -127,7 +109,6 @@ export function formatCloudcodeYaml(config: CloudcodeYamlConfig) {
       global: config.global.install.length ? config.global.install : undefined,
       repo: config.repo.install.length ? config.repo.install : undefined,
       checks: config.checks.length ? config.checks : undefined,
-      dev: config.dev,
     },
     {
       lineWidth: 0,
@@ -151,13 +132,10 @@ export function cloudcodeYamlAgentContext(source?: string) {
   if (!source?.trim()) return ""
 
   const config = parseCloudcodeYaml(source)
-  const commands = [
-    ...config.checks.map((command) => {
-      const label = command.name ? `${command.name}: ` : ""
-      return `${label}${command.run}`
-    }),
-    ...(config.dev ? [`dev: ${config.dev.command}`] : []),
-  ]
+  const commands = config.checks.map((command) => {
+    const label = command.name ? `${command.name}: ` : ""
+    return `${label}${command.run}`
+  })
 
   if (commands.length === 0) return ""
 
