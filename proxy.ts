@@ -3,6 +3,8 @@ import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server"
 const isProtectedRoute = createRouteMatcher([
   "/api/codex-auth(.*)",
   "/api/codex-run(.*)",
+  "/api/github(.*)",
+  "/api/sandbox(.*)",
 ])
 
 export default clerkMiddleware(async (auth, request) => {

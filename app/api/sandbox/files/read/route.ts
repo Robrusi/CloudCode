@@ -6,6 +6,7 @@ import {
   readDaytonaTextFile,
   resolveDaytonaPaths,
 } from "@/lib/daytona-sandbox"
+import { requireCurrentUserSandbox } from "@/lib/sandbox-authorization"
 
 export const runtime = "nodejs"
 
@@ -53,6 +54,7 @@ export async function GET(request: Request) {
   }
 
   try {
+    await requireCurrentUserSandbox(sandboxId)
     const sandbox = await getStartedDaytonaSandbox(sandboxId)
     const paths = await resolveDaytonaPaths(sandbox)
     const fullPath = `${paths.repoPath}/${cleaned}`

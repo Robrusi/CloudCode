@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto"
 import { createServer, type Server } from "node:http"
 
 import { saveCodexOAuthTokens } from "@/lib/codex-auth"
+import { escapeHtml } from "@/lib/html-escape"
 
 const DEFAULT_ISSUER = "https://auth.openai.com"
 const DEFAULT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -131,7 +132,7 @@ async function exchangeCodeForTokens(
 }
 
 function htmlDocument(message: string) {
-  return `<!doctype html><meta charset="utf-8"><title>Cloudcode Auth</title><body style="font-family:system-ui;padding:2rem">${message}</body>`
+  return `<!doctype html><meta charset="utf-8"><title>Cloudcode Auth</title><body style="font-family:system-ui;padding:2rem">${escapeHtml(message)}</body>`
 }
 
 async function handleCallback(
@@ -171,7 +172,7 @@ async function handleCallback(
       profile: pending.profile,
     })
     respond(
-      `Signed in with ChatGPT. You can close this tab or return to <a href="${pending.appOrigin}">Cloudcode</a>.`
+      "Signed in with ChatGPT. You can close this tab or return to Cloudcode."
     )
   } catch (error) {
     respond(

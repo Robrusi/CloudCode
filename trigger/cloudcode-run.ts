@@ -316,6 +316,10 @@ export const cloudcodeRun = task({
           authJson: runAuthJson,
           baseBranch: runInput.baseBranch,
           currentSandboxId: runInput.sandboxId,
+          githubToken: runInput.githubToken,
+          githubUserEmail: runInput.githubUserEmail,
+          githubUserName: runInput.githubUserName,
+          githubUsername: runInput.githubUsername,
           onLog: (log) => {
             contentBuffer.appendToolLog(log)
             logBuffer.emit(log)

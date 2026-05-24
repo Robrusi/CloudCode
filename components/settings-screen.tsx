@@ -20,6 +20,50 @@ type AuthStatus = {
   exists: boolean
 }
 
+type GitHubAuthStatus = {
+  app?: {
+    accounts?: Array<{
+      accountType: "Organization" | "User"
+      avatarUrl?: string
+      description?: string
+      htmlUrl?: string
+      id: string
+      installationId?: string
+      installed: boolean
+      login: string
+      repositorySelection?: string
+    }>
+    configured: boolean
+    installationConfigured?: boolean
+    installations: Array<{
+      accountLogin: string
+      accountType?: string
+      installationId: string
+      repositorySelection?: string
+    }>
+    organizationError?: string
+    organizations?: Array<{
+      avatarUrl?: string
+      description?: string
+      id: string
+      login: string
+    }>
+    user:
+      | { connected: false }
+      | {
+          connected: true
+          email?: string
+          githubUserId: string
+          login: string
+          name?: string
+        }
+    userAuthConfigured?: boolean
+  }
+  connected: boolean
+  mode?: "app" | "none"
+  username?: string | null
+}
+
 type SandboxPresetSecretRecord = {
   id: Id<"sandboxPresetSecrets">
   name: string
@@ -50,10 +94,16 @@ type SandboxPresetRecord = {
 export function SettingsScreen({
   authStatus,
   authError,
+  githubStatus,
+  githubAuthError,
+  onGitHubAuthChanged,
   sandboxPresets,
 }: {
   authStatus: AuthStatus | null
   authError: string
+  githubStatus: GitHubAuthStatus | null
+  githubAuthError: string
+  onGitHubAuthChanged: () => void | Promise<void>
   sandboxPresets: SandboxPresetRecord[]
 }) {
   const detailedPresets = useQuery(api.sandboxPresets.listWithEnvironments)
@@ -113,11 +163,206 @@ export function SettingsScreen({
                   </button>
                 </form>
               </div>
+              <GitHubConnectionRow
+                status={githubStatus}
+                error={githubAuthError}
+                onGitHubAuthChanged={onGitHubAuthChanged}
+              />
             </div>
           </div>
 
           <PresetSettings presets={presets} />
         </div>
+      </div>
+    </div>
+  )
+}
+
+function GitHubConnectionRow({
+  status,
+  error,
+  onGitHubAuthChanged,
+}: {
+  status: GitHubAuthStatus | null
+  error: string
+  onGitHubAuthChanged: () => void | Promise<void>
+}) {
+  const [disconnecting, setDisconnecting] = useState(false)
+  const [disconnectError, setDisconnectError] = useState("")
+  const accounts = status?.app?.accounts ?? []
+  const installations = status?.app?.installations ?? []
+  const user = status?.app?.user
+  const userLogin = user?.connected ? user.login : undefined
+  const userReady = Boolean(user?.connected)
+  const appReady = installations.length > 0
+  const ready = userReady && appReady
+  const installConfigured = status?.app?.installationConfigured !== false
+  const userAuthConfigured = status?.app?.userAuthConfigured !== false
+  const visibleError =
+    disconnectError || error || status?.app?.organizationError
+  const detail = ready
+    ? `Authorized as @${userLogin}; App connected to ${installations
+        .map((installation) => `@${installation.accountLogin}`)
+        .join(", ")}.`
+    : appReady
+      ? `App connected to ${installations
+          .map((installation) => `@${installation.accountLogin}`)
+          .join(", ")}. Authenticate your GitHub user for git identity.`
+      : !installConfigured || !userAuthConfigured
+        ? "Set the GitHub App env vars to enable scoped repository access."
+        : userReady
+          ? `Authorized as @${userLogin}. Select repositories for your account or an organization below.`
+          : "Select repositories from your GitHub account or an organization."
+
+  return (
+    <div className="flex items-center gap-3 border-t border-border/60 px-3.5 py-3">
+      <svg
+        viewBox="0 0 98 96"
+        aria-hidden
+        className="size-6 shrink-0 fill-current text-foreground/80"
+      >
+        <path
+          fillRule="evenodd"
+          clipRule="evenodd"
+          d="M48.854 0C21.839 0 0 22 0 49.217c0 21.756 13.993 40.172 33.405 46.69 2.427.49 3.316-1.059 3.316-2.362 0-1.141-.08-5.052-.08-9.127-13.59 2.934-16.42-5.867-16.42-5.867-2.184-5.704-5.42-7.17-5.42-7.17-4.448-3.015.324-3.015.324-3.015 4.934.326 7.523 5.052 7.523 5.052 4.367 7.496 11.404 5.378 14.235 4.074.404-3.178 1.699-5.378 3.074-6.6-10.839-1.141-22.243-5.378-22.243-24.283 0-5.378 1.94-9.778 5.014-13.2-.485-1.222-2.184-6.275.486-13.038 0 0 4.125-1.304 13.426 5.052a46.97 46.97 0 0 1 12.214-1.63c4.125 0 8.33.571 12.213 1.63 9.302-6.356 13.427-5.052 13.427-5.052 2.67 6.763.97 11.816.485 13.038 3.155 3.422 5.015 7.822 5.015 13.2 0 18.905-11.404 23.06-22.324 24.283 1.78 1.548 3.316 4.481 3.316 9.126 0 6.6-.08 11.897-.08 13.526 0 1.304.89 2.853 3.316 2.364C83.907 89.389 98 70.973 98 49.217 98 22 76.162 0 48.854 0Z"
+        />
+      </svg>
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium text-foreground/85">GitHub</div>
+        <div className="text-xs text-muted-foreground">{detail}</div>
+        {userReady && accounts.length > 0 ? (
+          <div className="mt-2 space-y-1">
+            {accounts.map((account) => {
+              const targetId = /^\d+$/.test(account.id) ? account.id : undefined
+
+              return (
+                <div
+                  key={`${account.accountType}:${account.login}`}
+                  className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/20 px-2 py-1.5"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate text-xs font-medium text-foreground/80">
+                      @{account.login}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {account.accountType === "User"
+                        ? "My repositories"
+                        : "Organization repositories"}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <span
+                      className={cn(
+                        "inline-flex h-5 shrink-0 items-center rounded border px-1.5 text-[11px]",
+                        account.installed
+                          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                          : "border-border/70 text-muted-foreground"
+                      )}
+                    >
+                      {account.installed ? "Connected" : "Not connected"}
+                    </span>
+                    <form action="/api/github/app/install" method="get">
+                      {targetId ? (
+                        <input type="hidden" name="targetId" value={targetId} />
+                      ) : null}
+                      <button
+                        type="submit"
+                        disabled={disconnecting}
+                        className="inline-flex h-6 shrink-0 items-center justify-center rounded-md border border-border/60 px-2 text-[11px] font-medium text-foreground/80 transition-colors hover:bg-muted disabled:opacity-50"
+                      >
+                        {account.installed ? "Update repos" : "Select repos"}
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        ) : null}
+        {visibleError ? (
+          <div className="mt-1 text-[11px] leading-4 text-destructive">
+            {visibleError}
+          </div>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">
+        {!userReady ? (
+          <form
+            action={
+              appReady
+                ? "/api/github/app/oauth/login"
+                : "/api/github/app/install"
+            }
+            method="get"
+          >
+            {appReady ? (
+              <input type="hidden" name="next" value="settings" />
+            ) : null}
+            <button
+              type="submit"
+              disabled={disconnecting}
+              className="inline-flex h-7 shrink-0 items-center justify-center rounded-md bg-foreground px-3 text-xs font-medium text-background transition-colors hover:opacity-85 disabled:opacity-50"
+            >
+              {appReady ? "Authenticate" : "Connect GitHub"}
+            </button>
+          </form>
+        ) : null}
+        {userReady ? (
+          <form action="/api/github/app/install" method="get">
+            <button
+              type="submit"
+              disabled={disconnecting}
+              className="inline-flex h-7 shrink-0 items-center justify-center rounded-md border border-border/60 px-3 text-xs font-medium text-foreground/80 transition-colors hover:bg-muted disabled:opacity-50"
+            >
+              Add org
+            </button>
+          </form>
+        ) : null}
+        {userReady ? (
+          <button
+            type="button"
+            disabled={disconnecting}
+            onClick={async () => {
+              if (
+                !window.confirm(
+                  "Disconnect GitHub from this Cloudcode account? This revokes the GitHub authorization and removes saved installations from Cloudcode."
+                )
+              ) {
+                return
+              }
+
+              setDisconnecting(true)
+              setDisconnectError("")
+              try {
+                const response = await fetch("/api/github/auth", {
+                  method: "DELETE",
+                })
+                const data = await response.json().catch(() => ({}))
+
+                if (!response.ok) {
+                  throw new Error(data?.error ?? "Unable to disconnect GitHub.")
+                }
+                if (data?.revokeError) {
+                  setDisconnectError(
+                    `Removed locally. GitHub revocation warning: ${data.revokeError}`
+                  )
+                }
+                await onGitHubAuthChanged()
+              } catch (err) {
+                setDisconnectError(
+                  err instanceof Error
+                    ? err.message
+                    : "Unable to disconnect GitHub."
+                )
+              } finally {
+                setDisconnecting(false)
+              }
+            }}
+            className="inline-flex h-7 shrink-0 items-center justify-center rounded-md border border-destructive/30 px-3 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50"
+          >
+            {disconnecting ? "Disconnecting" : "Disconnect"}
+          </button>
+        ) : null}
       </div>
     </div>
   )

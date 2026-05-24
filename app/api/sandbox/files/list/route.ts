@@ -6,6 +6,7 @@ import {
   runDaytonaCommand,
   shellQuote,
 } from "@/lib/daytona-sandbox"
+import { requireCurrentUserSandbox } from "@/lib/sandbox-authorization"
 
 export const runtime = "nodejs"
 
@@ -58,6 +59,7 @@ export async function GET(request: Request) {
   }
 
   try {
+    await requireCurrentUserSandbox(sandboxId)
     const sandbox = await getStartedDaytonaSandbox(sandboxId)
     const root = requestedRoot || (await resolveDaytonaPaths(sandbox)).repoPath
     const skipNames = [...SKIP_DESCEND]

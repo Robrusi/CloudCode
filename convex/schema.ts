@@ -97,6 +97,10 @@ export default defineSchema({
     createdAt: v.number(),
     error: v.optional(v.string()),
     finishedAt: v.optional(v.number()),
+    githubToken: v.optional(v.string()),
+    githubUserEmail: v.optional(v.string()),
+    githubUserName: v.optional(v.string()),
+    githubUsername: v.optional(v.string()),
     logs: v.optional(v.array(runLog)),
     model,
     previousDiff: v.optional(v.string()),
@@ -117,8 +121,38 @@ export default defineSchema({
     userId: v.id("users"),
   })
     .index("by_thread_updated", ["threadId", "updatedAt"])
+    .index("by_sandbox", ["sandboxId"])
     .index("by_trigger_run", ["triggerRunId"])
     .index("by_user_updated", ["userId", "updatedAt"]),
+
+  githubAppInstallations: defineTable({
+    accountId: v.optional(v.string()),
+    accountLogin: v.string(),
+    accountType: v.optional(v.string()),
+    htmlUrl: v.optional(v.string()),
+    installationId: v.string(),
+    repositorySelection: v.optional(v.string()),
+    updatedAt: v.string(),
+    userId: v.id("users"),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_installation", ["userId", "installationId"]),
+
+  githubAppUsers: defineTable({
+    email: v.optional(v.string()),
+    encryptedRefreshToken: v.optional(v.string()),
+    encryptedToken: v.string(),
+    expiresAt: v.optional(v.string()),
+    fingerprint: v.string(),
+    githubUserId: v.string(),
+    login: v.string(),
+    name: v.optional(v.string()),
+    refreshTokenExpiresAt: v.optional(v.string()),
+    updatedAt: v.string(),
+    userId: v.id("users"),
+  })
+    .index("by_user", ["userId"])
+    .index("by_github_user", ["githubUserId"]),
 
   messages: defineTable({
     content: v.string(),
@@ -250,6 +284,7 @@ export default defineSchema({
     userId: v.id("users"),
   })
     .index("by_user_updated", ["userId", "updatedAt"])
+    .index("by_sandbox", ["sandboxId"])
     .index("by_user_repo_updated", ["userId", "repoUrl", "updatedAt"]),
 
   users: defineTable({

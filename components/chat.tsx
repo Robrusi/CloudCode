@@ -135,6 +135,50 @@ type AuthStatus = {
   profile: string
 }
 
+type GitHubAuthStatus = {
+  app?: {
+    accounts?: Array<{
+      accountType: "Organization" | "User"
+      avatarUrl?: string
+      description?: string
+      htmlUrl?: string
+      id: string
+      installationId?: string
+      installed: boolean
+      login: string
+      repositorySelection?: string
+    }>
+    configured: boolean
+    installationConfigured?: boolean
+    installations: Array<{
+      accountLogin: string
+      accountType?: string
+      installationId: string
+      repositorySelection?: string
+    }>
+    organizationError?: string
+    organizations?: Array<{
+      avatarUrl?: string
+      description?: string
+      id: string
+      login: string
+    }>
+    user:
+      | { connected: false }
+      | {
+          connected: true
+          email?: string
+          githubUserId: string
+          login: string
+          name?: string
+        }
+    userAuthConfigured?: boolean
+  }
+  connected: boolean
+  mode?: "app" | "none"
+  username?: string | null
+}
+
 type ChatRecord = {
   baseBranch?: string
   codexThreadId?: string
@@ -436,6 +480,10 @@ function ChatInner() {
   >({})
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
   const [authError, setAuthError] = useState("")
+  const [githubStatus, setGithubStatus] = useState<GitHubAuthStatus | null>(
+    null
+  )
+  const [githubAuthError, setGithubAuthError] = useState("")
   const runningRunKeysRef = useRef<Set<string>>(new Set())
   const liveRevealRef = useRef<
     Record<
@@ -555,6 +603,15 @@ function ChatInner() {
 
     return cachedLiveRun
   })()
+
+  useEffect(() => {
+    if (
+      new URLSearchParams(window.location.search).get("view") === "settings"
+    ) {
+      setView("settings")
+    }
+  }, [])
+
   useEffect(() => {
     if (!visibleLiveRun) return
 
@@ -762,6 +819,27 @@ function ChatInner() {
     setAllDiffsOpen(true)
   }, [])
 
+  const refreshGitHubAuth = useCallback(async () => {
+    try {
+      const res = await fetch("/api/github/auth", { cache: "no-store" })
+      const data = await res.json()
+
+      if (!res.ok) {
+        throw new Error(data?.error ?? "Unable to read GitHub auth status.")
+      }
+
+      setGithubStatus(data)
+      setGithubAuthError("")
+    } catch (err) {
+      setGithubStatus(null)
+      setGithubAuthError(
+        err instanceof Error
+          ? err.message
+          : "Unable to read GitHub auth status."
+      )
+    }
+  }, [])
+
   useEffect(() => {
     if (userLoading) return
 
@@ -784,10 +862,14 @@ function ChatInner() {
       }
     }
 
-    void refreshAuth()
-    window.addEventListener("focus", refreshAuth)
-    return () => window.removeEventListener("focus", refreshAuth)
-  }, [userLoading])
+    function refreshConnections() {
+      void Promise.all([refreshAuth(), refreshGitHubAuth()])
+    }
+
+    refreshConnections()
+    window.addEventListener("focus", refreshConnections)
+    return () => window.removeEventListener("focus", refreshConnections)
+  }, [refreshGitHubAuth, userLoading])
 
   useEffect(() => {
     if (userLoading) return
@@ -1708,6 +1790,9 @@ function ChatInner() {
           <SettingsScreen
             authStatus={authStatus}
             authError={authError}
+            githubStatus={githubStatus}
+            githubAuthError={githubAuthError}
+            onGitHubAuthChanged={refreshGitHubAuth}
             sandboxPresets={sandboxPresets}
           />
         ) : (

@@ -1,15 +1,9 @@
 import { NextResponse } from "next/server"
 
-export const runtime = "nodejs"
+import { maybeGetCurrentGitHubRepoCredential } from "@/lib/github-auth"
+import { parseGitHubRepoUrl } from "@/lib/github-repo"
 
-function parseRepo(url: string) {
-  const trimmed = url.trim().replace(/\.git$/, "")
-  const match = trimmed.match(
-    /^(?:https?:\/\/github\.com\/|git@github\.com:)([^/\s]+)\/([^/\s]+?)\/?$/
-  )
-  if (!match) return null
-  return { owner: match[1], repo: match[2] }
-}
+export const runtime = "nodejs"
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
@@ -19,7 +13,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "repoUrl required" }, { status: 400 })
   }
 
-  const parsed = parseRepo(repoUrl)
+  const parsed = parseGitHubRepoUrl(repoUrl)
   if (!parsed) {
     return NextResponse.json(
       { error: "Unsupported GitHub URL." },
@@ -31,8 +25,17 @@ export async function GET(request: Request) {
     accept: "application/vnd.github+json",
     "x-github-api-version": "2022-11-28",
   }
-  const token = process.env.GITHUB_TOKEN
-  if (token) headers.authorization = `Bearer ${token}`
+  const credential = await maybeGetCurrentGitHubRepoCredential(repoUrl)
+  if (!credential?.token) {
+    return NextResponse.json(
+      {
+        error:
+          "Install the GitHub App on this repository and authorize your GitHub user.",
+      },
+      { status: 401 }
+    )
+  }
+  headers.authorization = `Bearer ${credential.token}`
 
   const branches: string[] = []
   let defaultBranch: string | undefined
@@ -56,10 +59,8 @@ export async function GET(request: Request) {
       return NextResponse.json(
         {
           error: isRateLimited
-            ? "GitHub rate limit hit. Set GITHUB_TOKEN or try again later."
-            : token
-              ? "GitHub denied access. The token may lack permission for this repo."
-              : "GitHub denied access. Set GITHUB_TOKEN for private repos.",
+            ? "GitHub rate limit hit. Connect GitHub or try again later."
+            : "GitHub denied access. Reconnect GitHub with repo access.",
         },
         { status: repoRes.status }
       )
@@ -85,7 +86,7 @@ export async function GET(request: Request) {
       return NextResponse.json(
         {
           error: isRateLimited
-            ? "GitHub rate limit hit. Set GITHUB_TOKEN or try again later."
+            ? "GitHub rate limit hit. Connect GitHub or try again later."
             : `GitHub API error: ${failedBranchResponse.status}`,
         },
         { status: failedBranchResponse.status }

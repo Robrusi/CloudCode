@@ -51,6 +51,28 @@ type StoredRunLog = {
   time: number
 }
 
+async function sandboxAccessForUser(
+  ctx: QueryCtx,
+  sandboxId: string,
+  userId: Id<"users">
+) {
+  const runs = await ctx.db
+    .query("codexRuns")
+    .withIndex("by_sandbox", (q) => q.eq("sandboxId", sandboxId))
+    .take(10)
+  const run = runs.find((candidate) => candidate.userId === userId)
+  if (run) return { repoUrl: run.repoUrl }
+
+  const threads = await ctx.db
+    .query("threads")
+    .withIndex("by_sandbox", (q) => q.eq("sandboxId", sandboxId))
+    .take(10)
+  const thread = threads.find((candidate) => candidate.userId === userId)
+  if (thread) return { repoUrl: thread.repoUrl }
+
+  return null
+}
+
 function truncate(value: string | undefined, max: number) {
   if (!value) return undefined
   return value.length > max ? `${value.slice(0, max - 3)}...` : value
@@ -189,6 +211,30 @@ export const liveForThread = query({
   },
 })
 
+export const ownsSandbox = query({
+  args: {
+    sandboxId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx)
+    if (!user) return false
+
+    return Boolean(await sandboxAccessForUser(ctx, args.sandboxId, user._id))
+  },
+})
+
+export const sandboxAccess = query({
+  args: {
+    sandboxId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx)
+    if (!user) return null
+
+    return await sandboxAccessForUser(ctx, args.sandboxId, user._id)
+  },
+})
+
 function sandboxIdFromLog(log: StoredRunLog) {
   if (log.kind !== "setup" || !log.detail) {
     return undefined
@@ -290,6 +336,10 @@ export const create = mutation({
     baseBranch: v.optional(v.string()),
     branchName: v.optional(v.string()),
     codexThreadId: v.optional(v.string()),
+    githubToken: v.optional(v.string()),
+    githubUserEmail: v.optional(v.string()),
+    githubUserName: v.optional(v.string()),
+    githubUsername: v.optional(v.string()),
     model,
     previousDiff: v.optional(v.string()),
     profile: v.optional(v.string()),
@@ -335,6 +385,12 @@ export const create = mutation({
       ...(args.codexThreadId ? { codexThreadId: args.codexThreadId } : {}),
       content: "",
       createdAt: now,
+      ...(args.githubToken ? { githubToken: args.githubToken } : {}),
+      ...(args.githubUserEmail
+        ? { githubUserEmail: args.githubUserEmail }
+        : {}),
+      ...(args.githubUserName ? { githubUserName: args.githubUserName } : {}),
+      ...(args.githubUsername ? { githubUsername: args.githubUsername } : {}),
       logs: [queuedLog],
       model: args.model,
       ...(args.previousDiff ? { previousDiff: args.previousDiff } : {}),

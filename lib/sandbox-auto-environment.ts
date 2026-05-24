@@ -28,6 +28,11 @@ import {
   type DaytonaSandboxPaths,
 } from "@/lib/daytona-sandbox"
 import type { RunCodexLog, SandboxPresetInput } from "@/lib/daytona-codex-agent"
+import {
+  configureSandboxGitHubRemote,
+  setupSandboxGitHubAuth,
+  type SandboxGitHubAuth,
+} from "@/lib/sandbox-github-auth"
 import type { SandboxPresetForRun } from "@/lib/sandbox-presets"
 
 const AUTO_BUILD_SCAN_TIMEOUT_MS = 12 * 60 * 1000
@@ -144,6 +149,9 @@ export type EnsureAutoEnvironmentInput = {
   baseBranch?: string
   currentSandboxId?: string
   githubToken?: string
+  githubUserEmail?: string
+  githubUserName?: string
+  githubUsername?: string
   onLog?: (log: RunCodexLog) => void | Promise<void>
   repoUrl: string
   sandboxPreset: SandboxPresetForRun
@@ -324,7 +332,10 @@ function presetSecretEnv(preset: SandboxPresetForRun) {
   )
 }
 
-function codexShellEnv(paths: DaytonaSandboxPaths) {
+function codexShellEnv(
+  paths: DaytonaSandboxPaths,
+  extraEnv: Record<string, string> = {}
+) {
   return {
     BASH_ENV: "/dev/null",
     CODEX_HOME: paths.codexHome,
@@ -332,6 +343,7 @@ function codexShellEnv(paths: DaytonaSandboxPaths) {
     MISE_TRUSTED_CONFIG_PATHS: paths.repoPath,
     PATH: daytonaCodexPath(paths),
     SHELL: "/bin/bash",
+    ...extraEnv,
   }
 }
 
@@ -536,6 +548,7 @@ function scannerPrompt(repoPath: string) {
 async function runScannerCodex(
   sandbox: Sandbox,
   paths: DaytonaSandboxPaths,
+  gitAuth?: SandboxGitHubAuth | null,
   signal?: AbortSignal
 ) {
   const promptPath = `${paths.codexHome}/auto-environment-prompt.txt`
@@ -548,7 +561,7 @@ async function runScannerCodex(
       `${shellQuote(paths.codexLauncherPath)} exec --help`,
       {
         cwd: paths.home,
-        env: codexShellEnv(paths),
+        env: codexShellEnv(paths, gitAuth?.env),
         signal,
         timeoutMs: 10_000,
       }
@@ -587,7 +600,7 @@ async function runScannerCodex(
     ].join("\n"),
     {
       cwd: paths.home,
-      env: codexShellEnv(paths),
+      env: codexShellEnv(paths, gitAuth?.env),
       ...silentCommandOutput,
       signal,
       timeoutMs: AUTO_BUILD_SCAN_TIMEOUT_MS,
@@ -992,6 +1005,7 @@ async function buildAutoEnvironmentSandbox({
   input: EnsureAutoEnvironmentInput
 }) {
   let sandbox: Sandbox | undefined
+  let gitAuth: SandboxGitHubAuth | null = null
   let keepSandbox = false
   const buildLogs = createBuildLogEmitter(client, build.buildId, input)
   const emit = buildLogs.emit
@@ -1022,6 +1036,17 @@ async function buildAutoEnvironmentSandbox({
       kind: "setup",
       message: "Auto environment sandbox ready",
     })
+    gitAuth = await setupSandboxGitHubAuth({
+      githubToken: input.githubToken,
+      githubUserEmail: input.githubUserEmail,
+      githubUserName: input.githubUserName,
+      githubUsername: input.githubUsername,
+      paths,
+      repoUrl: input.repoUrl,
+      sandbox,
+      signal: input.signal,
+    })
+    if (gitAuth) Object.assign(terminalEnv, gitAuth.env)
     void emit({
       kind: "setup",
       message: "Cloning repository",
@@ -1033,6 +1058,12 @@ async function buildAutoEnvironmentSandbox({
       sandbox,
       signal: input.signal,
       paths,
+    })
+    await configureSandboxGitHubRemote({
+      auth: gitAuth,
+      paths,
+      sandbox,
+      signal: input.signal,
     })
     void emit({
       kind: "setup",
@@ -1063,7 +1094,7 @@ async function buildAutoEnvironmentSandbox({
         kind: "setup",
         message: "Starting environment scan",
       })
-      await runScannerCodex(sandbox, paths, input.signal)
+      await runScannerCodex(sandbox, paths, gitAuth, input.signal)
       rawYaml = await readRepoCloudcodeYaml(sandbox, paths)
 
       if (!rawYaml) {
@@ -1180,6 +1211,7 @@ async function buildAutoEnvironmentSandbox({
     ).catch(() => undefined)
     throw error
   } finally {
+    await gitAuth?.cleanup()
     await buildLogs.flush()
     if (sandbox && !keepSandbox) await deleteDaytonaSandboxQuietly(sandbox.id)
   }

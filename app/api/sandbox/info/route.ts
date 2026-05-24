@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { readDaytonaSandboxInfo } from "@/lib/daytona-sandbox"
+import { requireCurrentUserSandbox } from "@/lib/sandbox-authorization"
 
 export const runtime = "nodejs"
 
@@ -13,6 +14,7 @@ export async function GET(request: Request) {
   }
 
   try {
+    await requireCurrentUserSandbox(sandboxId)
     return NextResponse.json(await readDaytonaSandboxInfo(sandboxId))
   } catch (error) {
     return NextResponse.json(

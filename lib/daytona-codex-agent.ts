@@ -35,6 +35,11 @@ import {
   type SandboxPresetEnvVar,
 } from "./sandbox-env"
 import { cloudcodeYamlAgentContext } from "./cloudcode-yaml"
+import {
+  configureSandboxGitHubRemote,
+  setupSandboxGitHubAuth,
+  type SandboxGitHubAuth,
+} from "./sandbox-github-auth"
 
 const EXIT_MARKER = "__CLOUDCODE_CODEX_EXIT__"
 const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60 * 1000
@@ -80,6 +85,9 @@ export type RunCodexInSandboxInput = {
   branchName?: string
   codexThreadId?: string
   githubToken?: string
+  githubUserEmail?: string
+  githubUserName?: string
+  githubUsername?: string
   model?: string
   onContentDelta?: (delta: string) => void | Promise<void>
   onLog?: (log: RunCodexLog) => void | Promise<void>
@@ -678,7 +686,8 @@ function presetSecretEnv(secrets: SandboxPresetEnvVar[] = []) {
 
 function codexShellEnv(
   paths: DaytonaSandboxPaths,
-  secrets: SandboxPresetEnvVar[] = []
+  secrets: SandboxPresetEnvVar[] = [],
+  extraEnv: Record<string, string> = {}
 ) {
   return {
     BASH_ENV: "/dev/null",
@@ -689,14 +698,19 @@ function codexShellEnv(
     SHELL: "/bin/bash",
     TAR_OPTIONS: "--no-same-owner --no-same-permissions",
     ...presetSecretEnv(secrets),
+    ...extraEnv,
   }
 }
 
-function repoCommandEnv(paths: DaytonaSandboxPaths) {
+function repoCommandEnv(
+  paths: DaytonaSandboxPaths,
+  extraEnv: Record<string, string> = {}
+) {
   return {
     HOME: paths.runtimeHome,
     MISE_TRUSTED_CONFIG_PATHS: paths.repoPath,
     PATH: daytonaCodexPath(paths),
+    ...extraEnv,
   }
 }
 
@@ -1090,7 +1104,8 @@ async function prepareSandboxRuntime(
 async function runPathInstallScript(
   sandbox: Sandbox,
   input: RunCodexInSandboxInput,
-  paths: DaytonaSandboxPaths
+  paths: DaytonaSandboxPaths,
+  gitAuth?: SandboxGitHubAuth | null
 ) {
   const script = input.sandboxPreset?.pathInstallScript?.trim()
   if (!script) return
@@ -1163,6 +1178,7 @@ async function runPathInstallScript(
       PATH: terminalPath,
       TAR_OPTIONS: "--no-same-owner --no-same-permissions",
       ...presetSecretEnv(input.sandboxPreset?.secrets),
+      ...gitAuth?.env,
     },
     onStderr: (data) => {
       const trimmed = compactLine(data)
@@ -1200,7 +1216,8 @@ async function runPathInstallScript(
 async function runPresetInstallScript(
   sandbox: Sandbox,
   input: RunCodexInSandboxInput,
-  paths: DaytonaSandboxPaths
+  paths: DaytonaSandboxPaths,
+  gitAuth?: SandboxGitHubAuth | null
 ) {
   const script = input.sandboxPreset?.installScript?.trim()
   if (!script) return
@@ -1280,6 +1297,7 @@ async function runPresetInstallScript(
         PATH: terminalPath,
         TAR_OPTIONS: "--no-same-owner --no-same-permissions",
         ...presetSecretEnv(input.sandboxPreset?.secrets),
+        ...gitAuth?.env,
       },
       onStderr: (data) => {
         const trimmed = compactLine(data)
@@ -1464,6 +1482,7 @@ async function cloneRepo({
 async function prepareExistingRepoForFreshRun({
   baseBranch,
   branchName,
+  gitAuth,
   input,
   paths,
   requestedBranchName,
@@ -1471,6 +1490,7 @@ async function prepareExistingRepoForFreshRun({
 }: {
   baseBranch?: string
   branchName: string
+  gitAuth?: SandboxGitHubAuth | null
   input: RunCodexInSandboxInput
   paths: DaytonaSandboxPaths
   requestedBranchName?: string
@@ -1504,6 +1524,7 @@ async function prepareExistingRepoForFreshRun({
   ].join("\n")
 
   const refreshResult = await runDaytonaCommand(sandbox, refreshCommand, {
+    env: repoCommandEnv(paths, gitAuth?.env),
     signal: input.signal,
     timeoutMs: 60_000,
   })
@@ -1535,7 +1556,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
   const baseBranch = parseGitRef(input.baseBranch, "baseBranch")
   const requestedBranchName = parseGitRef(input.branchName, "branchName")
   let branchName = requestedBranchName ?? defaultBranchName()
-  const githubToken = input.githubToken?.trim() || process.env.GITHUB_TOKEN
+  const githubToken = input.githubToken?.trim()
   const speed = parseSpeed(input.speed)
   const timeoutMs = input.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS
   const existingCodexThreadId = parseOpaqueId(
@@ -1558,8 +1579,19 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
   ])
   const { createdSandbox, recoveredSandbox, sandbox } = sandboxConnection
   const paths = await resolveDaytonaPaths(sandbox)
+  let gitAuth: SandboxGitHubAuth | null = null
 
   try {
+    gitAuth = await setupSandboxGitHubAuth({
+      githubToken,
+      githubUserEmail: input.githubUserEmail,
+      githubUserName: input.githubUserName,
+      githubUsername: input.githubUsername,
+      paths,
+      repoUrl,
+      sandbox,
+      signal: input.signal,
+    })
     const repoAlreadyExistsPromise = repoExists(sandbox, paths)
 
     await Promise.all([
@@ -1645,15 +1677,28 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         sandbox,
         paths,
       })
+      await configureSandboxGitHubRemote({
+        auth: gitAuth,
+        paths,
+        sandbox,
+        signal: input.signal,
+      })
       await trustRepoMiseConfig(sandbox, input, paths)
       await writeBaseRef(sandbox, paths)
       preparedFreshRepo = true
     } else {
+      await configureSandboxGitHubRemote({
+        auth: gitAuth,
+        paths,
+        sandbox,
+        signal: input.signal,
+      })
       await trustRepoMiseConfig(sandbox, input, paths)
       if (createdSandbox || input.preparedSandboxFresh) {
         branchName = await prepareExistingRepoForFreshRun({
           baseBranch,
           branchName,
+          gitAuth,
           input,
           paths,
           requestedBranchName,
@@ -1703,8 +1748,8 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       input,
       paths
     )
-      .then(() => runPathInstallScript(sandbox, input, paths))
-      .then(() => runPresetInstallScript(sandbox, input, paths))
+      .then(() => runPathInstallScript(sandbox, input, paths, gitAuth))
+      .then(() => runPresetInstallScript(sandbox, input, paths, gitAuth))
       .then(() =>
         Promise.all([
           getCodexExecHelp(sandbox, paths),
@@ -1857,7 +1902,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     const result = redactAuthPathOutput(
       await runDaytonaCommand(sandbox, command, {
         cwd: paths.home,
-        env: codexShellEnv(paths, input.sandboxPreset?.secrets),
+        env: codexShellEnv(paths, input.sandboxPreset?.secrets, gitAuth?.env),
         onStderr: (data) => {
           const trimmed = compactLine(data)
           if (trimmed) void input.onLog?.({ kind: "stderr", message: trimmed })
@@ -1914,7 +1959,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
               paths.repoPath
             )} diff --binary "$base_ref"`,
             {
-              env: repoCommandEnv(paths),
+              env: repoCommandEnv(paths, gitAuth?.env),
               signal: input.signal,
               timeoutMs: 60_000,
             }
@@ -1925,7 +1970,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
             sandbox,
             `git -C ${shellQuote(paths.repoPath)} status --short --branch`,
             {
-              env: repoCommandEnv(paths),
+              env: repoCommandEnv(paths, gitAuth?.env),
               signal: input.signal,
               timeoutMs: 60_000,
             }
@@ -1963,7 +2008,10 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     } satisfies RunCodexInSandboxResult
   } finally {
     try {
-      await cleanupRunFiles(sandbox, paths, input.signal)
+      await Promise.all([
+        cleanupRunFiles(sandbox, paths, input.signal),
+        gitAuth?.cleanup() ?? Promise.resolve(),
+      ])
     } finally {
       await restoreDaytonaAutostop(sandbox)
     }

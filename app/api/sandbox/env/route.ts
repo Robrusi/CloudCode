@@ -7,6 +7,8 @@ import {
   resolveDaytonaPaths,
   writeDaytonaTextFile,
 } from "@/lib/daytona-sandbox"
+import { requireSameOrigin } from "@/lib/request-security"
+import { requireCurrentUserSandbox } from "@/lib/sandbox-authorization"
 import { CLOUDCODE_ENV_END, CLOUDCODE_ENV_START } from "@/lib/sandbox-env"
 
 export const runtime = "nodejs"
@@ -24,17 +26,6 @@ function json(data: unknown, init?: ResponseInit) {
       ...init?.headers,
     },
   })
-}
-
-function sameOriginRequest(request: Request) {
-  const origin = request.headers.get("origin")
-  if (!origin) return true
-
-  try {
-    return new URL(origin).host === new URL(request.url).host
-  } catch {
-    return false
-  }
 }
 
 function splitManagedBlock(content: string): {
@@ -174,6 +165,7 @@ export async function GET(request: Request) {
   }
 
   try {
+    await requireCurrentUserSandbox(sandboxId)
     const { content } = await readEnvFile(sandboxId)
     const { userContent } = splitManagedBlock(content)
     return json({ entries: parseEntries(userContent) })
@@ -189,9 +181,8 @@ export async function GET(request: Request) {
 }
 
 async function save(request: Request) {
-  if (!sameOriginRequest(request)) {
-    return json({ error: "Cross-origin request blocked" }, { status: 403 })
-  }
+  const blocked = requireSameOrigin(request)
+  if (blocked) return blocked
 
   const body = (await request.json().catch(() => null)) as {
     entries?: unknown
@@ -208,6 +199,7 @@ async function save(request: Request) {
   if (entries instanceof Response) return entries
 
   try {
+    await requireCurrentUserSandbox(sandboxId)
     const { content, fullPath, sandbox } = await readEnvFile(sandboxId)
     const { managedBlock } = splitManagedBlock(content)
 

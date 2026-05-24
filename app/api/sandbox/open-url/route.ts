@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server"
 
+import { requireSameOrigin } from "@/lib/request-security"
 import { getSandboxPreviewProxyUrl } from "@/lib/sandbox-preview-proxy"
+import { requireCurrentUserSandbox } from "@/lib/sandbox-authorization"
 
 export const runtime = "nodejs"
 
 export async function POST(request: Request) {
+  const blocked = requireSameOrigin(request)
+  if (blocked) return blocked
+
   let body: { sandboxId?: unknown; url?: unknown }
 
   try {
@@ -28,6 +33,7 @@ export async function POST(request: Request) {
   }
 
   try {
+    await requireCurrentUserSandbox(sandboxId)
     const forwardedHost = request.headers.get("x-forwarded-host")?.trim()
     return NextResponse.json({
       url: await getSandboxPreviewProxyUrl({

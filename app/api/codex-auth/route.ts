@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { getCodexAuthStatus, saveCodexAuthJson } from "@/lib/codex-auth"
+import { requireSameOrigin } from "@/lib/request-security"
 
 export const runtime = "nodejs"
 
@@ -26,6 +27,9 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const blocked = requireSameOrigin(request)
+  if (blocked) return blocked
+
   try {
     const body = (await request.json()) as {
       authJson?: unknown

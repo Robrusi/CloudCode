@@ -24,6 +24,10 @@ type WorkerRunRecord = {
   baseBranch?: string
   branchName?: string
   codexThreadId?: string
+  githubToken?: string
+  githubUserEmail?: string
+  githubUserName?: string
+  githubUsername?: string
   model: string
   previousDiff?: string
   profile?: string
@@ -129,6 +133,12 @@ export async function startAndLoadWorkerRun(
       baseBranch: response.run.baseBranch,
       branchName: response.run.branchName,
       codexThreadId: response.run.codexThreadId,
+      githubToken: response.run.githubToken
+        ? decryptSecret(response.run.githubToken)
+        : undefined,
+      githubUserEmail: response.run.githubUserEmail,
+      githubUserName: response.run.githubUserName,
+      githubUsername: response.run.githubUsername,
       model: response.run.model,
       previousDiff: response.run.previousDiff,
       prompt: response.run.prompt,

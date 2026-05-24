@@ -1,6 +1,12 @@
 "use client"
 
-import { Check, ChevronDown, GitBranch, Package } from "lucide-react"
+import {
+  Check,
+  ChevronDown,
+  GitBranch,
+  LoaderCircle,
+  Package,
+} from "lucide-react"
 import {
   type ButtonHTMLAttributes,
   useCallback,
@@ -24,6 +30,12 @@ const popoverItem =
 type SandboxPresetOption = {
   id: Id<"sandboxPresets">
   name: string
+}
+
+type GitHubRepoOption = {
+  cloneUrl: string
+  fullName: string
+  private: boolean
 }
 
 function repoLabel(url: string) {
@@ -66,11 +78,59 @@ export function RepoChip({
   locked?: boolean
 }) {
   const [draft, setDraft] = useState("")
+  const [repoOptions, setRepoOptions] = useState<GitHubRepoOption[]>([])
+  const [reposError, setReposError] = useState("")
+  const [reposLoading, setReposLoading] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const setFocusedInputRef = useCallback((node: HTMLInputElement | null) => {
     inputRef.current = node
     node?.focus()
   }, [])
+
+  useEffect(() => {
+    if (!editing) return
+
+    let cancelled = false
+
+    async function loadRepos() {
+      setReposLoading(true)
+      setReposError("")
+      try {
+        const response = await fetch("/api/github/repos", {
+          cache: "no-store",
+        })
+        const data = (await response.json()) as {
+          error?: string
+          repositories?: GitHubRepoOption[]
+        }
+
+        if (!response.ok) {
+          throw new Error(data.error ?? "Unable to load repositories.")
+        }
+
+        if (!cancelled) {
+          setRepoOptions(data.repositories ?? [])
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setReposError(
+            error instanceof Error
+              ? error.message
+              : "Unable to load repositories."
+          )
+          setRepoOptions([])
+        }
+      } finally {
+        if (!cancelled) setReposLoading(false)
+      }
+    }
+
+    void loadRepos()
+
+    return () => {
+      cancelled = true
+    }
+  }, [editing])
 
   function commit() {
     onChange(draft.trim())
@@ -78,29 +138,76 @@ export function RepoChip({
   }
 
   if (editing) {
+    const needle = draft
+      .replace(/^https?:\/\/(www\.)?github\.com\//, "")
+      .replace(/\.git$/, "")
+      .toLowerCase()
+    const visibleRepos = repoOptions
+      .filter((repo) => !needle || repo.fullName.toLowerCase().includes(needle))
+      .slice(0, 8)
+
     return (
-      <div className="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background pr-1 pl-2.5 text-xs">
-        <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
-        <input
-          ref={setFocusedInputRef}
-          aria-label="Repository URL"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault()
-              commit()
-            }
-            if (e.key === "Escape") {
-              setDraft(value)
-              setEditing(false)
-            }
-          }}
-          placeholder="https://github.com/owner/repo.git"
-          className="w-52 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60"
-          spellCheck={false}
-        />
+      <div className="relative">
+        <div className="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background pr-1 pl-2.5 text-xs">
+          <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
+          <input
+            ref={setFocusedInputRef}
+            aria-label="Repository URL"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault()
+                commit()
+              }
+              if (e.key === "Escape") {
+                setDraft(value)
+                setEditing(false)
+              }
+            }}
+            placeholder="https://github.com/owner/repo.git"
+            className="w-52 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60"
+            spellCheck={false}
+          />
+          {reposLoading ? (
+            <LoaderCircle className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+          ) : null}
+        </div>
+        {visibleRepos.length || reposError ? (
+          <div
+            className={cn(
+              popoverPanel,
+              "top-10 left-0 w-72 max-w-[calc(100vw-2rem)]"
+            )}
+          >
+            {visibleRepos.map((repo) => (
+              <button
+                key={repo.cloneUrl}
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  onChange(repo.cloneUrl)
+                  setDraft(repo.cloneUrl)
+                  setEditing(false)
+                }}
+                className={popoverItem}
+              >
+                <span className="min-w-0 truncate">{repo.fullName}</span>
+                {repo.private ? (
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    Private
+                  </span>
+                ) : null}
+              </button>
+            ))}
+            {reposError ? (
+              <div className="px-3 py-2 text-xs leading-4 text-destructive">
+                {reposError}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     )
   }

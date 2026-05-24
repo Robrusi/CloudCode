@@ -5,6 +5,7 @@ import { NextResponse } from "next/server"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { getConvexAuthToken } from "@/lib/codex-auth"
+import { requireSameOrigin } from "@/lib/request-security"
 
 export const runtime = "nodejs"
 
@@ -25,6 +26,9 @@ async function convexClient() {
 }
 
 export async function POST(request: Request) {
+  const blocked = requireSameOrigin(request)
+  if (blocked) return blocked
+
   try {
     const body = (await request.json()) as {
       threadId?: unknown

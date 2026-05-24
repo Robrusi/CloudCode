@@ -1,4 +1,5 @@
 import { readDaytonaSandboxInfo } from "@/lib/daytona-sandbox"
+import { requireCurrentUserSandbox } from "@/lib/sandbox-authorization"
 
 export const runtime = "nodejs"
 export const maxDuration = 300
@@ -13,6 +14,13 @@ export async function GET(request: Request) {
   if (!sandboxId) {
     return new Response("sandboxId required", { status: 400 })
   }
+
+  try {
+    await requireCurrentUserSandbox(sandboxId)
+  } catch {
+    return new Response("Sandbox not found.", { status: 404 })
+  }
+
   const checkedSandboxId = sandboxId
 
   const encoder = new TextEncoder()

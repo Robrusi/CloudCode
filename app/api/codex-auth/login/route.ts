@@ -2,12 +2,13 @@ import { NextResponse } from "next/server"
 
 import { getConvexAuthToken } from "@/lib/codex-auth"
 import { createCodexLoginUrl } from "@/lib/codex-oauth"
+import { escapeHtml } from "@/lib/html-escape"
 
 export const runtime = "nodejs"
 
 function html(message: string) {
   return new NextResponse(
-    `<!doctype html><meta charset="utf-8"><title>Cloudcode Auth</title><body style="font-family:system-ui;padding:2rem;line-height:1.5;max-width:42rem"><h1 style="font-size:1.25rem">ChatGPT sign-in could not start</h1><p>${message}</p><p><a href="/">Return to Cloudcode</a></p></body>`,
+    `<!doctype html><meta charset="utf-8"><title>Cloudcode Auth</title><body style="font-family:system-ui;padding:2rem;line-height:1.5;max-width:42rem"><h1 style="font-size:1.25rem">ChatGPT sign-in could not start</h1><p>${escapeHtml(message)}</p><p><a href="/">Return to Cloudcode</a></p></body>`,
     {
       headers: {
         "content-type": "text/html; charset=utf-8",

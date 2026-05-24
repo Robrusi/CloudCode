@@ -2,12 +2,17 @@ import { NextResponse } from "next/server"
 
 import {
   connectDaytonaTerminal,
+  daytonaTerminalHasCurrentGitHubAuth,
   detachDaytonaTerminal,
   killDaytonaTerminal,
+  refreshDaytonaTerminalGitHubAuth,
   resizeDaytonaTerminal,
   sendDaytonaTerminalInput,
   type ConnectedDaytonaTerminal,
 } from "@/lib/daytona-terminal-sessions"
+import { maybeGetCurrentGitHubRepoCredential } from "@/lib/github-auth"
+import { requireSameOrigin } from "@/lib/request-security"
+import { requireCurrentUserSandbox } from "@/lib/sandbox-authorization"
 
 export const runtime = "nodejs"
 export const maxDuration = 3600
@@ -30,6 +35,9 @@ function numberParam(value: string | null, fallback: number) {
 }
 
 export async function GET(request: Request) {
+  const blocked = requireSameOrigin(request)
+  if (blocked) return blocked
+
   const { searchParams } = new URL(request.url)
   const sandboxId = searchParams.get("sandboxId")
   const terminalId = searchParams.get("terminalId")
@@ -41,6 +49,13 @@ export async function GET(request: Request) {
       { error: "sandboxId and terminalId required" },
       { status: 400 }
     )
+  }
+
+  let sandboxAccess: Awaited<ReturnType<typeof requireCurrentUserSandbox>>
+  try {
+    sandboxAccess = await requireCurrentUserSandbox(sandboxId)
+  } catch {
+    return NextResponse.json({ error: "Sandbox not found." }, { status: 404 })
   }
 
   const encoder = new TextEncoder()
@@ -60,11 +75,19 @@ export async function GET(request: Request) {
       }
 
       try {
+        const githubAuth = await maybeGetCurrentGitHubRepoCredential(
+          sandboxAccess.repoUrl
+        )
         const connection = await connectDaytonaTerminal({
           cols,
+          githubToken: githubAuth?.token,
+          githubUserEmail: githubAuth?.gitUserEmail,
+          githubUserName: githubAuth?.gitUserName,
+          githubUsername: githubAuth?.username,
           onData: (data) => {
             enqueue(terminalData(data))
           },
+          repoUrl: sandboxAccess.repoUrl,
           rows,
           sandboxId,
           terminalId,
@@ -131,6 +154,9 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const blocked = requireSameOrigin(request)
+  if (blocked) return blocked
+
   const body = (await request.json().catch(() => ({}))) as {
     action?: unknown
     cols?: unknown
@@ -149,7 +175,32 @@ export async function POST(request: Request) {
     )
   }
 
+  let sandboxAccess: Awaited<ReturnType<typeof requireCurrentUserSandbox>>
   try {
+    sandboxAccess = await requireCurrentUserSandbox(sandboxId)
+  } catch {
+    return NextResponse.json({ error: "Sandbox not found." }, { status: 404 })
+  }
+
+  try {
+    if (
+      body.action !== "resize" &&
+      !daytonaTerminalHasCurrentGitHubAuth(sandboxId, terminalId)
+    ) {
+      const githubAuth = await maybeGetCurrentGitHubRepoCredential(
+        sandboxAccess.repoUrl
+      )
+      await refreshDaytonaTerminalGitHubAuth({
+        githubToken: githubAuth?.token,
+        githubUserEmail: githubAuth?.gitUserEmail,
+        githubUserName: githubAuth?.gitUserName,
+        githubUsername: githubAuth?.username,
+        repoUrl: sandboxAccess.repoUrl,
+        sandboxId,
+        terminalId,
+      })
+    }
+
     if (body.action === "resize") {
       await resizeDaytonaTerminal({
         cols: typeof body.cols === "number" ? body.cols : 100,
@@ -182,6 +233,9 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const blocked = requireSameOrigin(request)
+  if (blocked) return blocked
+
   const body = (await request.json().catch(() => ({}))) as {
     sandboxId?: unknown
     terminalId?: unknown
@@ -194,6 +248,12 @@ export async function DELETE(request: Request) {
       { error: "sandboxId and terminalId required" },
       { status: 400 }
     )
+  }
+
+  try {
+    await requireCurrentUserSandbox(sandboxId)
+  } catch {
+    return NextResponse.json({ error: "Sandbox not found." }, { status: 404 })
   }
 
   await killDaytonaTerminal(sandboxId, terminalId)

@@ -6,6 +6,9 @@ import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { getConvexAuthToken } from "@/lib/codex-auth"
 import type { CodexSpeed, ReasoningEffort } from "@/lib/daytona-codex-agent"
+import { maybeGetCurrentGitHubRepoCredential } from "@/lib/github-auth"
+import { requireSameOrigin } from "@/lib/request-security"
+import { encryptSecret } from "@/lib/secret-crypto"
 import type { cloudcodeRun } from "@/trigger/cloudcode-run"
 
 export const runtime = "nodejs"
@@ -67,6 +70,9 @@ function getWorkerSecret() {
 }
 
 export async function POST(request: Request) {
+  const blocked = requireSameOrigin(request)
+  if (blocked) return blocked
+
   let runId: Id<"codexRuns"> | undefined
 
   try {
@@ -112,6 +118,19 @@ export async function POST(request: Request) {
       )
     }
 
+    const githubCredential = await maybeGetCurrentGitHubRepoCredential(repoUrl)
+    if (!githubCredential?.token) {
+      return NextResponse.json(
+        {
+          error:
+            "Install the GitHub App on this repository and authorize your GitHub user before starting a run.",
+        },
+        { status: 401 }
+      )
+    }
+    const encryptedGitHubToken = githubCredential?.token
+      ? encryptSecret(githubCredential.token)
+      : undefined
     const client = await convexClient()
     const created = await client.mutation(api.codexRuns.create, {
       assistantMessageId,
@@ -121,6 +140,10 @@ export async function POST(request: Request) {
         typeof body.branchName === "string" ? body.branchName : undefined,
       codexThreadId:
         typeof body.codexThreadId === "string" ? body.codexThreadId : undefined,
+      githubToken: encryptedGitHubToken,
+      githubUserEmail: githubCredential?.gitUserEmail,
+      githubUserName: githubCredential?.gitUserName,
+      githubUsername: githubCredential?.username ?? undefined,
       model: model as "gpt-5.5" | "gpt-5.4" | "gpt-5.4-mini",
       previousDiff:
         typeof body.previousDiff === "string" ? body.previousDiff : undefined,
