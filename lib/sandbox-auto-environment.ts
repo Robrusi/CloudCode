@@ -28,6 +28,7 @@ import {
   type DaytonaSandboxPaths,
 } from "@/lib/daytona-sandbox"
 import type { RunCodexLog, SandboxPresetInput } from "@/lib/daytona-codex-agent"
+import { parseGitHubRepoUrl } from "@/lib/github-repo"
 import {
   configureSandboxGitHubRemote,
   setupSandboxGitHubAuth,
@@ -97,6 +98,8 @@ type AutoEnvironmentBuildRecord = {
   environmentId: Id<"sandboxPresetEnvironments">
   environmentSlug: string
 }
+
+type CloudcodeYamlSource = "convex" | "repo"
 
 type StoredBuildLog = RunCodexLog & { time: number }
 
@@ -303,6 +306,54 @@ async function failAutoEnvironmentBuild(
     api.sandboxPresets.failAutoEnvironmentBuild,
     args
   )
+}
+
+function githubApiHeaders(token?: string) {
+  return {
+    accept: "application/vnd.github.raw+json",
+    ...(token?.trim() ? { authorization: `Bearer ${token.trim()}` } : {}),
+    "x-github-api-version": "2022-11-28",
+  }
+}
+
+async function readRepoCloudcodeYamlFromGitHub(
+  input: EnsureAutoEnvironmentInput
+) {
+  const repo = parseGitHubRepoUrl(input.repoUrl)
+  if (!repo) return undefined
+
+  await input.onLog?.({
+    kind: "setup",
+    message: "Checking repo cloudcode.yaml",
+  })
+
+  const url = new URL(
+    `https://api.github.com/repos/${encodeURIComponent(
+      repo.owner
+    )}/${encodeURIComponent(repo.repo)}/contents/cloudcode.yaml`
+  )
+  const baseBranch = input.baseBranch?.trim()
+  if (baseBranch) url.searchParams.set("ref", baseBranch)
+
+  const response = await fetch(url, {
+    headers: githubApiHeaders(input.githubToken),
+    signal: input.signal,
+  })
+
+  if (response.status === 404) return undefined
+  if (!response.ok) {
+    throw new Error(
+      `Unable to check repo cloudcode.yaml. GitHub returned ${response.status}.`
+    )
+  }
+
+  const source = await response.text()
+  const cloudcodeYaml = normalizeCloudcodeYaml(source)
+  await input.onLog?.({
+    kind: "setup",
+    message: "Found repo cloudcode.yaml",
+  })
+  return cloudcodeYaml
 }
 
 const ANSI_ESCAPE_PATTERN = new RegExp(
@@ -803,6 +854,35 @@ function addMiseTrustCommand(
   })
 }
 
+function isManagedAutoEnvironmentCommand(command: CloudcodeCommand) {
+  return (
+    command.name === CXX20_REPAIR_COMMAND_NAME ||
+    command.name === MISE_TRUST_COMMAND_NAME ||
+    command.run.includes("cloudcode-cxx20-check") ||
+    /\bmise\s+trust\b/.test(command.run)
+  )
+}
+
+function comparableCloudcodeYaml(source: string) {
+  const config = parseCloudcodeYaml(source)
+  config.global.install = config.global.install.filter(
+    (command) => !isManagedAutoEnvironmentCommand(command)
+  )
+  return formatCloudcodeYaml(config)
+}
+
+function cloudcodeYamlMatchesRepoSource(repoYaml: string, storedYaml?: string) {
+  if (!storedYaml?.trim()) return false
+
+  try {
+    return (
+      comparableCloudcodeYaml(repoYaml) === comparableCloudcodeYaml(storedYaml)
+    )
+  } catch {
+    return false
+  }
+}
+
 async function listMiseConfigFiles(
   sandbox: Sandbox,
   paths: DaytonaSandboxPaths,
@@ -998,10 +1078,15 @@ async function cleanupBuilderFiles(
 async function buildAutoEnvironmentSandbox({
   build,
   client,
+  cloudcodeYamlSource,
   input,
 }: {
   build: AutoEnvironmentBuildRecord
   client: ConvexHttpClient
+  cloudcodeYamlSource?: {
+    source: CloudcodeYamlSource
+    yaml: string
+  }
   input: EnsureAutoEnvironmentInput
 }) {
   let sandbox: Sandbox | undefined
@@ -1087,6 +1172,20 @@ async function buildAutoEnvironmentSandbox({
       void emit({
         kind: "setup",
         message: "Found cloudcode.yaml",
+      })
+    } else if (cloudcodeYamlSource) {
+      rawYaml = cloudcodeYamlSource.yaml
+      await writeDaytonaTextFile(
+        sandbox,
+        `${paths.repoPath}/cloudcode.yaml`,
+        rawYaml
+      )
+      void emit({
+        kind: "setup",
+        message:
+          cloudcodeYamlSource.source === "repo"
+            ? "Using checked repo cloudcode.yaml"
+            : "Using saved Convex cloudcode.yaml",
       })
     } else {
       await prepareBuilderCodex(sandbox, paths, input.authJson, input.signal)
@@ -1243,23 +1342,57 @@ export async function ensureAutoEnvironmentSandbox(
   }
   const client = await getConvexClient(input.workerSecret)
   const existing = await getAutoEnvironmentForRun(client, input)
+  const repoCloudcodeYaml = await readRepoCloudcodeYamlFromGitHub(input)
+  const existingCloudcodeYaml = existing?.cloudcodeYaml?.trim()
+    ? normalizeCloudcodeYaml(existing.cloudcodeYaml)
+    : undefined
+  const repoCloudcodeYamlChanged = Boolean(
+    repoCloudcodeYaml &&
+    !cloudcodeYamlMatchesRepoSource(repoCloudcodeYaml, existingCloudcodeYaml)
+  )
+  const cloudcodeYamlSource = repoCloudcodeYaml
+    ? {
+        source: "repo" as const,
+        yaml: repoCloudcodeYaml,
+      }
+    : existingCloudcodeYaml
+      ? {
+          source: "convex" as const,
+          yaml: existingCloudcodeYaml,
+        }
+      : undefined
+
+  if (repoCloudcodeYamlChanged) {
+    await input.onLog?.({
+      kind: "setup",
+      message: "Repo cloudcode.yaml changed; rebuilding auto environment",
+    })
+  }
 
   if (
+    !repoCloudcodeYamlChanged &&
     currentSandboxId &&
     existing?.status === "ready" &&
     existing.activeSandboxId === currentSandboxId
   ) {
     return {
-      cloudcodeYaml: existing.cloudcodeYaml,
+      cloudcodeYaml: cloudcodeYamlSource?.yaml ?? existing.cloudcodeYaml,
       preparedSandboxFresh: false,
-      preset: autoPresetForRun(input.sandboxPreset, existing.cloudcodeYaml),
+      preset: autoPresetForRun(
+        input.sandboxPreset,
+        cloudcodeYamlSource?.yaml ?? existing.cloudcodeYaml
+      ),
       requireExistingSandbox: true,
       sandboxId: currentSandboxId,
     }
   }
 
   let usableActiveSandboxId = existing?.activeSandboxId
-  if (usableActiveSandboxId && existing?.status === "ready") {
+  if (
+    !repoCloudcodeYamlChanged &&
+    usableActiveSandboxId &&
+    existing?.status === "ready"
+  ) {
     try {
       await getStartedDaytonaSandbox(usableActiveSandboxId)
     } catch {
@@ -1272,16 +1405,23 @@ export async function ensureAutoEnvironmentSandbox(
     }
   }
 
-  if (usableActiveSandboxId && existing?.status === "ready") {
+  if (
+    !repoCloudcodeYamlChanged &&
+    usableActiveSandboxId &&
+    existing?.status === "ready"
+  ) {
     await input.onLog?.({
       detail: usableActiveSandboxId,
       kind: "setup",
       message: "Using prepared auto environment sandbox",
     })
     return {
-      cloudcodeYaml: existing.cloudcodeYaml,
+      cloudcodeYaml: cloudcodeYamlSource?.yaml ?? existing.cloudcodeYaml,
       preparedSandboxFresh: false,
-      preset: autoPresetForRun(input.sandboxPreset, existing.cloudcodeYaml),
+      preset: autoPresetForRun(
+        input.sandboxPreset,
+        cloudcodeYamlSource?.yaml ?? existing.cloudcodeYaml
+      ),
       sandboxId: usableActiveSandboxId,
     }
   }
@@ -1295,6 +1435,7 @@ export async function ensureAutoEnvironmentSandbox(
   const result = await buildAutoEnvironmentSandbox({
     build,
     client,
+    cloudcodeYamlSource,
     input,
   })
 
