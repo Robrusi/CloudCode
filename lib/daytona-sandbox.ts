@@ -6,7 +6,7 @@ const DAYTONA_TERMINAL_PORT = 22222
 const DEFAULT_DAYTONA_HOME =
   process.env.DAYTONA_SANDBOX_HOME?.trim() || "/home/daytona"
 
-const DEFAULT_AUTO_STOP_MINUTES = 30
+const DEFAULT_AUTO_STOP_MINUTES = 15
 const DEFAULT_AUTO_ARCHIVE_MINUTES = 7 * 24 * 60
 const DEFAULT_AUTO_DELETE_MINUTES = 30 * 24 * 60
 const DEFAULT_CREATE_TIMEOUT_SECONDS = 480
@@ -116,12 +116,15 @@ function envNumber(name: string, fallback: number) {
 }
 
 function defaultDaytonaAutostopMinutes() {
-  return Math.max(
-    1,
-    Math.round(
-      envNumber("DAYTONA_AUTO_STOP_MINUTES", DEFAULT_AUTO_STOP_MINUTES)
-    )
-  )
+  return DEFAULT_AUTO_STOP_MINUTES
+}
+
+async function ensureDaytonaAutostopInterval(sandbox: Sandbox) {
+  const interval = defaultDaytonaAutostopMinutes()
+  if (sandbox.autoStopInterval === interval) return
+
+  await sandbox.setAutostopInterval(interval)
+  sandbox.autoStopInterval = interval
 }
 
 function defaultDaytonaArchiveMinutes() {
@@ -345,6 +348,7 @@ export async function ensureDaytonaSandboxStarted(sandbox: Sandbox) {
     await sandbox.start(timeout)
   }
 
+  await ensureDaytonaAutostopInterval(sandbox)
   await sandbox.refreshActivity().catch(() => undefined)
   return sandbox
 }
