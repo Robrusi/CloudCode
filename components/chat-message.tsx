@@ -1,19 +1,19 @@
 "use client"
 
 import {
+  ChevronDown,
   ChevronRight,
-  FileSearch,
   Loader2,
+  Pencil,
   ScrollText,
-  SquarePen,
+  SquareTerminal,
   Terminal,
-  Wrench,
 } from "lucide-react"
-import type { LucideIcon } from "lucide-react"
 import { memo, useMemo, useState } from "react"
 
 import { ChangedFiles } from "@/components/changed-files"
 import { Markdown } from "@/components/chat-markdown"
+import { CodeBlock } from "@/components/code-block"
 import { cn } from "@/lib/utils"
 
 export type ChatMessage = {
@@ -422,34 +422,161 @@ const SetupLogRow = memo(function SetupLogRow({ log }: { log: ChatRunLog }) {
   )
 })
 
-type ToolPresentation = {
-  body: string
-  icon: LucideIcon
-  label: string
+function unwrapShellCommand(cmd: string): string {
+  let current = cmd
+  // Repeatedly strip shell wrappers like `/bin/bash -lc "..."`,
+  // `bash -c '...'`, `sh -c ...`, `env FOO=1 ...`.
+  for (let i = 0; i < 4; i++) {
+    const envMatch = current.match(/^env(?:\s+\w+=\S+)+\s+([\s\S]*)$/)
+    if (envMatch) {
+      current = envMatch[1].trim()
+      continue
+    }
+    const shellMatch = current.match(
+      /^(?:\/[\w/]*\/)?(?:bash|sh|zsh)(?:\s+-[a-z]+)*\s+(['"])([\s\S]*)\1\s*$/
+    )
+    if (shellMatch) {
+      current = shellMatch[2].trim()
+      continue
+    }
+    const shellNoQuote = current.match(
+      /^(?:\/[\w/]*\/)?(?:bash|sh|zsh)\s+-[a-z]*c\s+([\s\S]*)$/
+    )
+    if (shellNoQuote) {
+      current = shellNoQuote[1].trim().replace(/^['"]|['"]$/g, "")
+      continue
+    }
+    break
+  }
+  return current || cmd
 }
 
-function presentTool(detail: ParsedLogDetail): ToolPresentation {
-  if (detail.kind === "command_execution") {
-    return {
-      body: detail.command?.trim() || "",
-      icon: Terminal,
-      label: "Shell",
+type ToolUmbrella = "explore" | "modify"
+
+function umbrellaForDetail(detail: ParsedLogDetail): ToolUmbrella {
+  if (detail.kind === "command_execution") return "explore"
+  const lower = (detail.name || "").toLowerCase()
+  if (/edit|patch|write|create|update|apply|insert/.test(lower)) return "modify"
+  return "explore"
+}
+
+type DetailKind = "read" | "search" | "command" | "edit" | "create" | "other"
+
+function classifyDetail(detail: ParsedLogDetail): DetailKind {
+  if (detail.kind === "command_execution") return "command"
+  const name = (detail.name || "").toLowerCase()
+  const text = detail.text ?? ""
+  if (/edit|patch|write|apply|insert|update/.test(name)) {
+    if (/\*\*\* Add File:/.test(text)) return "create"
+    return "edit"
+  }
+  if (/create/.test(name)) return "create"
+  if (/list|search|grep|glob|find/.test(name)) return "search"
+  if (/read|view|cat|open|file/.test(name)) return "read"
+  return "other"
+}
+
+function bundleByUmbrella(
+  details: ParsedLogDetail[]
+): Array<{ umbrella: ToolUmbrella; items: ParsedLogDetail[] }> {
+  const bundles: Array<{ umbrella: ToolUmbrella; items: ParsedLogDetail[] }> =
+    []
+  for (const detail of details) {
+    const umbrella = umbrellaForDetail(detail)
+    const last = bundles[bundles.length - 1]
+    if (last && last.umbrella === umbrella) last.items.push(detail)
+    else bundles.push({ umbrella, items: [detail] })
+  }
+  return bundles
+}
+
+function pluralize(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`
+}
+
+function summarizeBundle(
+  umbrella: ToolUmbrella,
+  items: ParsedLogDetail[]
+): string {
+  const counts: Record<DetailKind, number> = {
+    command: 0,
+    create: 0,
+    edit: 0,
+    other: 0,
+    read: 0,
+    search: 0,
+  }
+  for (const item of items) counts[classifyDetail(item)] += 1
+
+  if (umbrella === "modify") {
+    const parts: string[] = []
+    if (counts.create > 0)
+      parts.push(`Created ${pluralize(counts.create, "file", "files")}`)
+    if (counts.edit > 0) {
+      const verb = parts.length === 0 ? "Edited" : "edited"
+      parts.push(`${verb} ${pluralize(counts.edit, "file", "files")}`)
     }
+    if (parts.length === 0) return "Made changes"
+    return parts.join(", ")
   }
-  const name = (detail.name || "Tool").trim()
-  const lower = name.toLowerCase()
-  const text = detail.text?.trim()
-  const body = text ? `${name}: ${text}` : name
-  if (/edit|patch|write|create|update|apply|insert/.test(lower)) {
-    return { body, icon: SquarePen, label: "File change" }
+
+  // explore umbrella
+  const parts: string[] = []
+  if (counts.read > 0) parts.push(pluralize(counts.read, "file", "files"))
+  if (counts.search > 0)
+    parts.push(pluralize(counts.search, "search", "searches"))
+  const commandPart =
+    counts.command > 0
+      ? `ran ${pluralize(counts.command, "command", "commands")}`
+      : null
+
+  if (parts.length === 0 && commandPart) {
+    // commands-only: "Ran N commands" / "Ran <cmd>"
+    if (counts.command === 1) {
+      const cmd = unwrapShellCommand(
+        items.find((i) => i.kind === "command_execution")?.command?.trim() ?? ""
+      )
+      const first = cmd.split(/\s+/).slice(0, 3).join(" ")
+      return first ? `Ran ${first}` : "Ran command"
+    }
+    return `Ran ${counts.command} commands`
   }
-  if (/read|view|cat|open|file/.test(lower)) {
-    return { body, icon: ScrollText, label: "Read" }
+
+  const prefixed = parts.length > 0 ? `Explored ${parts.join(", ")}` : ""
+  return [prefixed, commandPart].filter(Boolean).join(", ")
+}
+
+function describeItem(detail: ParsedLogDetail): string {
+  const kind = classifyDetail(detail)
+  const text = detail.text?.trim() ?? ""
+  if (kind === "command") {
+    const cmd = unwrapShellCommand(detail.command?.trim() ?? "")
+    const oneLine = cmd.split(/\n/)[0].trim()
+    return `Ran ${oneLine || detail.name || "command"}`
   }
-  if (/list|search|grep|glob|find/.test(lower)) {
-    return { body, icon: FileSearch, label: "Search" }
+  if (kind === "read") {
+    const path = text.split(/\s+/)[0]
+    return `Read ${basename(path) || text || detail.name || "file"}`
   }
-  return { body, icon: Wrench, label: "Tool" }
+  if (kind === "search") {
+    const inMatch = text.match(/^(.+?)\s+in\s+(.+)$/)
+    if (inMatch) return `Searched for ${inMatch[1]} in ${inMatch[2]}`
+    return text ? `Searched for ${text}` : "Searched"
+  }
+  if (kind === "edit" || kind === "create") {
+    const verb = kind === "create" ? "Created" : "Edited"
+    const pathMatch = text.match(/\*\*\* (?:Add|Update|Delete) File:\s*(\S+)/)
+    if (pathMatch) return `${verb} ${basename(pathMatch[1])}`
+    return `${verb} file`
+  }
+  return detail.name || "Tool"
+}
+
+function basename(path: string): string {
+  if (!path) return ""
+  const trimmed = path.replace(/\/+$/, "")
+  const idx = trimmed.lastIndexOf("/")
+  return idx === -1 ? trimmed : trimmed.slice(idx + 1)
 }
 
 const ToolGroup = memo(function ToolGroup({
@@ -458,10 +585,15 @@ const ToolGroup = memo(function ToolGroup({
   details: ParsedLogDetail[]
 }) {
   if (details.length === 0) return null
+  const bundles = bundleByUmbrella(details)
   return (
-    <div className="rounded-lg border border-border/40 px-2.5 py-1">
-      {details.map((detail) => (
-        <ToolRow key={toolDetailKey(detail)} detail={detail} />
+    <div className="space-y-1">
+      {bundles.map((bundle, i) => (
+        <ToolSummary
+          key={`${bundle.umbrella}-${i}-${toolDetailKey(bundle.items[0])}`}
+          umbrella={bundle.umbrella}
+          items={bundle.items}
+        />
       ))}
     </div>
   )
@@ -472,102 +604,130 @@ const SingleToolGroup = memo(function SingleToolGroup({
 }: {
   detail: ParsedLogDetail
 }) {
-  return (
-    <div className="rounded-lg border border-border/40 px-2.5 py-1">
-      <ToolRow detail={detail} />
-    </div>
-  )
+  return <ToolSummary umbrella={umbrellaForDetail(detail)} items={[detail]} />
 })
 
-const ToolRow = memo(function ToolRow({ detail }: { detail: ParsedLogDetail }) {
+const ToolSummary = memo(function ToolSummary({
+  umbrella,
+  items,
+}: {
+  umbrella: ToolUmbrella
+  items: ParsedLogDetail[]
+}) {
   const [open, setOpen] = useState(false)
-  const failed = typeof detail.exitCode === "number" && detail.exitCode !== 0
-  const { body, icon: Icon, label } = presentTool(detail)
-
-  const fullCommand =
-    detail.kind === "command_execution" ? detail.command?.trim() : undefined
-  const fullText = detail.text?.trim()
-  const output = detail.output?.trim()
-  const hasDetails = Boolean(fullCommand || fullText || output)
+  const Icon = umbrella === "modify" ? Pencil : SquareTerminal
+  const label = summarizeBundle(umbrella, items)
+  const failed = items.some(
+    (d) => typeof d.exitCode === "number" && d.exitCode !== 0
+  )
+  const isSingleCommand =
+    items.length === 1 && items[0].kind === "command_execution"
+  const canExpand = items.length > 0
 
   return (
     <div className="min-w-0">
       <button
         type="button"
-        onClick={() => hasDetails && setOpen((v) => !v)}
-        disabled={!hasDetails}
-        aria-expanded={open}
+        onClick={() => canExpand && setOpen((v) => !v)}
+        disabled={!canExpand}
+        aria-expanded={canExpand ? open : undefined}
         className={cn(
-          "flex w-full min-w-0 items-center gap-2 rounded-md py-0.5 text-left text-[11.5px] leading-5 text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none",
-          hasDetails && "cursor-pointer hover:text-foreground"
+          "group flex w-full min-w-0 items-center gap-2 py-0.5 text-left text-[13px] leading-6 text-muted-foreground/70 transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none",
+          canExpand && "cursor-pointer hover:text-foreground"
         )}
       >
         <Icon
           className={cn(
-            "size-3 shrink-0",
-            failed ? "text-destructive/80" : "text-muted-foreground/50"
+            "size-[15px] shrink-0",
+            failed
+              ? "text-destructive/80"
+              : "text-muted-foreground/50 group-hover:text-muted-foreground/80"
           )}
+          strokeWidth={1.5}
         />
-        <span
-          className={cn(
-            "shrink-0",
-            failed ? "text-destructive/80" : "text-muted-foreground/80"
-          )}
-        >
-          {label}
-        </span>
-        {body ? (
-          <>
-            <span className="shrink-0 text-muted-foreground/40" aria-hidden>
-              –
-            </span>
-            <span
-              className={cn(
-                "min-w-0 flex-1 text-muted-foreground/60",
-                !open && "truncate"
-              )}
-              title={!open ? body : undefined}
-            >
-              {body}
-            </span>
-          </>
-        ) : null}
-        {failed ? (
-          <span className="shrink-0 font-mono text-[10.5px] text-destructive/80">
-            exit {detail.exitCode}
-          </span>
-        ) : null}
-        {hasDetails ? (
-          <ChevronRight
-            className={cn(
-              "size-3 shrink-0 text-muted-foreground/50 transition-transform",
-              open && "rotate-90"
-            )}
+        <span className="min-w-0 truncate">{label}</span>
+        {open ? (
+          <ChevronDown
+            className="size-3.5 shrink-0 text-muted-foreground/50"
+            strokeWidth={1.75}
           />
         ) : null}
       </button>
-      {open && hasDetails ? (
-        <div className="mt-1 mb-1 ml-5 space-y-2 border-l border-border/60 pl-3">
-          {fullCommand ? (
-            <pre className="overflow-x-auto font-mono text-[11px] leading-5 break-words whitespace-pre-wrap text-muted-foreground/80">
-              {fullCommand}
-            </pre>
-          ) : null}
-          {fullText && !fullCommand ? (
-            <pre className="overflow-x-auto font-mono text-[11px] leading-5 break-words whitespace-pre-wrap text-muted-foreground/80">
-              {fullText}
-            </pre>
-          ) : null}
-          {output ? (
-            <div>
-              <div className="mb-1 text-[10px] font-medium tracking-wider text-muted-foreground/50 uppercase">
-                Output
-              </div>
-              <pre className="overflow-x-auto font-mono text-[11px] leading-5 break-words whitespace-pre-wrap text-muted-foreground/70">
-                {output}
-              </pre>
-            </div>
-          ) : null}
+      {open && isSingleCommand ? (
+        <div className="mt-2 ml-6">
+          <DetailView detail={items[0]} />
+        </div>
+      ) : open ? (
+        <div className="mt-0.5 ml-6 space-y-0.5">
+          {items.map((d) => (
+            <ExpandableItemRow key={toolDetailKey(d)} detail={d} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+})
+
+const ExpandableItemRow = memo(function ExpandableItemRow({
+  detail,
+}: {
+  detail: ParsedLogDetail
+}) {
+  const [open, setOpen] = useState(false)
+  const failed = typeof detail.exitCode === "number" && detail.exitCode !== 0
+  const hasDetail = Boolean(
+    detail.command?.trim() || detail.text?.trim() || detail.output?.trim()
+  )
+  return (
+    <div className="min-w-0">
+      <button
+        type="button"
+        onClick={() => hasDetail && setOpen((v) => !v)}
+        disabled={!hasDetail}
+        aria-expanded={hasDetail ? open : undefined}
+        className={cn(
+          "flex w-full min-w-0 items-center gap-1.5 py-0.5 text-left text-[13px] leading-6 text-muted-foreground/70 transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none",
+          hasDetail && "cursor-pointer hover:text-foreground",
+          failed && "text-destructive/80"
+        )}
+      >
+        <span className="min-w-0 truncate">{describeItem(detail)}</span>
+        {open ? (
+          <ChevronDown
+            className="size-3 shrink-0 text-muted-foreground/50"
+            strokeWidth={1.75}
+          />
+        ) : null}
+      </button>
+      {open && hasDetail ? (
+        <div className="mt-2 mb-1">
+          <DetailView detail={detail} />
+        </div>
+      ) : null}
+    </div>
+  )
+})
+
+const DetailView = memo(function DetailView({
+  detail,
+}: {
+  detail: ParsedLogDetail
+}) {
+  const failed = typeof detail.exitCode === "number" && detail.exitCode !== 0
+  const isCommand = detail.kind === "command_execution"
+  const kind = classifyDetail(detail)
+  const cmd = isCommand ? unwrapShellCommand(detail.command?.trim() ?? "") : ""
+  const text = !isCommand ? (detail.text?.trim() ?? "") : ""
+  const output = detail.output?.trim() ?? ""
+  const textLang = kind === "edit" || kind === "create" ? "diff" : "plaintext"
+  return (
+    <div className="space-y-2">
+      {cmd ? <CodeBlock body={cmd} lang="bash" /> : null}
+      {text ? <CodeBlock body={text} lang={textLang} /> : null}
+      {output ? <CodeBlock body={output} lang="plaintext" /> : null}
+      {failed ? (
+        <div className="font-mono text-[11px] text-destructive/80">
+          exit {detail.exitCode}
         </div>
       ) : null}
     </div>
