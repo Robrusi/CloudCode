@@ -18,8 +18,17 @@ const MAX_MARKER_COMMAND_LENGTH = 1_000
 const MAX_MARKER_PATCH_COMMAND_LENGTH = 12_000
 const MAX_MARKER_OUTPUT_LENGTH = 1_500
 const MAX_MARKER_TEXT_LENGTH = 800
+const MAX_MARKER_FILE_CHANGES = 50
+const MAX_MARKER_FILE_DIFF_LENGTH = 12_000
+
+type ToolMarkerFileChange = {
+  diff?: string
+  kind?: string
+  path?: string
+}
 
 type ToolMarkerDetail = {
+  changes?: ToolMarkerFileChange[]
   command?: string
   exitCode?: number
   kind?: string
@@ -51,12 +60,46 @@ function compactToolDetail(value: ToolMarkerDetail): ToolMarkerDetail | null {
     }
   }
 
+  if (value.kind === "file_change") {
+    return {
+      changes: Array.isArray(value.changes)
+        ? value.changes.slice(0, MAX_MARKER_FILE_CHANGES).flatMap((change) => {
+            if (
+              !change ||
+              typeof change !== "object" ||
+              Array.isArray(change)
+            ) {
+              return []
+            }
+            return [
+              {
+                diff: truncateMarkerText(
+                  change.diff,
+                  MAX_MARKER_FILE_DIFF_LENGTH
+                ),
+                kind: truncateMarkerText(change.kind, MAX_MARKER_TEXT_LENGTH),
+                path: truncateMarkerText(change.path, MAX_MARKER_TEXT_LENGTH),
+              },
+            ]
+          })
+        : undefined,
+      kind: value.kind,
+      status: truncateMarkerText(value.status, MAX_MARKER_TEXT_LENGTH),
+    }
+  }
+
   if (value.kind === "tool_call") {
+    const isPatch =
+      typeof value.text === "string" &&
+      /\*\*\* Begin Patch|\*\*\* (Add|Update|Delete) File:/.test(value.text)
     return {
       kind: value.kind,
       name: truncateMarkerText(value.name, MAX_MARKER_TEXT_LENGTH),
       status: truncateMarkerText(value.status, MAX_MARKER_TEXT_LENGTH),
-      text: truncateMarkerText(value.text, MAX_MARKER_TEXT_LENGTH),
+      text: truncateMarkerText(
+        value.text,
+        isPatch ? MAX_MARKER_PATCH_COMMAND_LENGTH : MAX_MARKER_TEXT_LENGTH
+      ),
     }
   }
 

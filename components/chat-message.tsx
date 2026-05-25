@@ -11,7 +11,7 @@ import {
 } from "lucide-react"
 import { memo, useMemo, useState } from "react"
 
-import { ChangedFiles } from "@/components/changed-files"
+import { ChangedFiles, DiffList } from "@/components/changed-files"
 import { Markdown } from "@/components/chat-markdown"
 import { CodeBlock } from "@/components/code-block"
 import { cn } from "@/lib/utils"
@@ -87,6 +87,7 @@ export const MessageBlock = memo(function MessageBlock({
           error={Boolean(message.error)}
           pending={Boolean(message.pending)}
           logs={logs}
+          runDiff={message.meta?.diff}
         />
       ) : null}
       {!message.pending && message.meta?.diff ? (
@@ -151,6 +152,7 @@ const AssistantBody = memo(function AssistantBody({
   error,
   pending,
   logs,
+  runDiff,
 }: {
   text: string
   repoName: string | null
@@ -158,6 +160,7 @@ const AssistantBody = memo(function AssistantBody({
   error: boolean
   pending: boolean
   logs: ChatRunLog[]
+  runDiff?: string
 }) {
   if (pending) {
     return (
@@ -167,6 +170,7 @@ const AssistantBody = memo(function AssistantBody({
         repoName={repoName}
         onOpenFile={onOpenFile}
         logs={logs}
+        runDiff={runDiff}
       />
     )
   }
@@ -238,7 +242,9 @@ const AssistantBody = memo(function AssistantBody({
       )
     }
     if (seg.kind === "tools") {
-      rendered.push(<ToolGroup key={seg.key} details={seg.details} />)
+      rendered.push(
+        <ToolGroup key={seg.key} details={seg.details} runDiff={runDiff} />
+      )
     } else if (seg.text.trim()) {
       rendered.push(
         <Markdown
@@ -261,12 +267,14 @@ const PendingAssistantBody = memo(function PendingAssistantBody({
   repoName,
   onOpenFile,
   logs,
+  runDiff,
 }: {
   text: string
   error: boolean
   repoName: string | null
   onOpenFile: (path: string) => void
   logs: ChatRunLog[]
+  runDiff?: string
 }) {
   const segments = splitContentByToolMarkers(text)
   const hasMarkers = segments.some((segment) => segment.kind === "tool")
@@ -305,7 +313,7 @@ const PendingAssistantBody = memo(function PendingAssistantBody({
     <div className="space-y-3">
       {grouped.map((seg) =>
         seg.kind === "tools" ? (
-          <ToolGroup key={seg.key} details={seg.details} />
+          <ToolGroup key={seg.key} details={seg.details} runDiff={runDiff} />
         ) : (
           <Markdown
             key={seg.key}
@@ -316,7 +324,9 @@ const PendingAssistantBody = memo(function PendingAssistantBody({
           />
         )
       )}
-      {fallbackTools.length > 0 ? <ToolGroup details={fallbackTools} /> : null}
+      {fallbackTools.length > 0 ? (
+        <ToolGroup details={fallbackTools} runDiff={runDiff} />
+      ) : null}
     </div>
   )
 })
@@ -386,6 +396,11 @@ function isSetupSummaryLog(log: ChatRunLog) {
 }
 
 type ParsedLogDetail = {
+  changes?: Array<{
+    diff?: string
+    kind?: string
+    path?: string
+  }>
   command?: string
   exitCode?: number
   kind?: string
@@ -412,7 +427,9 @@ function toolDetailsFromLogs(logs: ChatRunLog[]) {
     .map((log) => (log.kind === "command" ? parseLogDetail(log.detail) : null))
     .filter(
       (detail): detail is ParsedLogDetail =>
-        detail?.kind === "command_execution" || detail?.kind === "tool_call"
+        detail?.kind === "command_execution" ||
+        detail?.kind === "file_change" ||
+        detail?.kind === "tool_call"
     )
 }
 
@@ -423,6 +440,9 @@ function toolDetailKey(detail: ParsedLogDetail) {
     detail.status,
     detail.exitCode,
     detail.command,
+    detail.changes
+      ?.map((change) => `${change.kind ?? ""}:${change.path ?? ""}`)
+      .join(","),
     detail.text,
     detail.output,
   ]
@@ -484,7 +504,22 @@ type FileOp = { op: "add" | "delete" | "update"; path: string }
 
 const PATCH_FILE_REGEX = /\*\*\* (Add|Update|Delete) File:\s*([^\n]+)/g
 
+function normalizeChangeOp(kind: string | undefined): FileOp["op"] | null {
+  if (kind === "add" || kind === "create") return "add"
+  if (kind === "delete" || kind === "remove") return "delete"
+  if (kind === "update" || kind === "modify" || kind === "edit") {
+    return "update"
+  }
+  return null
+}
+
 function extractFileOps(detail: ParsedLogDetail): FileOp[] {
+  const changeOps = (detail.changes ?? []).flatMap((change) => {
+    const op = normalizeChangeOp(change.kind)
+    return op && change.path ? [{ op, path: change.path }] : []
+  })
+  if (changeOps.length > 0) return changeOps
+
   const sources: string[] = []
   if (detail.command) sources.push(detail.command)
   if (detail.text) sources.push(detail.text)
@@ -510,17 +545,173 @@ function extractPatchBody(detail: ParsedLogDetail): string | null {
     if (begin !== -1 && end !== -1 && end > begin) {
       return src.slice(begin, end + "*** End Patch".length).trim()
     }
-    if (PATCH_FILE_REGEX.test(src)) {
-      PATCH_FILE_REGEX.lastIndex = 0
-      const start = src.search(/\*\*\* (Add|Update|Delete) File:/)
-      if (start !== -1) return src.slice(start).trim()
-    }
+    const start = src.search(/\*\*\* (Add|Update|Delete) File:/)
+    if (start !== -1) return src.slice(start).trim()
   }
   return null
 }
 
+function buildDiffFromChanges(
+  detail: ParsedLogDetail,
+  fileOp?: FileOp
+): string | null {
+  const changes = detail.changes ?? []
+  const parts: string[] = []
+  for (const change of changes) {
+    if (
+      fileOp &&
+      (!change.path || !pathsReferToSameFile(change.path, fileOp.path))
+    ) {
+      continue
+    }
+    if (!change.diff?.trim()) continue
+    const normalized = normalizeChangeDiff(change)
+    if (normalized) parts.push(normalized)
+  }
+  return parts.length > 0 ? parts.join("\n") : null
+}
+
+function normalizeChangeDiff(change: {
+  diff?: string
+  kind?: string
+  path?: string
+}): string | null {
+  const diff = change.diff?.trim()
+  if (!diff) return null
+  // If the diff already carries `---`/`+++` file headers, trust it.
+  if (/^---\s/m.test(diff) && /^\+\+\+\s/m.test(diff)) return diff
+  // If the diff is an apply_patch fragment, convert it to unified diff.
+  if (/^\*\*\* (Add|Update|Delete) File:/.test(diff)) {
+    return applyPatchToUnifiedDiff(diff)
+  }
+
+  const path = change.path?.trim() ?? "file"
+  const op = normalizeChangeOp(change.kind) ?? "update"
+  const header: string[] = []
+  if (op === "add") {
+    header.push(`--- /dev/null`, `+++ b/${path}`)
+  } else if (op === "delete") {
+    header.push(`--- a/${path}`, `+++ /dev/null`)
+  } else {
+    header.push(`--- a/${path}`, `+++ b/${path}`)
+  }
+  // If the diff already has a hunk header, leave it; otherwise add a generic one.
+  const body = /^@@\s/m.test(diff) ? diff : `@@ @@\n${diff}`
+  return `${header.join("\n")}\n${body}`
+}
+
+function applyPatchToUnifiedDiff(patch: string): string {
+  const inner = patch
+    .replace(/^\*\*\* Begin Patch\s*\n?/, "")
+    .replace(/\n?\*\*\* End Patch\s*$/, "")
+    .trim()
+
+  const fileBlockRegex =
+    /\*\*\* (Add|Update|Delete) File:\s*([^\n]+)\n?([\s\S]*?)(?=\n\*\*\* (?:Add|Update|Delete) File:|$)/g
+
+  const out: string[] = []
+  let m: RegExpExecArray | null
+  fileBlockRegex.lastIndex = 0
+  while ((m = fileBlockRegex.exec(inner)) !== null) {
+    const op = m[1]
+    const path = m[2].trim()
+    const body = m[3].replace(/\n+$/, "")
+    if (op === "Add") {
+      const addedLines = body
+        .split("\n")
+        .filter((line) => line.startsWith("+")).length
+      out.push(`--- /dev/null`)
+      out.push(`+++ b/${path}`)
+      out.push(`@@ -0,0 +1,${addedLines || 1} @@`)
+      if (body) out.push(body)
+    } else if (op === "Delete") {
+      out.push(`--- a/${path}`)
+      out.push(`+++ /dev/null`)
+      if (body) out.push(body)
+    } else {
+      out.push(`--- a/${path}`)
+      out.push(`+++ b/${path}`)
+      // Convert codex's bare `@@` hunk header into proper unified-diff form.
+      const converted = body.replace(/^@@\s*$/gm, "@@ @@")
+      if (converted) out.push(converted)
+    }
+  }
+  return out.length > 0 ? out.join("\n") : patch
+}
+
+function extractPatchForFileOp(patch: string, fileOp: FileOp): string | null {
+  const inner = patch
+    .replace(/^\*\*\* Begin Patch\s*\n?/, "")
+    .replace(/\n?\*\*\* End Patch\s*$/, "")
+    .trim()
+  const fileBlockRegex =
+    /\*\*\* (Add|Update|Delete) File:\s*([^\n]+)\n?([\s\S]*?)(?=\n\*\*\* (?:Add|Update|Delete) File:|$)/g
+
+  let m: RegExpExecArray | null
+  fileBlockRegex.lastIndex = 0
+  while ((m = fileBlockRegex.exec(inner)) !== null) {
+    const path = m[2].trim()
+    if (!pathsReferToSameFile(path, fileOp.path)) continue
+    return `*** ${m[1]} File: ${path}\n${m[3].replace(/\n+$/, "")}`
+  }
+  return null
+}
+
+function normalizeDiffPath(path: string): string {
+  return path
+    .trim()
+    .replace(/^"(.*)"$/, "$1")
+    .replace(/^\/dev\/null$/, "")
+    .replace(/^[ab]\//, "")
+    .replace(/^\/root\/repo\//, "")
+    .replace(/^\/workspace\//, "")
+    .replace(/^\/+/, "")
+}
+
+function pathsReferToSameFile(left: string, right: string): boolean {
+  const a = normalizeDiffPath(left)
+  const b = normalizeDiffPath(right)
+  if (!a || !b) return false
+  return a === b || a.endsWith(`/${b}`) || b.endsWith(`/${a}`)
+}
+
+function filePathsFromUnifiedDiffBlock(block: string): string[] {
+  const paths: string[] = []
+  const gitHeader = block.match(/^diff --git\s+(\S+)\s+(\S+)/m)
+  if (gitHeader) paths.push(gitHeader[1], gitHeader[2])
+
+  for (const marker of [/^---\s+([^\t\n]+)/m, /^\+\+\+\s+([^\t\n]+)/m]) {
+    const match = block.match(marker)
+    if (match) paths.push(match[1])
+  }
+
+  return paths.filter((path) => normalizeDiffPath(path))
+}
+
+function extractRunDiffForFileOps(
+  runDiff: string | undefined,
+  fileOps: FileOp[]
+): string | null {
+  if (!runDiff?.trim() || fileOps.length === 0) return null
+
+  const blocks = runDiff
+    .split(/(?=^diff --git\s+)/m)
+    .map((block) => block.trim())
+    .filter(Boolean)
+  const candidates = blocks.length > 0 ? blocks : [runDiff.trim()]
+  const matched = candidates.filter((block) => {
+    const blockPaths = filePathsFromUnifiedDiffBlock(block)
+    return fileOps.some((op) =>
+      blockPaths.some((path) => pathsReferToSameFile(path, op.path))
+    )
+  })
+
+  return matched.length > 0 ? matched.join("\n\n") : null
+}
+
 function umbrellaForDetail(detail: ParsedLogDetail): ToolUmbrella {
   if (extractFileOps(detail).length > 0) return "modify"
+  if (detail.kind === "file_change") return "modify"
   if (detail.kind === "command_execution") return "explore"
   const lower = (detail.name || "").toLowerCase()
   if (/edit|patch|write|create|update|apply|insert/.test(lower)) return "modify"
@@ -634,6 +825,7 @@ function classifyDetail(detail: ParsedLogDetail): DetailKind {
   if (ops.length > 0) {
     return ops.every((o) => o.op === "add") ? "create" : "edit"
   }
+  if (detail.kind === "file_change") return "edit"
   if (detail.kind === "command_execution") {
     const intent = inferCommandIntent(
       unwrapShellCommand(detail.command?.trim() ?? "")
@@ -691,6 +883,13 @@ function summarizeBundle(
   }
 
   if (umbrella === "modify") {
+    const allOps = items.flatMap((item) => extractFileOps(item))
+    if (allOps.length === 1) {
+      const op = allOps[0]
+      const verb =
+        op.op === "add" ? "Created" : op.op === "delete" ? "Deleted" : "Edited"
+      return `${verb} ${basename(op.path)}`
+    }
     const parts: string[] = []
     if (counts.create > 0)
       parts.push(`Created ${pluralize(counts.create, "file", "files")}`)
@@ -775,6 +974,12 @@ function describeItem(detail: ParsedLogDetail): string {
   return detail.name || "Tool"
 }
 
+function describeFileOp(op: FileOp): string {
+  const verb =
+    op.op === "add" ? "Created" : op.op === "delete" ? "Deleted" : "Edited"
+  return `${verb} ${basename(op.path)}`
+}
+
 function basename(path: string): string {
   if (!path) return ""
   const trimmed = path.replace(/\/+$/, "")
@@ -784,8 +989,10 @@ function basename(path: string): string {
 
 const ToolGroup = memo(function ToolGroup({
   details,
+  runDiff,
 }: {
   details: ParsedLogDetail[]
+  runDiff?: string
 }) {
   if (details.length === 0) return null
   const bundles = bundleByUmbrella(details)
@@ -796,6 +1003,7 @@ const ToolGroup = memo(function ToolGroup({
           key={`${bundle.umbrella}-${i}-${toolDetailKey(bundle.items[0])}`}
           umbrella={bundle.umbrella}
           items={bundle.items}
+          runDiff={runDiff}
         />
       ))}
     </div>
@@ -805,9 +1013,11 @@ const ToolGroup = memo(function ToolGroup({
 const ToolSummary = memo(function ToolSummary({
   umbrella,
   items,
+  runDiff,
 }: {
   umbrella: ToolUmbrella
   items: ParsedLogDetail[]
+  runDiff?: string
 }) {
   const [open, setOpen] = useState(false)
   const Icon = umbrella === "modify" ? Pencil : SquareTerminal
@@ -817,6 +1027,11 @@ const ToolSummary = memo(function ToolSummary({
   )
   const isSingleItem = items.length === 1
   const canExpand = items.length > 0
+  const fileRowCount = items.reduce(
+    (count, item) => count + extractFileOps(item).length,
+    0
+  )
+  const showFileRows = umbrella === "modify" && fileRowCount > 1
 
   return (
     <div className="min-w-0">
@@ -847,14 +1062,41 @@ const ToolSummary = memo(function ToolSummary({
           />
         ) : null}
       </button>
-      {open && isSingleItem ? (
+      {open && showFileRows ? (
+        <div className="mt-0.5 ml-6 space-y-0.5">
+          {items.flatMap((detail) => {
+            const ops = extractFileOps(detail)
+            if (ops.length === 0) {
+              return [
+                <ExpandableItemRow
+                  key={toolDetailKey(detail)}
+                  detail={detail}
+                  runDiff={runDiff}
+                />,
+              ]
+            }
+            return ops.map((fileOp) => (
+              <ExpandableFileRow
+                key={`${toolDetailKey(detail)}:${fileOp.op}:${fileOp.path}`}
+                detail={detail}
+                fileOp={fileOp}
+                runDiff={runDiff}
+              />
+            ))
+          })}
+        </div>
+      ) : open && isSingleItem ? (
         <div className="mt-2 ml-6">
-          <DetailView detail={items[0]} />
+          <DetailView detail={items[0]} runDiff={runDiff} />
         </div>
       ) : open ? (
         <div className="mt-0.5 ml-6 space-y-0.5">
           {items.map((d) => (
-            <ExpandableItemRow key={toolDetailKey(d)} detail={d} />
+            <ExpandableItemRow
+              key={toolDetailKey(d)}
+              detail={d}
+              runDiff={runDiff}
+            />
           ))}
         </div>
       ) : null}
@@ -864,13 +1106,18 @@ const ToolSummary = memo(function ToolSummary({
 
 const ExpandableItemRow = memo(function ExpandableItemRow({
   detail,
+  runDiff,
 }: {
   detail: ParsedLogDetail
+  runDiff?: string
 }) {
   const [open, setOpen] = useState(false)
   const failed = typeof detail.exitCode === "number" && detail.exitCode !== 0
   const hasDetail = Boolean(
-    detail.command?.trim() || detail.text?.trim() || detail.output?.trim()
+    detail.command?.trim() ||
+    detail.text?.trim() ||
+    detail.output?.trim() ||
+    extractFileOps(detail).length > 0
   )
   return (
     <div className="min-w-0">
@@ -895,7 +1142,48 @@ const ExpandableItemRow = memo(function ExpandableItemRow({
       </button>
       {open && hasDetail ? (
         <div className="mt-2 mb-1">
-          <DetailView detail={detail} />
+          <DetailView detail={detail} runDiff={runDiff} />
+        </div>
+      ) : null}
+    </div>
+  )
+})
+
+const ExpandableFileRow = memo(function ExpandableFileRow({
+  detail,
+  fileOp,
+  runDiff,
+}: {
+  detail: ParsedLogDetail
+  fileOp: FileOp
+  runDiff?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const failed = typeof detail.exitCode === "number" && detail.exitCode !== 0
+
+  return (
+    <div className="min-w-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className={cn(
+          "flex w-full min-w-0 items-center gap-1.5 py-0.5 text-left text-[14px] leading-7 text-muted-foreground/70 transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none",
+          "cursor-pointer hover:text-foreground",
+          failed && "text-destructive/80"
+        )}
+      >
+        <span className="min-w-0 truncate">{describeFileOp(fileOp)}</span>
+        {open ? (
+          <ChevronDown
+            className="size-3 shrink-0 text-muted-foreground/50"
+            strokeWidth={1.75}
+          />
+        ) : null}
+      </button>
+      {open ? (
+        <div className="mt-2 mb-1">
+          <DetailView detail={detail} fileOp={fileOp} runDiff={runDiff} />
         </div>
       ) : null}
     </div>
@@ -904,23 +1192,57 @@ const ExpandableItemRow = memo(function ExpandableItemRow({
 
 const DetailView = memo(function DetailView({
   detail,
+  fileOp,
+  runDiff,
 }: {
   detail: ParsedLogDetail
+  fileOp?: FileOp
+  runDiff?: string
 }) {
   const failed = typeof detail.exitCode === "number" && detail.exitCode !== 0
   const kind = classifyDetail(detail)
   const isCommand = detail.kind === "command_execution"
   const isFileChange = kind === "edit" || kind === "create"
   const patchBody = isFileChange ? extractPatchBody(detail) : null
+  const rawPatchBody =
+    patchBody && fileOp ? extractPatchForFileOp(patchBody, fileOp) : patchBody
+  const fileOps = fileOp ? [fileOp] : extractFileOps(detail)
+  const changesDiff = isFileChange ? buildDiffFromChanges(detail, fileOp) : null
+  const runFileDiff =
+    isFileChange && !rawPatchBody && !changesDiff
+      ? extractRunDiffForFileOps(runDiff, fileOps)
+      : null
+  const diffBody = rawPatchBody
+    ? applyPatchToUnifiedDiff(rawPatchBody)
+    : (changesDiff ?? runFileDiff)
+  const hasDiff = Boolean(diffBody)
   const cmd =
-    isCommand && !patchBody
+    isCommand && !hasDiff
       ? unwrapShellCommand(detail.command?.trim() ?? "")
       : ""
-  const text = !isCommand && !patchBody ? (detail.text?.trim() ?? "") : ""
+  const text = !isCommand && !hasDiff ? (detail.text?.trim() ?? "") : ""
   const output = detail.output?.trim() ?? ""
+  const fileChanges = !hasDiff ? fileOps : []
   return (
     <div className="space-y-2">
-      {patchBody ? <CodeBlock body={patchBody} lang="diff" /> : null}
+      {diffBody ? (
+        <div className="rounded-xl border border-border bg-background">
+          <DiffList diff={diffBody} />
+        </div>
+      ) : null}
+      {fileChanges.length > 0 ? (
+        <div className="space-y-1 rounded-md border border-border/70 bg-muted/30 px-3 py-2">
+          {fileChanges.map((change) => (
+            <div
+              key={`${change.op}:${change.path}`}
+              className="flex min-w-0 items-center gap-2 font-mono text-[11px] leading-5 text-muted-foreground"
+            >
+              <span className="shrink-0 uppercase">{change.op}</span>
+              <span className="min-w-0 truncate">{change.path}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
       {cmd ? <CodeBlock body={cmd} lang="bash" /> : null}
       {text ? <CodeBlock body={text} lang="plaintext" /> : null}
       {output ? <CodeBlock body={output} lang="plaintext" /> : null}

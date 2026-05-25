@@ -395,6 +395,169 @@ function findNumber(
   return undefined
 }
 
+type CodexFileChange = {
+  diff?: string
+  kind: "add" | "delete" | "update"
+  path: string
+}
+
+function normalizeFileChangeKind(value: string | undefined) {
+  if (value === "add" || value === "create") return "add"
+  if (value === "delete" || value === "remove") return "delete"
+  if (value === "update" || value === "modify" || value === "edit") {
+    return "update"
+  }
+  return undefined
+}
+
+function parseFileChange(value: unknown): CodexFileChange | null {
+  const record = objectRecord(value)
+  if (!record) return null
+
+  const path = stringValue(record.path)
+  const kind = normalizeFileChangeKind(
+    stringValue(record.kind) ?? stringValue(record.type)
+  )
+  const diff = findString(record, [
+    "unified_diff",
+    "unifiedDiff",
+    "diff",
+    "patch",
+    "body",
+    "content",
+  ])
+
+  return path && kind ? { diff, kind, path } : null
+}
+
+function findPatchBody(value: unknown, depth = 0): string | undefined {
+  if (depth > 6) return undefined
+  if (typeof value === "string") {
+    if (
+      value.includes("*** Begin Patch") ||
+      /\*\*\* (Add|Update|Delete) File:/.test(value)
+    ) {
+      return value
+    }
+    // Sometimes a JSON-encoded argument string carries the patch.
+    if (value.startsWith("{") || value.startsWith("[")) {
+      try {
+        return findPatchBody(JSON.parse(value), depth + 1)
+      } catch {
+        return undefined
+      }
+    }
+    return undefined
+  }
+  if (Array.isArray(value)) {
+    for (const nested of value) {
+      const found = findPatchBody(nested, depth + 1)
+      if (found) return found
+    }
+    return undefined
+  }
+  const record = objectRecord(value)
+  if (!record) return undefined
+  for (const key of [
+    "input",
+    "patch",
+    "unified_diff",
+    "unifiedDiff",
+    "diff",
+    "body",
+    "arguments",
+    "args",
+  ]) {
+    const candidate = record[key]
+    const found = findPatchBody(candidate, depth + 1)
+    if (found) return found
+  }
+  for (const nested of Object.values(record)) {
+    const found = findPatchBody(nested, depth + 1)
+    if (found) return found
+  }
+  return undefined
+}
+
+function extractPatchForPath(
+  patchBody: string | undefined,
+  path: string
+): string | undefined {
+  if (!patchBody || !path) return undefined
+  // Locate the `*** (Add|Update|Delete) File: <path>` header and grab through
+  // the next file header or end-of-patch sentinel.
+  const escapedPath = path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const fileRegex = new RegExp(
+    `\\*\\*\\* (Add|Update|Delete) File:\\s*${escapedPath}[ \\t]*\\n?([\\s\\S]*?)(?=\\n\\*\\*\\* (?:Add|Update|Delete) File:|\\n\\*\\*\\* End Patch|$)`
+  )
+  const match = patchBody.match(fileRegex)
+  if (!match) return undefined
+  return `*** ${match[1]} File: ${path}\n${match[2].replace(/\n+$/, "")}`
+}
+
+const PATCH_FILE_HEADER_REGEX = /\*\*\* (Add|Update|Delete) File:\s*([^\n]+)/g
+
+function collectPatchFileChanges(patchBody: string | undefined) {
+  if (!patchBody) return []
+
+  const changes: CodexFileChange[] = []
+  let match: RegExpExecArray | null
+  PATCH_FILE_HEADER_REGEX.lastIndex = 0
+  while ((match = PATCH_FILE_HEADER_REGEX.exec(patchBody)) !== null) {
+    const kind = normalizeFileChangeKind(match[1].toLowerCase())
+    const path = match[2].trim()
+    if (!kind || !path) continue
+    changes.push({
+      diff: extractPatchForPath(patchBody, path),
+      kind,
+      path,
+    })
+  }
+  return changes
+}
+
+function mergeFileChanges(
+  primary: CodexFileChange[],
+  fallback: CodexFileChange[]
+) {
+  const byKey = new Map<string, CodexFileChange>()
+  for (const change of [...primary, ...fallback]) {
+    const key = `${change.kind}:${change.path}`
+    const existing = byKey.get(key)
+    byKey.set(key, existing?.diff ? existing : change)
+  }
+  return Array.from(byKey.values())
+}
+
+function collectFileChanges(value: unknown, depth = 0): CodexFileChange[] {
+  if (depth > 6) return []
+
+  if (Array.isArray(value)) {
+    return value.flatMap((nested) => collectFileChanges(nested, depth + 1))
+  }
+
+  const record = objectRecord(value)
+  if (!record) return []
+
+  const changes: CodexFileChange[] = []
+  for (const key of ["changes", "file_changes", "fileChanges"]) {
+    const nested = record[key]
+    if (!Array.isArray(nested)) continue
+    changes.push(
+      ...nested.flatMap((item) => {
+        const change = parseFileChange(item)
+        return change ? [change] : []
+      })
+    )
+  }
+
+  for (const nested of Object.values(record)) {
+    changes.push(...collectFileChanges(nested, depth + 1))
+  }
+
+  return changes
+}
+
 function logDetail(value: Record<string, unknown>) {
   return JSON.stringify(value)
 }
@@ -410,6 +573,11 @@ function summarizeCodexEvent(event: unknown): RunCodexLog | undefined {
   const command = findString(record, ["command", "cmd", "shell_command"])
   const output = findString(record, ["aggregated_output", "output", "stdout"])
   const exitCode = findNumber(record, ["exit_code", "exitCode"])
+  const eventPatch = findPatchBody(record)
+  const fileChanges = mergeFileChanges(
+    collectFileChanges(record),
+    collectPatchFileChanges(eventPatch)
+  )
   const toolName = findString(record, [
     "tool",
     "tool_name",
@@ -423,6 +591,32 @@ function summarizeCodexEvent(event: unknown): RunCodexLog | undefined {
     "content",
     "delta",
   ])
+
+  if (
+    fileChanges.length > 0 &&
+    (normalizedType.includes("filechange") ||
+      type.includes("tool") ||
+      type.includes("function"))
+  ) {
+    const completeStatus = nestedStatus ?? status
+    if (completeStatus === "in_progress") return undefined
+
+    const enriched = fileChanges.map((change) =>
+      change.diff
+        ? change
+        : { ...change, diff: extractPatchForPath(eventPatch, change.path) }
+    )
+
+    return {
+      detail: logDetail({
+        changes: enriched,
+        kind: "file_change",
+        status: completeStatus,
+      }),
+      kind: "command",
+      message: "File change",
+    }
+  }
 
   if (type.includes("reason")) {
     return {
