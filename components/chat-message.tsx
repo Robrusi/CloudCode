@@ -6,6 +6,7 @@ import {
   Loader2,
   Pencil,
   ScrollText,
+  Search,
   SquareTerminal,
   Terminal,
 } from "lucide-react"
@@ -448,6 +449,116 @@ function toolDetailKey(detail: ParsedLogDetail) {
   ]
     .filter((part) => part !== undefined && part !== "")
     .join(":")
+}
+
+function normalizeCommandKey(detail: ParsedLogDetail): string | null {
+  if (detail.kind !== "command_execution") return null
+  const command = detail.command?.trim()
+  return command ? unwrapShellCommand(command) : null
+}
+
+function normalizedStatus(detail: ParsedLogDetail): string {
+  return (
+    detail.status
+      ?.trim()
+      .toLowerCase()
+      .replace(/[\s-]+/g, "_") ?? ""
+  )
+}
+
+function isStartLikeCommandDetail(detail: ParsedLogDetail): boolean {
+  if (detail.kind !== "command_execution") return false
+  const status = normalizedStatus(detail)
+  return (
+    status === "in_progress" ||
+    status === "running" ||
+    status === "started" ||
+    status === "pending" ||
+    status === "executing"
+  )
+}
+
+function isTerminalCommandDetail(detail: ParsedLogDetail): boolean {
+  if (detail.kind !== "command_execution") return false
+  const status = normalizedStatus(detail)
+  return (
+    status === "completed" ||
+    status === "complete" ||
+    status === "succeeded" ||
+    status === "success" ||
+    status === "failed" ||
+    status === "error" ||
+    status === "cancelled" ||
+    status === "canceled"
+  )
+}
+
+function commandDetailCompleteness(detail: ParsedLogDetail): number {
+  let score = 0
+  if (detail.output?.trim()) score += 4
+  if (typeof detail.exitCode === "number") score += 2
+  if (isTerminalCommandDetail(detail)) score += 1
+  if (isStartLikeCommandDetail(detail)) score -= 1
+  return score
+}
+
+function shouldMergeCommandDetails(
+  previous: ParsedLogDetail | undefined,
+  next: ParsedLogDetail
+): previous is ParsedLogDetail {
+  if (!previous) return false
+  const previousKey = normalizeCommandKey(previous)
+  const nextKey = normalizeCommandKey(next)
+  if (!previousKey || previousKey !== nextKey) return false
+
+  if (isStartLikeCommandDetail(previous) || isStartLikeCommandDetail(next)) {
+    return true
+  }
+
+  const previousHasResult =
+    Boolean(previous.output?.trim()) || typeof previous.exitCode === "number"
+  const nextHasResult =
+    Boolean(next.output?.trim()) || typeof next.exitCode === "number"
+  return previousHasResult !== nextHasResult
+}
+
+function mergeCommandDetails(
+  previous: ParsedLogDetail,
+  next: ParsedLogDetail
+): ParsedLogDetail {
+  if (
+    isStartLikeCommandDetail(next) &&
+    commandDetailCompleteness(previous) >= commandDetailCompleteness(next)
+  ) {
+    return previous
+  }
+
+  const preferNext =
+    commandDetailCompleteness(next) >= commandDetailCompleteness(previous)
+  const primary = preferNext ? next : previous
+  const fallback = preferNext ? previous : next
+  return {
+    ...fallback,
+    ...primary,
+    command: primary.command ?? fallback.command,
+    exitCode: primary.exitCode ?? fallback.exitCode,
+    kind: "command_execution",
+    output: primary.output ?? fallback.output,
+    status: primary.status ?? fallback.status,
+  }
+}
+
+function coalesceToolDetails(details: ParsedLogDetail[]): ParsedLogDetail[] {
+  const coalesced: ParsedLogDetail[] = []
+  for (const detail of details) {
+    const previous = coalesced.at(-1)
+    if (shouldMergeCommandDetails(previous, detail)) {
+      coalesced[coalesced.length - 1] = mergeCommandDetails(previous, detail)
+    } else {
+      coalesced.push(detail)
+    }
+  }
+  return coalesced
 }
 
 const SetupLogRow = memo(function SetupLogRow({ log }: { log: ChatRunLog }) {
@@ -994,8 +1105,9 @@ const ToolGroup = memo(function ToolGroup({
   details: ParsedLogDetail[]
   runDiff?: string
 }) {
-  if (details.length === 0) return null
-  const bundles = bundleByUmbrella(details)
+  const visibleDetails = useMemo(() => coalesceToolDetails(details), [details])
+  if (visibleDetails.length === 0) return null
+  const bundles = bundleByUmbrella(visibleDetails)
   return (
     <div className="space-y-1">
       {bundles.map((bundle, i) => (
@@ -1020,7 +1132,12 @@ const ToolSummary = memo(function ToolSummary({
   runDiff?: string
 }) {
   const [open, setOpen] = useState(false)
-  const Icon = umbrella === "modify" ? Pencil : SquareTerminal
+  const allSearches =
+    umbrella === "explore" &&
+    items.length > 0 &&
+    items.every((item) => classifyDetail(item) === "search")
+  const Icon =
+    umbrella === "modify" ? Pencil : allSearches ? Search : SquareTerminal
   const label = summarizeBundle(umbrella, items)
   const failed = items.some(
     (d) => typeof d.exitCode === "number" && d.exitCode !== 0
