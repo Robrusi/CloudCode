@@ -872,8 +872,6 @@ const ExpandableItemRow = memo(function ExpandableItemRow({
   const hasDetail = Boolean(
     detail.command?.trim() || detail.text?.trim() || detail.output?.trim()
   )
-  const kind = classifyDetail(detail)
-  const isCommand = kind === "command"
   return (
     <div className="min-w-0">
       <button
@@ -882,10 +880,7 @@ const ExpandableItemRow = memo(function ExpandableItemRow({
         disabled={!hasDetail}
         aria-expanded={hasDetail ? open : undefined}
         className={cn(
-          "flex w-full min-w-0 items-center gap-1.5 py-0.5 text-left text-[14px] leading-7 transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none",
-          isCommand
-            ? "font-medium text-foreground/90"
-            : "text-muted-foreground/70",
+          "flex w-full min-w-0 items-center gap-1.5 py-0.5 text-left text-[14px] leading-7 text-muted-foreground/70 transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none",
           hasDetail && "cursor-pointer hover:text-foreground",
           failed && "text-destructive/80"
         )}
