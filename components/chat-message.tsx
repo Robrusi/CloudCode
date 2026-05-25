@@ -195,7 +195,7 @@ const AssistantBody = memo(function AssistantBody({
     if (seg.kind === "tool") {
       toolBuf.push(seg.detail)
       toolBufKey = toolBufKey ? `${toolBufKey}-${seg.key}` : seg.key
-    } else {
+    } else if (seg.text.trim()) {
       flushToolBuf()
       grouped.push(seg)
     }
@@ -274,20 +274,47 @@ const PendingAssistantBody = memo(function PendingAssistantBody({
     ? EMPTY_TOOL_DETAILS
     : toolDetailsFromLogs(logs)
 
+  const grouped: Array<
+    | { key: string; kind: "text"; text: string }
+    | { details: ParsedLogDetail[]; key: string; kind: "tools" }
+  > = []
+  let toolBuf: ParsedLogDetail[] = []
+  let toolBufKey = ""
+  function flushToolBuf() {
+    if (toolBuf.length === 0) return
+    grouped.push({
+      details: toolBuf,
+      key: `tools-${toolBufKey}`,
+      kind: "tools",
+    })
+    toolBuf = []
+    toolBufKey = ""
+  }
+  for (const seg of segments) {
+    if (seg.kind === "tool") {
+      toolBuf.push(seg.detail)
+      toolBufKey = toolBufKey ? `${toolBufKey}-${seg.key}` : seg.key
+    } else if (seg.text.trim()) {
+      flushToolBuf()
+      grouped.push(seg)
+    }
+  }
+  flushToolBuf()
+
   return (
     <div className="space-y-3">
-      {segments.map((segment) =>
-        segment.kind === "tool" ? (
-          <SingleToolGroup key={segment.key} detail={segment.detail} />
-        ) : segment.text.trim() ? (
+      {grouped.map((seg) =>
+        seg.kind === "tools" ? (
+          <ToolGroup key={seg.key} details={seg.details} />
+        ) : (
           <Markdown
-            key={segment.key}
-            text={segment.text}
+            key={seg.key}
+            text={seg.text}
             className={cn("text-[15px] leading-7", error && "text-destructive")}
             repoName={repoName}
             onOpenFile={onOpenFile}
           />
-        ) : null
+        )
       )}
       {fallbackTools.length > 0 ? <ToolGroup details={fallbackTools} /> : null}
     </div>
@@ -453,7 +480,47 @@ function unwrapShellCommand(cmd: string): string {
 
 type ToolUmbrella = "explore" | "modify"
 
+type FileOp = { op: "add" | "delete" | "update"; path: string }
+
+const PATCH_FILE_REGEX = /\*\*\* (Add|Update|Delete) File:\s*([^\n]+)/g
+
+function extractFileOps(detail: ParsedLogDetail): FileOp[] {
+  const sources: string[] = []
+  if (detail.command) sources.push(detail.command)
+  if (detail.text) sources.push(detail.text)
+  const ops: FileOp[] = []
+  for (const src of sources) {
+    PATCH_FILE_REGEX.lastIndex = 0
+    let m: RegExpExecArray | null
+    while ((m = PATCH_FILE_REGEX.exec(src)) !== null) {
+      const op = m[1].toLowerCase() as FileOp["op"]
+      ops.push({ op, path: m[2].trim() })
+    }
+  }
+  return ops
+}
+
+function extractPatchBody(detail: ParsedLogDetail): string | null {
+  const sources = [detail.command, detail.text].filter(
+    (s): s is string => typeof s === "string" && s.length > 0
+  )
+  for (const src of sources) {
+    const begin = src.indexOf("*** Begin Patch")
+    const end = src.indexOf("*** End Patch")
+    if (begin !== -1 && end !== -1 && end > begin) {
+      return src.slice(begin, end + "*** End Patch".length).trim()
+    }
+    if (PATCH_FILE_REGEX.test(src)) {
+      PATCH_FILE_REGEX.lastIndex = 0
+      const start = src.search(/\*\*\* (Add|Update|Delete) File:/)
+      if (start !== -1) return src.slice(start).trim()
+    }
+  }
+  return null
+}
+
 function umbrellaForDetail(detail: ParsedLogDetail): ToolUmbrella {
+  if (extractFileOps(detail).length > 0) return "modify"
   if (detail.kind === "command_execution") return "explore"
   const lower = (detail.name || "").toLowerCase()
   if (/edit|patch|write|create|update|apply|insert/.test(lower)) return "modify"
@@ -462,14 +529,119 @@ function umbrellaForDetail(detail: ParsedLogDetail): ToolUmbrella {
 
 type DetailKind = "read" | "search" | "command" | "edit" | "create" | "other"
 
-function classifyDetail(detail: ParsedLogDetail): DetailKind {
-  if (detail.kind === "command_execution") return "command"
-  const name = (detail.name || "").toLowerCase()
-  const text = detail.text ?? ""
-  if (/edit|patch|write|apply|insert|update/.test(name)) {
-    if (/\*\*\* Add File:/.test(text)) return "create"
-    return "edit"
+type CommandIntent =
+  | { kind: "command" }
+  | { kind: "read"; target: string }
+  | { kind: "search"; query: string }
+
+const READ_PROGRAMS = new Set([
+  "bat",
+  "cat",
+  "head",
+  "less",
+  "more",
+  "sed",
+  "tail",
+  "view",
+])
+
+const SEARCH_PROGRAMS = new Set([
+  "ack",
+  "ag",
+  "egrep",
+  "fgrep",
+  "find",
+  "grep",
+  "ripgrep",
+  "rg",
+])
+
+function tokenizeShell(cmd: string): string[] {
+  const matches = cmd.match(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\S+/g)
+  return matches ?? []
+}
+
+function stripQuotes(token: string): string {
+  if (token.length >= 2) {
+    const first = token[0]
+    const last = token[token.length - 1]
+    if ((first === '"' || first === "'") && first === last) {
+      return token.slice(1, -1)
+    }
   }
+  return token
+}
+
+function inferCommandIntent(rawCmd: string): CommandIntent {
+  if (!rawCmd) return { kind: "command" }
+  const firstSegment = rawCmd.split(/\||&&|;|\n/)[0].trim()
+  const tokens = tokenizeShell(firstSegment)
+  if (tokens.length === 0) return { kind: "command" }
+  const program = stripQuotes(tokens[0]).split("/").pop() ?? ""
+  const args = tokens.slice(1).map(stripQuotes)
+
+  if (READ_PROGRAMS.has(program)) {
+    const target = pickReadTarget(program, args)
+    if (target) return { kind: "read", target }
+  }
+  if (SEARCH_PROGRAMS.has(program)) {
+    const query = pickSearchQuery(program, args)
+    if (query) return { kind: "search", query }
+  }
+  return { kind: "command" }
+}
+
+function pickReadTarget(program: string, args: string[]): string | null {
+  const skipNext = new Set<number>()
+  if (program === "head" || program === "tail") {
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "-n" || args[i] === "-c") skipNext.add(i + 1)
+    }
+  }
+  if (program === "sed") {
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "-e" || args[i] === "-f") skipNext.add(i + 1)
+    }
+  }
+  for (let i = args.length - 1; i >= 0; i--) {
+    if (skipNext.has(i)) continue
+    const arg = args[i]
+    if (!arg || arg.startsWith("-")) continue
+    return arg
+  }
+  return null
+}
+
+function pickSearchQuery(program: string, args: string[]): string | null {
+  if (program === "find") {
+    for (let i = 0; i < args.length - 1; i++) {
+      if (args[i] === "-name" || args[i] === "-iname" || args[i] === "-path") {
+        return args[i + 1]
+      }
+    }
+    return null
+  }
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (arg === "-e" || arg === "--regexp") return args[i + 1] ?? null
+    if (arg && !arg.startsWith("-")) return arg
+  }
+  return null
+}
+
+function classifyDetail(detail: ParsedLogDetail): DetailKind {
+  const ops = extractFileOps(detail)
+  if (ops.length > 0) {
+    return ops.every((o) => o.op === "add") ? "create" : "edit"
+  }
+  if (detail.kind === "command_execution") {
+    const intent = inferCommandIntent(
+      unwrapShellCommand(detail.command?.trim() ?? "")
+    )
+    return intent.kind
+  }
+  const name = (detail.name || "").toLowerCase()
+  if (/edit|patch|write|apply|insert|update/.test(name)) return "edit"
   if (/create/.test(name)) return "create"
   if (/list|search|grep|glob|find/.test(name)) return "search"
   if (/read|view|cat|open|file/.test(name)) return "read"
@@ -506,7 +678,17 @@ function summarizeBundle(
     read: 0,
     search: 0,
   }
-  for (const item of items) counts[classifyDetail(item)] += 1
+  for (const item of items) {
+    const ops = extractFileOps(item)
+    if (ops.length > 0) {
+      for (const op of ops) {
+        if (op.op === "add") counts.create += 1
+        else counts.edit += 1
+      }
+    } else {
+      counts[classifyDetail(item)] += 1
+    }
+  }
 
   if (umbrella === "modify") {
     const parts: string[] = []
@@ -522,16 +704,20 @@ function summarizeBundle(
 
   // explore umbrella
   const parts: string[] = []
-  if (counts.read > 0) parts.push(pluralize(counts.read, "file", "files"))
-  if (counts.search > 0)
-    parts.push(pluralize(counts.search, "search", "searches"))
-  const commandPart =
-    counts.command > 0
-      ? `ran ${pluralize(counts.command, "command", "commands")}`
-      : null
+  if (counts.read > 0)
+    parts.push(`Explored ${pluralize(counts.read, "file", "files")}`)
+  if (counts.search > 0) {
+    const verb = parts.length === 0 ? "" : ""
+    parts.push(`${verb}${pluralize(counts.search, "search", "searches")}`)
+  }
+  if (counts.command > 0) {
+    parts.push(`ran ${pluralize(counts.command, "command", "commands")}`)
+  }
 
-  if (parts.length === 0 && commandPart) {
-    // commands-only: "Ran N commands" / "Ran <cmd>"
+  if (parts.length === 0) return "Ran command"
+
+  // Commands-only bundle: use the per-command label form.
+  if (counts.read === 0 && counts.search === 0 && counts.command > 0) {
     if (counts.command === 1) {
       const cmd = unwrapShellCommand(
         items.find((i) => i.kind === "command_execution")?.command?.trim() ?? ""
@@ -542,15 +728,38 @@ function summarizeBundle(
     return `Ran ${counts.command} commands`
   }
 
-  const prefixed = parts.length > 0 ? `Explored ${parts.join(", ")}` : ""
-  return [prefixed, commandPart].filter(Boolean).join(", ")
+  return parts.join(", ")
 }
 
 function describeItem(detail: ParsedLogDetail): string {
   const kind = classifyDetail(detail)
   const text = detail.text?.trim() ?? ""
-  if (kind === "command") {
+  if (kind === "edit" || kind === "create") {
+    const ops = extractFileOps(detail)
+    if (ops.length === 1) {
+      const op = ops[0]
+      const verb =
+        op.op === "add" ? "Created" : op.op === "delete" ? "Deleted" : "Edited"
+      return `${verb} ${basename(op.path)}`
+    }
+    if (ops.length > 1) {
+      const adds = ops.filter((o) => o.op === "add").length
+      const others = ops.length - adds
+      const parts: string[] = []
+      if (adds > 0) parts.push(`Created ${pluralize(adds, "file", "files")}`)
+      if (others > 0) {
+        const verb = parts.length === 0 ? "Edited" : "edited"
+        parts.push(`${verb} ${pluralize(others, "file", "files")}`)
+      }
+      return parts.join(", ")
+    }
+    return kind === "create" ? "Created file" : "Edited file"
+  }
+  if (detail.kind === "command_execution") {
     const cmd = unwrapShellCommand(detail.command?.trim() ?? "")
+    const intent = inferCommandIntent(cmd)
+    if (intent.kind === "read") return `Read ${basename(intent.target)}`
+    if (intent.kind === "search") return `Searched for ${intent.query}`
     const oneLine = cmd.split(/\n/)[0].trim()
     return `Ran ${oneLine || detail.name || "command"}`
   }
@@ -562,12 +771,6 @@ function describeItem(detail: ParsedLogDetail): string {
     const inMatch = text.match(/^(.+?)\s+in\s+(.+)$/)
     if (inMatch) return `Searched for ${inMatch[1]} in ${inMatch[2]}`
     return text ? `Searched for ${text}` : "Searched"
-  }
-  if (kind === "edit" || kind === "create") {
-    const verb = kind === "create" ? "Created" : "Edited"
-    const pathMatch = text.match(/\*\*\* (?:Add|Update|Delete) File:\s*(\S+)/)
-    if (pathMatch) return `${verb} ${basename(pathMatch[1])}`
-    return `${verb} file`
   }
   return detail.name || "Tool"
 }
@@ -599,14 +802,6 @@ const ToolGroup = memo(function ToolGroup({
   )
 })
 
-const SingleToolGroup = memo(function SingleToolGroup({
-  detail,
-}: {
-  detail: ParsedLogDetail
-}) {
-  return <ToolSummary umbrella={umbrellaForDetail(detail)} items={[detail]} />
-})
-
 const ToolSummary = memo(function ToolSummary({
   umbrella,
   items,
@@ -620,8 +815,7 @@ const ToolSummary = memo(function ToolSummary({
   const failed = items.some(
     (d) => typeof d.exitCode === "number" && d.exitCode !== 0
   )
-  const isSingleCommand =
-    items.length === 1 && items[0].kind === "command_execution"
+  const isSingleItem = items.length === 1
   const canExpand = items.length > 0
 
   return (
@@ -653,7 +847,7 @@ const ToolSummary = memo(function ToolSummary({
           />
         ) : null}
       </button>
-      {open && isSingleCommand ? (
+      {open && isSingleItem ? (
         <div className="mt-2 ml-6">
           <DetailView detail={items[0]} />
         </div>
@@ -678,6 +872,8 @@ const ExpandableItemRow = memo(function ExpandableItemRow({
   const hasDetail = Boolean(
     detail.command?.trim() || detail.text?.trim() || detail.output?.trim()
   )
+  const kind = classifyDetail(detail)
+  const isCommand = kind === "command"
   return (
     <div className="min-w-0">
       <button
@@ -686,7 +882,10 @@ const ExpandableItemRow = memo(function ExpandableItemRow({
         disabled={!hasDetail}
         aria-expanded={hasDetail ? open : undefined}
         className={cn(
-          "flex w-full min-w-0 items-center gap-1.5 py-0.5 text-left text-[13px] leading-6 text-muted-foreground/70 transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none",
+          "flex w-full min-w-0 items-center gap-1.5 py-0.5 text-left text-[14px] leading-7 transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none",
+          isCommand
+            ? "font-medium text-foreground/90"
+            : "text-muted-foreground/70",
           hasDetail && "cursor-pointer hover:text-foreground",
           failed && "text-destructive/80"
         )}
@@ -714,16 +913,21 @@ const DetailView = memo(function DetailView({
   detail: ParsedLogDetail
 }) {
   const failed = typeof detail.exitCode === "number" && detail.exitCode !== 0
-  const isCommand = detail.kind === "command_execution"
   const kind = classifyDetail(detail)
-  const cmd = isCommand ? unwrapShellCommand(detail.command?.trim() ?? "") : ""
-  const text = !isCommand ? (detail.text?.trim() ?? "") : ""
+  const isCommand = detail.kind === "command_execution"
+  const isFileChange = kind === "edit" || kind === "create"
+  const patchBody = isFileChange ? extractPatchBody(detail) : null
+  const cmd =
+    isCommand && !patchBody
+      ? unwrapShellCommand(detail.command?.trim() ?? "")
+      : ""
+  const text = !isCommand && !patchBody ? (detail.text?.trim() ?? "") : ""
   const output = detail.output?.trim() ?? ""
-  const textLang = kind === "edit" || kind === "create" ? "diff" : "plaintext"
   return (
     <div className="space-y-2">
+      {patchBody ? <CodeBlock body={patchBody} lang="diff" /> : null}
       {cmd ? <CodeBlock body={cmd} lang="bash" /> : null}
-      {text ? <CodeBlock body={text} lang={textLang} /> : null}
+      {text ? <CodeBlock body={text} lang="plaintext" /> : null}
       {output ? <CodeBlock body={output} lang="plaintext" /> : null}
       {failed ? (
         <div className="font-mono text-[11px] text-destructive/80">
