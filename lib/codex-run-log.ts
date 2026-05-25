@@ -15,6 +15,7 @@ export type CodexRunLog = {
 const CODEX_TOOL_MARKER_REGEX = /<codex-tool>([^<]*)<\/codex-tool>/g
 
 const MAX_MARKER_COMMAND_LENGTH = 1_000
+const MAX_MARKER_PATCH_COMMAND_LENGTH = 12_000
 const MAX_MARKER_OUTPUT_LENGTH = 1_500
 const MAX_MARKER_TEXT_LENGTH = 800
 
@@ -35,8 +36,14 @@ function truncateMarkerText(value: unknown, max: number) {
 
 function compactToolDetail(value: ToolMarkerDetail): ToolMarkerDetail | null {
   if (value.kind === "command_execution") {
+    const isPatch =
+      typeof value.command === "string" &&
+      /\*\*\* Begin Patch|\*\*\* (Add|Update|Delete) File:/.test(value.command)
+    const commandLimit = isPatch
+      ? MAX_MARKER_PATCH_COMMAND_LENGTH
+      : MAX_MARKER_COMMAND_LENGTH
     return {
-      command: truncateMarkerText(value.command, MAX_MARKER_COMMAND_LENGTH),
+      command: truncateMarkerText(value.command, commandLimit),
       exitCode: typeof value.exitCode === "number" ? value.exitCode : undefined,
       kind: value.kind,
       output: truncateMarkerText(value.output, MAX_MARKER_OUTPUT_LENGTH),
