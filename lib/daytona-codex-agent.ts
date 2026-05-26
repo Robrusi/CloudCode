@@ -39,6 +39,7 @@ import {
   setupSandboxGitHubAuth,
   type SandboxGitHubAuth,
 } from "./sandbox-github-auth"
+import { restoreAutoEnvironmentRepoBaseline } from "./sandbox-repo-baseline"
 
 const EXIT_MARKER = "__CLOUDCODE_CODEX_EXIT__"
 const CODEX_CAPABILITIES_EXEC_BEGIN = "__CLOUDCODE_EXEC_HELP_BEGIN__"
@@ -79,6 +80,7 @@ export type SandboxPresetInput = {
   cloudcodeYaml?: string
   daytonaSnapshot?: string
   installScript?: string
+  mode?: "manual" | "auto"
   name: string
   pathInstallScript?: string
   secrets: SandboxPresetEnvVar[]
@@ -1759,18 +1761,22 @@ async function cloneRepo({
 async function prepareExistingRepoForFreshRun({
   baseBranch,
   branchName,
+  cloudcodeYaml,
   gitAuth,
   input,
   paths,
   requestedBranchName,
+  restoreAutoEnvironmentBaseline,
   sandbox,
 }: {
   baseBranch?: string
   branchName: string
+  cloudcodeYaml?: string
   gitAuth?: SandboxGitHubAuth | null
   input: RunCodexInSandboxInput
   paths: DaytonaSandboxPaths
   requestedBranchName?: string
+  restoreAutoEnvironmentBaseline?: boolean
   sandbox: Sandbox
 }) {
   await emitLog(input, {
@@ -1812,6 +1818,13 @@ async function prepareExistingRepoForFreshRun({
         compactLine(refreshResult.stderr || refreshResult.stdout) ||
         "Unable to refresh prepared repo.",
     })
+  } else if (restoreAutoEnvironmentBaseline) {
+    await restoreAutoEnvironmentRepoBaseline({
+      cloudcodeYaml,
+      paths,
+      sandbox,
+      signal: input.signal,
+    })
   }
 
   if (requestedBranchName) {
@@ -1824,6 +1837,10 @@ async function prepareExistingRepoForFreshRun({
 
 function helpIncludes(help: string, flag: string) {
   return help.includes(flag)
+}
+
+function isAutoEnvironmentRun(input: RunCodexInSandboxInput) {
+  return input.sandboxPreset?.mode === "auto"
 }
 
 export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
@@ -1970,14 +1987,20 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         signal: input.signal,
       })
       await trustRepoMiseConfig(sandbox, input, paths)
-      if (createdSandbox || input.preparedSandboxFresh) {
+      const shouldPrepareFreshRepo =
+        createdSandbox ||
+        input.preparedSandboxFresh ||
+        (isAutoEnvironmentRun(input) && !input.requireExistingSandbox)
+      if (shouldPrepareFreshRepo) {
         branchName = await prepareExistingRepoForFreshRun({
           baseBranch,
           branchName,
+          cloudcodeYaml: input.sandboxPreset?.cloudcodeYaml,
           gitAuth,
           input,
           paths,
           requestedBranchName,
+          restoreAutoEnvironmentBaseline: isAutoEnvironmentRun(input),
           sandbox,
         })
         await writeBaseRef(sandbox, paths)

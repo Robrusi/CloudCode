@@ -34,6 +34,7 @@ import {
   setupSandboxGitHubAuth,
   type SandboxGitHubAuth,
 } from "@/lib/sandbox-github-auth"
+import { saveAutoEnvironmentRepoBaseline } from "@/lib/sandbox-repo-baseline"
 import type { SandboxPresetForRun } from "@/lib/sandbox-presets"
 
 const AUTO_BUILD_SCAN_TIMEOUT_MS = 12 * 60 * 1000
@@ -1268,6 +1269,7 @@ async function buildAutoEnvironmentSandbox({
     }
 
     await writeEnvironmentGitExcludes(sandbox, paths, input.signal)
+    await saveAutoEnvironmentRepoBaseline(sandbox, paths, input.signal)
     const [hashInputs, updatedAuthJson] = await Promise.all([
       readBuildHashInputs(sandbox, paths, input.signal),
       readDaytonaTextFile(sandbox, `${paths.codexHome}/auth.json`).catch(
@@ -1321,6 +1323,7 @@ function autoPresetForRun(
     cloudcodeYaml,
     daytonaSnapshot: preset.daytonaSnapshot,
     installScript: undefined,
+    mode: preset.mode,
     name: preset.name,
     pathInstallScript: undefined,
     secrets: preset.secrets,
