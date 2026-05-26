@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto"
+
 import type { Sandbox } from "@daytona/sdk"
 
 import {
@@ -11,6 +13,10 @@ export type SandboxGitHubAuth = {
   cleanup: () => Promise<void>
   env: Record<string, string>
   remoteUrl: string | null
+}
+
+function sha256(value: string) {
+  return createHash("sha256").update(value).digest("hex")
 }
 
 function gitHubRemoteUrl(repoUrl: string) {
@@ -55,6 +61,7 @@ function credentialPaths(paths: DaytonaSandboxPaths) {
     homeGhConfigDir: `${paths.home}/.config/gh`,
     homeGhHostsPath: `${paths.home}/.config/gh/hosts.yml`,
     helperPath: `${dir}/git-credential-cloudcode-github`,
+    helperVersionPath: `${dir}/git-credential-cloudcode-github.sha256`,
     tokenPath: `${dir}/token`,
   }
 }
@@ -187,6 +194,7 @@ export async function setupSandboxGitHubAuth({
   githubUserName,
   githubUsername,
   installGlobal,
+  persistCredentials,
   paths,
   repoUrl,
   sandbox,
@@ -197,6 +205,7 @@ export async function setupSandboxGitHubAuth({
   githubUserName?: string
   githubUsername?: string | null
   installGlobal?: boolean
+  persistCredentials?: boolean
   paths: DaytonaSandboxPaths
   repoUrl?: string
   sandbox: Sandbox
@@ -215,6 +224,8 @@ export async function setupSandboxGitHubAuth({
   const pathsForAuth = credentialPaths(paths)
   const cleanGitUserEmail = githubUserEmail?.trim()
   const cleanGitUserName = githubUserName?.trim()
+  const helperScript = credentialHelperScript(pathsForAuth.tokenPath)
+  const helperHash = sha256(helperScript)
   await runDaytonaCommand(
     sandbox,
     [
@@ -229,6 +240,14 @@ export async function setupSandboxGitHubAuth({
       installGlobal
         ? `chmod 700 ${shellQuote(pathsForAuth.homeGhConfigDir)}`
         : "",
+      `helper_hash=${shellQuote(helperHash)}`,
+      `if [ ! -x ${shellQuote(pathsForAuth.helperPath)} ] || ! grep -qxF -- "$helper_hash" ${shellQuote(pathsForAuth.helperVersionPath)} 2>/dev/null; then`,
+      `  cat > ${shellQuote(pathsForAuth.helperPath)} <<'EOF'`,
+      helperScript,
+      "EOF",
+      `  chmod 700 ${shellQuote(pathsForAuth.helperPath)}`,
+      `  printf '%s\\n' "$helper_hash" > ${shellQuote(pathsForAuth.helperVersionPath)}`,
+      "fi",
     ].join("\n"),
     { signal, timeoutMs: 10_000 }
   )
@@ -239,11 +258,6 @@ export async function setupSandboxGitHubAuth({
     ...(installGlobal
       ? [writeDaytonaTextFile(sandbox, pathsForAuth.homeGhHostsPath, hostsFile)]
       : []),
-    writeDaytonaTextFile(
-      sandbox,
-      pathsForAuth.helperPath,
-      credentialHelperScript(pathsForAuth.tokenPath)
-    ),
   ])
   const helperCommand = credentialHelperCommand(pathsForAuth.tokenPath)
   const gitConfigEnv: Record<string, string> = installGlobal
@@ -297,6 +311,7 @@ export async function setupSandboxGitHubAuth({
 
   return {
     cleanup: async () => {
+      if (persistCredentials) return
       await cleanupSandboxGitHubAuth({
         installGlobal,
         paths,

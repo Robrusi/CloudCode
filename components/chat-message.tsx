@@ -342,8 +342,8 @@ const RunSetupSummary = memo(function RunSetupSummary({
   pending: boolean
 }) {
   const [open, setOpen] = useState(false)
-  const setupLogs = logs.filter(isSetupSummaryLog)
-  const current = logs.at(-1)
+  const setupLogs = visibleSetupSummaryLogs(logs)
+  const current = setupLogs.at(-1)
   const expanded = pending && !contentStarted ? true : open
 
   if (!pending && setupLogs.length === 0) return null
@@ -394,6 +394,38 @@ function isSetupSummaryLog(log: ChatRunLog) {
     log.kind === "stderr" ||
     log.kind === "result"
   )
+}
+
+function isWarmAutoEnvironmentDuplicateLog(
+  log: ChatRunLog,
+  preparedSandboxId?: string
+) {
+  if (log.kind !== "setup" || !preparedSandboxId) return false
+
+  return (
+    log.message === "Connecting to Daytona sandbox" ||
+    (log.message === "Daytona sandbox ready" &&
+      log.detail === preparedSandboxId)
+  )
+}
+
+function visibleSetupSummaryLogs(logs: ChatRunLog[]) {
+  let preparedSandboxId: string | undefined
+
+  return logs.flatMap((log) => {
+    if (!isSetupSummaryLog(log)) return []
+    if (isWarmAutoEnvironmentDuplicateLog(log, preparedSandboxId)) return []
+
+    if (
+      log.kind === "setup" &&
+      log.message === "Using prepared auto environment sandbox" &&
+      log.detail
+    ) {
+      preparedSandboxId = log.detail
+    }
+
+    return [log]
+  })
 }
 
 type ParsedLogDetail = {

@@ -41,7 +41,14 @@ import {
 } from "./sandbox-github-auth"
 
 const EXIT_MARKER = "__CLOUDCODE_CODEX_EXIT__"
+const CODEX_CAPABILITIES_EXEC_BEGIN = "__CLOUDCODE_EXEC_HELP_BEGIN__"
+const CODEX_CAPABILITIES_EXEC_END = "__CLOUDCODE_EXEC_HELP_END__"
+const CODEX_CAPABILITIES_RESUME_BEGIN = "__CLOUDCODE_RESUME_HELP_BEGIN__"
+const CODEX_CAPABILITIES_RESUME_END = "__CLOUDCODE_RESUME_HELP_END__"
 const CODEX_UPDATE_TIMEOUT_MS = 3 * 60 * 1000
+const CODEX_CAPABILITIES_TIMEOUT_MS = 25_000
+const RUNTIME_BOOTSTRAP_REFRESHED = "__CLOUDCODE_RUNTIME_BOOTSTRAP_REFRESHED__"
+const RUNTIME_BOOTSTRAP_VERSION = "1"
 const PRESET_INSTALL_TIMEOUT_MS = 10 * 60 * 1000
 const MISE_CONFIG_FILES = [
   ".mise.toml",
@@ -117,6 +124,11 @@ export type RunCodexInSandboxResult = {
   stdout: string
   updatedAuthJson: string
   recoveredSandbox: boolean
+}
+
+type CodexCliCapabilities = {
+  execHelp: string
+  resumeHelp: string
 }
 
 function parseModel(model?: string) {
@@ -930,6 +942,11 @@ function sha256(value: string) {
   return createHash("sha256").update(value).digest("hex")
 }
 
+function writeBase64FileCommand(path: string, content: string) {
+  const encoded = Buffer.from(content, "utf8").toString("base64")
+  return `printf '%s' ${shellQuote(encoded)} | base64 -d > ${shellQuote(path)}`
+}
+
 async function sandboxMarkerMatches(
   sandbox: Sandbox,
   markerPath: string,
@@ -1082,40 +1099,94 @@ async function readLastMessage(sandbox: Sandbox, paths: DaytonaSandboxPaths) {
   }
 }
 
-async function getCodexExecHelp(sandbox: Sandbox, paths: DaytonaSandboxPaths) {
-  try {
-    const result = await runDaytonaCommand(
-      sandbox,
-      `${shellQuote(paths.codexLauncherPath)} exec --help`,
-      {
-        cwd: paths.home,
-        env: codexShellEnv(paths),
-        timeoutMs: 10_000,
-      }
-    )
-    return result.stdout
-  } catch {
-    return ""
-  }
+function markerSection(output: string, begin: string, end: string) {
+  const start = output.indexOf(begin)
+  if (start < 0) return ""
+  const contentStart = start + begin.length
+  const contentEnd = output.indexOf(end, contentStart)
+  if (contentEnd < 0) return ""
+
+  return output.slice(contentStart, contentEnd).replace(/^\r?\n/, "")
 }
 
-async function getCodexResumeHelp(
-  sandbox: Sandbox,
-  paths: DaytonaSandboxPaths
+function codexCapabilitiesCacheCommand(
+  paths: DaytonaSandboxPaths,
+  includeResume: boolean
 ) {
+  const cacheDir = `${paths.codexHome}/capabilities`
+  const versionPath = `${cacheDir}/codex-version`
+  const execHelpPath = `${cacheDir}/exec-help.txt`
+  const resumeHelpPath = `${cacheDir}/resume-help.txt`
+  const execTmpPath = `${cacheDir}/exec-help.tmp`
+  const resumeTmpPath = `${cacheDir}/resume-help.tmp`
+
+  return [
+    "set -e",
+    `mkdir -p ${shellQuote(cacheDir)}`,
+    `version="$(${shellQuote(paths.codexLauncherPath)} --version 2>/dev/null | head -1 || true)"`,
+    '[ -n "$version" ] || version="unknown"',
+    "refresh=0",
+    `[ -f ${shellQuote(versionPath)} ] && grep -qxF -- "$version" ${shellQuote(versionPath)} || refresh=1`,
+    `[ -s ${shellQuote(execHelpPath)} ] || refresh=1`,
+    includeResume ? `[ -s ${shellQuote(resumeHelpPath)} ] || refresh=1` : "",
+    'if [ "$refresh" = "1" ]; then',
+    `  if ! ${shellQuote(paths.codexLauncherPath)} exec --help > ${shellQuote(execTmpPath)} 2>/dev/null; then : > ${shellQuote(execTmpPath)}; fi`,
+    includeResume
+      ? `  if ! ${shellQuote(paths.codexLauncherPath)} exec resume --help > ${shellQuote(resumeTmpPath)} 2>/dev/null; then : > ${shellQuote(resumeTmpPath)}; fi`
+      : `  rm -f ${shellQuote(resumeTmpPath)} ${shellQuote(resumeHelpPath)}`,
+    `  mv ${shellQuote(execTmpPath)} ${shellQuote(execHelpPath)}`,
+    includeResume
+      ? `  mv ${shellQuote(resumeTmpPath)} ${shellQuote(resumeHelpPath)}`
+      : "",
+    `  printf '%s\\n' "$version" > ${shellQuote(versionPath)}`,
+    "fi",
+    `printf '%s\\n' ${shellQuote(CODEX_CAPABILITIES_EXEC_BEGIN)}`,
+    `cat ${shellQuote(execHelpPath)} 2>/dev/null || true`,
+    `printf '%s\\n' ${shellQuote(CODEX_CAPABILITIES_EXEC_END)}`,
+    `printf '%s\\n' ${shellQuote(CODEX_CAPABILITIES_RESUME_BEGIN)}`,
+    `cat ${shellQuote(resumeHelpPath)} 2>/dev/null || true`,
+    `printf '%s\\n' ${shellQuote(CODEX_CAPABILITIES_RESUME_END)}`,
+  ]
+    .filter(Boolean)
+    .join("\n")
+}
+
+async function getCodexCliCapabilities({
+  includeResume,
+  paths,
+  sandbox,
+}: {
+  includeResume: boolean
+  paths: DaytonaSandboxPaths
+  sandbox: Sandbox
+}): Promise<CodexCliCapabilities> {
   try {
     const result = await runDaytonaCommand(
       sandbox,
-      `${shellQuote(paths.codexLauncherPath)} exec resume --help`,
+      codexCapabilitiesCacheCommand(paths, includeResume),
       {
         cwd: paths.home,
         env: codexShellEnv(paths),
-        timeoutMs: 10_000,
+        timeoutMs: CODEX_CAPABILITIES_TIMEOUT_MS,
       }
     )
-    return result.stdout
+
+    if (result.exitCode !== 0) return { execHelp: "", resumeHelp: "" }
+
+    return {
+      execHelp: markerSection(
+        result.stdout,
+        CODEX_CAPABILITIES_EXEC_BEGIN,
+        CODEX_CAPABILITIES_EXEC_END
+      ),
+      resumeHelp: markerSection(
+        result.stdout,
+        CODEX_CAPABILITIES_RESUME_BEGIN,
+        CODEX_CAPABILITIES_RESUME_END
+      ),
+    }
   } catch {
-    return ""
+    return { execHelp: "", resumeHelp: "" }
   }
 }
 
@@ -1230,41 +1301,39 @@ async function prepareSandboxRuntime(
   paths: DaytonaSandboxPaths
 ) {
   const target = createSandboxTarget(sandbox, paths, input.signal)
+  const runtimeProfile = runtimeShellProfileSnippet(paths, input.sandboxPreset)
+  const presetProfile = presetProfileSnippet(paths, input.sandboxPreset)
+  const markerPath = `${paths.codexHome}/runtime-bootstrap.sha256`
+  const bootstrapHash = sha256(
+    [
+      RUNTIME_BOOTSTRAP_VERSION,
+      paths.home,
+      paths.runtimeHome,
+      paths.codexHome,
+      paths.repoPath,
+      paths.presetEnvPath,
+      runtimeProfile,
+      presetProfile,
+    ].join("\0")
+  )
 
-  await runDaytonaCommand(
+  const bootstrapResult = await runDaytonaCommand(
     sandbox,
     [
-      `mkdir -p ${shellQuote(paths.runtimeHome)}`,
-      `chmod 700 ${shellQuote(paths.runtimeHome)}`,
+      "set -e",
+      `marker_path=${shellQuote(markerPath)}`,
+      `bootstrap_hash=${shellQuote(bootstrapHash)}`,
+      `if [ -f "$marker_path" ] && grep -qxF -- "$bootstrap_hash" "$marker_path"; then exit 0; fi`,
+      `mkdir -p ${shellQuote(paths.home)} ${shellQuote(paths.runtimeHome)} ${shellQuote(paths.codexHome)}`,
+      `chmod 700 ${shellQuote(paths.runtimeHome)} ${shellQuote(paths.codexHome)}`,
       'if [ -x /bin/bash ] && command -v usermod >/dev/null 2>&1; then usermod -s /bin/bash "$(id -un)" 2>/dev/null || true; fi',
       'if [ -x /bin/bash ] && command -v chsh >/dev/null 2>&1; then chsh -s /bin/bash "$(id -un)" 2>/dev/null || true; fi',
       "[ -f /etc/profile.d/rvm.sh ] && mv /etc/profile.d/rvm.sh /etc/profile.d/rvm.sh.cloudcode-disabled 2>/dev/null || true",
-      `mkdir -p ${shellQuote(paths.codexHome)}`,
-      `chmod 700 ${shellQuote(paths.codexHome)}`,
-      `mkdir -p ${shellQuote(paths.home)}`,
       linkSandboxPathToolsCommand(paths),
-    ].join(" && "),
-    { signal: input.signal, timeoutMs: 10_000 }
-  )
-  const runtimeProfile = runtimeShellProfileSnippet(paths, input.sandboxPreset)
-  await Promise.all([
-    installDaytonaTarWrapper(sandbox, paths),
-    writeDaytonaTextFile(
-      sandbox,
-      paths.presetEnvPath,
-      presetProfileSnippet(paths, input.sandboxPreset)
-    ),
-    ...[".bash_profile", ".bash_login", ".profile", ".bashrc"].map((file) =>
-      writeDaytonaTextFile(
-        sandbox,
-        `${paths.runtimeHome}/${file}`,
-        runtimeProfile
-      )
-    ),
-  ])
-  await runDaytonaCommand(
-    sandbox,
-    [
+      writeBase64FileCommand(paths.presetEnvPath, presetProfile),
+      ...[".bash_profile", ".bash_login", ".profile", ".bashrc"].map((file) =>
+        writeBase64FileCommand(`${paths.runtimeHome}/${file}`, runtimeProfile)
+      ),
       `chmod 600 ${shellQuote(paths.presetEnvPath)} ${shellQuote(
         `${paths.runtimeHome}/.bash_profile`
       )} ${shellQuote(`${paths.runtimeHome}/.bash_login`)} ${shellQuote(
@@ -1279,9 +1348,20 @@ async function prepareSandboxRuntime(
       '  rm -f "$tmp"',
       "done",
       `rm -f ${shellQuote(paths.cloudcodeProfilePath)}`,
+      `printf '%s\\n' ${shellQuote(RUNTIME_BOOTSTRAP_REFRESHED)}`,
     ].join("\n"),
     { cwd: paths.home, signal: input.signal, timeoutMs: 10_000 }
   )
+  if (bootstrapResult.exitCode !== 0) {
+    throw new Error(
+      compactLine(bootstrapResult.stderr || bootstrapResult.stdout) ||
+        "Unable to prepare sandbox runtime."
+    )
+  }
+  if (bootstrapResult.stdout.includes(RUNTIME_BOOTSTRAP_REFRESHED)) {
+    await installDaytonaTarWrapper(sandbox, paths)
+    await writeDaytonaTextFile(sandbox, markerPath, `${bootstrapHash}\n`)
+  }
 
   if (input.sandboxPreset?.secrets.length) {
     await emitLog(input, {
@@ -1792,6 +1872,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       githubUserEmail: input.githubUserEmail,
       githubUserName: input.githubUserName,
       githubUsername: input.githubUsername,
+      persistCredentials: true,
       paths,
       repoUrl,
       sandbox,
@@ -1938,7 +2019,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       }
     }
 
-    const [help, resumeHelp] = await prepareSandboxRuntime(
+    const { execHelp: help, resumeHelp } = await prepareSandboxRuntime(
       sandbox,
       input,
       paths
@@ -1947,15 +2028,16 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       .then(() => runPresetInstallScript(sandbox, input, paths, gitAuth))
       .then(() =>
         Promise.all([
-          getCodexExecHelp(sandbox, paths),
-          codexThreadIdToResume
-            ? getCodexResumeHelp(sandbox, paths)
-            : Promise.resolve(""),
+          getCodexCliCapabilities({
+            includeResume: Boolean(codexThreadIdToResume),
+            paths,
+            sandbox,
+          }),
           emitLog(input, {
             kind: "setup",
             message: "Reading Codex CLI capabilities",
           }),
-        ])
+        ]).then(([capabilities]) => capabilities)
       )
     const modelFlag =
       model && (helpIncludes(help, "--model") || helpIncludes(help, "-m,"))
