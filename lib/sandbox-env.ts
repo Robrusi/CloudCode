@@ -99,17 +99,11 @@ export async function writeCloudcodeEnvLocal(
   const original = await readEnvLocal(target, repoPath)
   const cleaned = trimManagedBlock(original ?? "")
   const block = managedEnvBlock(envVars)
+  const next = block ? [cleaned, block].filter(Boolean).join("\n\n") : cleaned
 
-  if (!block) {
-    await writeEnvLocal(target, repoPath, cleaned || null)
-    return
-  }
+  if ((original ?? "").trimEnd() === next.trimEnd()) return
 
-  await writeEnvLocal(
-    target,
-    repoPath,
-    [cleaned, block].filter(Boolean).join("\n\n")
-  )
+  await writeEnvLocal(target, repoPath, next || null)
 }
 
 export async function withoutCloudcodeEnvLocal<T>(
