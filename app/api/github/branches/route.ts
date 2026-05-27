@@ -2,6 +2,10 @@ import { NextResponse } from "next/server"
 
 import { maybeGetCurrentGitHubRepoCredential } from "@/lib/github-auth"
 import { parseGitHubRepoUrl } from "@/lib/github-repo"
+import {
+  fetchGitHubRepoMetadata,
+  githubApiHeaders,
+} from "@/lib/github-repo-api"
 
 export const runtime = "nodejs"
 
@@ -21,50 +25,50 @@ export async function GET(request: Request) {
     )
   }
 
-  const headers: Record<string, string> = {
-    accept: "application/vnd.github+json",
-    "x-github-api-version": "2022-11-28",
-  }
-  const credential = await maybeGetCurrentGitHubRepoCredential(repoUrl)
-  if (!credential?.token) {
-    return NextResponse.json(
-      {
-        error:
-          "Install the GitHub App on this repository and authorize your GitHub user.",
-      },
-      { status: 401 }
-    )
-  }
-  headers.authorization = `Bearer ${credential.token}`
-
-  const branches: string[] = []
-  let defaultBranch: string | undefined
-
   try {
-    const repoRes = await fetch(
-      `https://api.github.com/repos/${parsed.owner}/${parsed.repo}`,
-      { headers, cache: "no-store" }
+    const credential = await maybeGetCurrentGitHubRepoCredential(repoUrl)
+    const repoMetadata = await fetchGitHubRepoMetadata(
+      parsed,
+      credential?.token
     )
-    if (repoRes.ok) {
-      const repoData = (await repoRes.json()) as { default_branch?: string }
-      defaultBranch = repoData.default_branch
-    } else if (repoRes.status === 404) {
+    if (!repoMetadata.ok) {
+      if (repoMetadata.status === 404) {
+        return NextResponse.json(
+          { error: "Repository not found." },
+          { status: 404 }
+        )
+      }
+      if (repoMetadata.status === 401 || repoMetadata.status === 403) {
+        return NextResponse.json(
+          {
+            error: repoMetadata.rateLimited
+              ? "GitHub rate limit hit. Connect GitHub or try again later."
+              : "GitHub denied access. Reconnect GitHub with repo access.",
+          },
+          { status: repoMetadata.status }
+        )
+      }
+
       return NextResponse.json(
-        { error: "Repository not found." },
-        { status: 404 }
-      )
-    } else if (repoRes.status === 401 || repoRes.status === 403) {
-      const remaining = repoRes.headers.get("x-ratelimit-remaining")
-      const isRateLimited = remaining === "0"
-      return NextResponse.json(
-        {
-          error: isRateLimited
-            ? "GitHub rate limit hit. Connect GitHub or try again later."
-            : "GitHub denied access. Reconnect GitHub with repo access.",
-        },
-        { status: repoRes.status }
+        { error: `GitHub API error: ${repoMetadata.status}` },
+        { status: repoMetadata.status }
       )
     }
+
+    if (repoMetadata.metadata.private && !credential?.token) {
+      return NextResponse.json(
+        {
+          error:
+            "Install the GitHub App on this repository and authorize your GitHub user.",
+        },
+        { status: 401 }
+      )
+    }
+
+    const headers = githubApiHeaders(credential?.token)
+
+    const branches: string[] = []
+    const defaultBranch = repoMetadata.metadata.defaultBranch
 
     const branchResponses = await Promise.all(
       Array.from({ length: 5 }, (_, index) =>
@@ -76,6 +80,10 @@ export async function GET(request: Request) {
     )
     const failedBranchResponse = branchResponses.find((res) => !res.ok)
     if (failedBranchResponse) {
+      if (failedBranchResponse.status === 409) {
+        return NextResponse.json({ branches, defaultBranch })
+      }
+
       const remaining = failedBranchResponse.headers.get(
         "x-ratelimit-remaining"
       )

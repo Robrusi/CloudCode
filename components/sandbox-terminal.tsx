@@ -920,6 +920,7 @@ function SandboxTerminalPane({
   const composeHistoryDraftRef = useRef("")
   const composeHistoryRef = useRef<string[]>([])
   const composeHistoryIndexRef = useRef<number | null>(null)
+  const composeAwaitingPromptRef = useRef(false)
   const composeInputReadyRef = useRef(false)
   const composeStartRef = useRef<{ x: number; y: number } | null>(null)
   const handleComposeKeyEventRef = useRef<(event: KeyboardEvent) => boolean>(
@@ -951,6 +952,10 @@ function SandboxTerminalPane({
       setComposeHistoryIndexValue(null)
       composeStartRef.current = null
     }
+    if (inputMode === "compose") {
+      composeInputReadyRef.current =
+        !composeAwaitingPromptRef.current && recentTerminalTextEndsWithPrompt()
+    }
     if (!activeRef.current) return
 
     const frame = requestAnimationFrame(() => terminalRef.current?.focus())
@@ -966,6 +971,10 @@ function SandboxTerminalPane({
 
   useEffect(() => {
     if (!active) return
+    if (inputModeRef.current === "compose") {
+      composeInputReadyRef.current =
+        !composeAwaitingPromptRef.current && recentTerminalTextEndsWithPrompt()
+    }
 
     const frame = requestAnimationFrame(() => {
       scheduleResizeRef.current?.()
@@ -1193,7 +1202,9 @@ function SandboxTerminalPane({
 
       if (message.type === "ready") {
         setTerminalState("ready")
-        composeInputReadyRef.current = false
+        composeInputReadyRef.current =
+          !composeAwaitingPromptRef.current &&
+          recentTerminalTextEndsWithPrompt()
         if (activeRef.current) terminal.focus()
         return
       }
@@ -1209,12 +1220,16 @@ function SandboxTerminalPane({
           if (!promptReady) composeInputReadyRef.current = false
         }
         terminal.write(bytes, () => {
-          if (promptReady) composeInputReadyRef.current = true
+          if (!promptReady) return
+
+          composeAwaitingPromptRef.current = false
+          composeInputReadyRef.current = true
         })
         return
       }
 
       if (message.type === "error") {
+        composeAwaitingPromptRef.current = false
         composeInputReadyRef.current = false
         const detail =
           typeof message.error === "string"
@@ -1358,6 +1373,10 @@ function SandboxTerminalPane({
       terminalRecentTextRef.current + plain
     ).slice(-TERMINAL_RECENT_TEXT_LIMIT)
 
+    return recentTerminalTextEndsWithPrompt()
+  }
+
+  function recentTerminalTextEndsWithPrompt() {
     const lines = terminalRecentTextRef.current.split("\n")
     const lastLine = lines.at(-1) ?? ""
     return TERMINAL_SHELL_PROMPT_PATTERN.test(lastLine)
@@ -1368,6 +1387,7 @@ function SandboxTerminalPane({
   }
 
   function interruptBusyComposeInput() {
+    composeAwaitingPromptRef.current = true
     composeInputReadyRef.current = false
     pendingRemoteEchoRef.current = ""
     sendInputRef.current("\x03")
@@ -1582,6 +1602,7 @@ function SandboxTerminalPane({
       command.replace(/\r\n?/g, "\n").replaceAll("\n", "\r\n") + "\r\n"
     pendingRemoteEchoRef.current += utf8Binary(expectedEcho)
     terminalRef.current?.write("\r\n")
+    composeAwaitingPromptRef.current = true
     composeInputReadyRef.current = false
     sendInputRef.current(terminalInput)
     composeStartRef.current = null

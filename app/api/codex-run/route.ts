@@ -8,6 +8,7 @@ import { getConvexAuthToken } from "@/lib/codex-auth"
 import { findDaytonaSandboxInfoForRun } from "@/lib/daytona-sandbox"
 import type { CodexSpeed, ReasoningEffort } from "@/lib/daytona-codex-agent"
 import { maybeGetCurrentGitHubRepoCredential } from "@/lib/github-auth"
+import { canClonePublicGitHubRepo } from "@/lib/github-repo-api"
 import { requireSameOrigin } from "@/lib/request-security"
 import { encryptSecret } from "@/lib/secret-crypto"
 import type { cloudcodeRun } from "@/trigger/cloudcode-run"
@@ -146,11 +147,13 @@ export async function POST(request: Request) {
     }
 
     const githubCredential = await maybeGetCurrentGitHubRepoCredential(repoUrl)
-    if (!githubCredential?.token) {
+    const publicRepoCloneAllowed =
+      !githubCredential?.token && (await canClonePublicGitHubRepo(repoUrl))
+    if (!githubCredential?.token && !publicRepoCloneAllowed) {
       return NextResponse.json(
         {
           error:
-            "Install the GitHub App on this repository and authorize your GitHub user before starting a run.",
+            "Install the GitHub App on this repository and authorize your GitHub user, or use a public GitHub repository.",
         },
         { status: 401 }
       )

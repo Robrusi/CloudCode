@@ -26,6 +26,7 @@ import {
   type DaytonaCommandResult,
   type DaytonaSandboxPaths,
 } from "./daytona-sandbox"
+import { cloneGitRepositoryInSandbox } from "./daytona-git"
 import {
   CLOUDCODE_LEGACY_PRESET_ENV_PATH,
   withoutCloudcodeEnvLocal,
@@ -993,7 +994,21 @@ async function createBranch(
     kind: "command",
     message: `git checkout -b ${branchName}`,
   })
-  await sandbox.git.createBranch(paths.repoPath, branchName)
+  try {
+    await sandbox.git.createBranch(paths.repoPath, branchName)
+  } catch {
+    const result = await runDaytonaCommand(
+      sandbox,
+      `git -C ${shellQuote(paths.repoPath)} checkout -b ${shellQuote(branchName)}`,
+      { signal: input.signal, timeoutMs: 10_000 }
+    )
+    if (result.exitCode !== 0) {
+      throw new Error(
+        compactLine(result.stderr || result.stdout) ||
+          "Unable to create branch."
+      )
+    }
+  }
 }
 
 async function createDefaultBranch(
@@ -1812,12 +1827,24 @@ async function trustRepoMiseConfig(
 async function writeBaseRef(sandbox: Sandbox, paths: DaytonaSandboxPaths) {
   const result = await runDaytonaCommand(
     sandbox,
-    `git -C ${shellQuote(paths.repoPath)} rev-parse HEAD`,
+    [
+      "set -eo pipefail",
+      `cd ${shellQuote(paths.repoPath)}`,
+      "git rev-parse --verify HEAD 2>/dev/null || git hash-object -t tree /dev/null",
+    ].join("\n"),
     {
       timeoutMs: 10_000,
     }
   )
-  await writeDaytonaTextFile(sandbox, paths.baseRefPath, result.stdout.trim())
+  const baseRef = result.stdout.trim().split(/\s+/)[0]
+  if (result.exitCode !== 0 || !baseRef) {
+    throw new Error(
+      compactLine(result.stderr || result.stdout) ||
+        "Unable to record repo base ref."
+    )
+  }
+
+  await writeDaytonaTextFile(sandbox, paths.baseRefPath, baseRef)
 }
 
 async function repoExists(sandbox: Sandbox, paths: DaytonaSandboxPaths) {
@@ -1838,9 +1865,11 @@ async function cloneRepo({
   repoUrl,
   sandbox,
   paths,
+  gitAuth,
 }: {
   baseBranch?: string
   branchName: string
+  gitAuth?: SandboxGitHubAuth | null
   githubToken?: string
   input: RunCodexInSandboxInput
   requestedBranchName?: string
@@ -1849,28 +1878,21 @@ async function cloneRepo({
   paths: DaytonaSandboxPaths
 }) {
   const cloneRepository = async () => {
-    await Promise.all([
-      emitLog(input, {
-        detail: baseBranch ? `branch ${baseBranch}` : undefined,
-        kind: "command",
-        message: `git clone ${repoUrl}`,
-      }),
-      runDaytonaCommand(
-        sandbox,
-        `rm -rf ${shellQuote(paths.repoPath)} && mkdir -p ${shellQuote(
-          paths.repoPath.replace(/\/[^/]+$/, "")
-        )}`,
-        { signal: input.signal, timeoutMs: 60_000 }
-      ),
-    ])
-    await sandbox.git.clone(
+    await emitLog(input, {
+      detail: baseBranch ? `branch ${baseBranch}` : undefined,
+      kind: "command",
+      message: `git clone ${repoUrl}`,
+    })
+    await cloneGitRepositoryInSandbox({
+      branch: baseBranch,
+      env: repoCommandEnv(paths, gitAuth?.env),
+      password: githubToken,
+      path: paths.repoPath,
       repoUrl,
-      paths.repoPath,
-      baseBranch,
-      undefined,
-      githubToken ? "x-access-token" : undefined,
-      githubToken
-    )
+      sandbox,
+      signal: input.signal,
+      username: githubToken ? "x-access-token" : undefined,
+    })
   }
 
   if (requestedBranchName) {
@@ -1918,7 +1940,7 @@ async function prepareExistingRepoForFreshRun({
       ? [
           `if git show-ref --verify --quiet ${shellQuote(`refs/remotes/origin/${baseBranch}`)}; then`,
           `  git checkout -B ${shellQuote(baseBranch)} ${shellQuote(`origin/${baseBranch}`)}`,
-          "else",
+          "elif git rev-parse --verify HEAD >/dev/null 2>&1; then",
           `  git checkout ${shellQuote(baseBranch)}`,
           "fi",
         ].join("\n")
@@ -1928,7 +1950,11 @@ async function prepareExistingRepoForFreshRun({
           '  git checkout -B "$default_branch" "origin/$default_branch"',
           "fi",
         ].join("\n"),
-    "git reset --hard HEAD",
+    "if git rev-parse --verify HEAD >/dev/null 2>&1; then",
+    "  git reset --hard HEAD",
+    "else",
+    "  git clean -fd",
+    "fi",
   ].join("\n")
 
   const refreshResult = await runDaytonaCommand(sandbox, refreshCommand, {
@@ -2069,6 +2095,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       branchName = await cloneRepo({
         baseBranch,
         branchName,
+        gitAuth,
         githubToken,
         input,
         requestedBranchName,
@@ -2355,15 +2382,15 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         const diff = (
           await runDaytonaCommand(
             sandbox,
-            `base_ref=$(cat ${shellQuote(
-              paths.baseRefPath
-            )} 2>/dev/null || git -C ${shellQuote(
-              paths.repoPath
-            )} rev-parse HEAD); git -C ${shellQuote(
-              paths.repoPath
-            )} add -N . >/dev/null 2>&1 || true; git -C ${shellQuote(
-              paths.repoPath
-            )} diff --binary "$base_ref"`,
+            [
+              "set -e",
+              `base_ref=$(cat ${shellQuote(paths.baseRefPath)} 2>/dev/null || true)`,
+              'if [ -z "$base_ref" ]; then',
+              `  base_ref=$(git -C ${shellQuote(paths.repoPath)} rev-parse --verify HEAD 2>/dev/null || git -C ${shellQuote(paths.repoPath)} hash-object -t tree /dev/null)`,
+              "fi",
+              `git -C ${shellQuote(paths.repoPath)} add -N . >/dev/null 2>&1 || true`,
+              `git -C ${shellQuote(paths.repoPath)} diff --binary "$base_ref"`,
+            ].join("\n"),
             {
               env: repoCommandEnv(paths, gitAuth?.env),
               signal: input.signal,

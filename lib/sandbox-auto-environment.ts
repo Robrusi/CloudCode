@@ -27,6 +27,7 @@ import {
   writeDaytonaTextFile,
   type DaytonaSandboxPaths,
 } from "@/lib/daytona-sandbox"
+import { cloneGitRepositoryInSandbox } from "@/lib/daytona-git"
 import type { RunCodexLog, SandboxPresetInput } from "@/lib/daytona-codex-agent"
 import { parseGitHubRepoUrl } from "@/lib/github-repo"
 import {
@@ -670,6 +671,7 @@ async function runScannerCodex(
 
 async function cloneRepoForBuild({
   baseBranch,
+  gitAuth,
   githubToken,
   repoUrl,
   sandbox,
@@ -677,27 +679,23 @@ async function cloneRepoForBuild({
   paths,
 }: {
   baseBranch?: string
+  gitAuth?: SandboxGitHubAuth | null
   githubToken?: string
   repoUrl: string
   sandbox: Sandbox
   signal?: AbortSignal
   paths: DaytonaSandboxPaths
 }) {
-  await runDaytonaCommand(
-    sandbox,
-    `rm -rf ${shellQuote(paths.repoPath)} && mkdir -p ${shellQuote(
-      paths.repoPath.replace(/\/[^/]+$/, "")
-    )}`,
-    { signal, timeoutMs: 60_000 }
-  )
-  await sandbox.git.clone(
+  await cloneGitRepositoryInSandbox({
+    branch: baseBranch,
+    env: codexShellEnv(paths, gitAuth?.env),
+    password: githubToken,
+    path: paths.repoPath,
     repoUrl,
-    paths.repoPath,
-    baseBranch,
-    undefined,
-    githubToken ? "x-access-token" : undefined,
-    githubToken
-  )
+    sandbox,
+    signal,
+    username: githubToken ? "x-access-token" : undefined,
+  })
 }
 
 function commandTimeout(command: CloudcodeCommand) {
@@ -1136,6 +1134,7 @@ async function buildAutoEnvironmentSandbox({
     })
     await cloneRepoForBuild({
       baseBranch: input.baseBranch,
+      gitAuth,
       githubToken: input.githubToken,
       repoUrl: input.repoUrl,
       sandbox,
