@@ -2134,6 +2134,8 @@ function TopBar({
             />
             <TopBarIconButton
               onClick={onToggleTerminal}
+              onFocus={() => warmBrowserTerminal(sandboxId)}
+              onPointerDown={() => warmBrowserTerminal(sandboxId)}
               onPointerEnter={() => warmBrowserTerminal(sandboxId)}
               active={terminalOpen}
               disabled={!sandboxId && !sandboxPending}
@@ -2361,6 +2363,8 @@ function TopBarIconButton({
   disabled,
   label,
   onClick,
+  onFocus,
+  onPointerDown,
   onPointerEnter,
   ref,
 }: {
@@ -2369,6 +2373,8 @@ function TopBarIconButton({
   disabled?: boolean
   label: string
   onClick: () => void
+  onFocus?: () => void
+  onPointerDown?: () => void
   onPointerEnter?: () => void
   ref?: React.Ref<HTMLButtonElement>
 }) {
@@ -2377,6 +2383,8 @@ function TopBarIconButton({
       ref={ref}
       type="button"
       onClick={onClick}
+      onFocus={onFocus}
+      onPointerDown={onPointerDown}
       onPointerEnter={onPointerEnter}
       aria-label={label}
       title={label}

@@ -46,6 +46,7 @@ const CODEX_CAPABILITIES_EXEC_BEGIN = "__CLOUDCODE_EXEC_HELP_BEGIN__"
 const CODEX_CAPABILITIES_EXEC_END = "__CLOUDCODE_EXEC_HELP_END__"
 const CODEX_CAPABILITIES_RESUME_BEGIN = "__CLOUDCODE_RESUME_HELP_BEGIN__"
 const CODEX_CAPABILITIES_RESUME_END = "__CLOUDCODE_RESUME_HELP_END__"
+const CODEX_AUTH_CURRENT = "__CLOUDCODE_CODEX_AUTH_CURRENT__"
 const CODEX_UPDATE_TIMEOUT_MS = 3 * 60 * 1000
 const CODEX_CAPABILITIES_TIMEOUT_MS = 25_000
 const RUNTIME_BOOTSTRAP_REFRESHED = "__CLOUDCODE_RUNTIME_BOOTSTRAP_REFRESHED__"
@@ -1297,6 +1298,90 @@ async function updateCodexCli(
   })
 }
 
+function codexAuthMarkerPath(paths: DaytonaSandboxPaths) {
+  return `${paths.codexHome}/auth.sha256`
+}
+
+async function prepareCodexAuthAndPrompt({
+  authJson,
+  paths,
+  prompt,
+  sandbox,
+  signal,
+}: {
+  authJson: string
+  paths: DaytonaSandboxPaths
+  prompt: string
+  sandbox: Sandbox
+  signal?: AbortSignal
+}) {
+  const authHash = sha256(authJson)
+  const authPath = `${paths.codexHome}/auth.json`
+  const authMarkerPath = codexAuthMarkerPath(paths)
+  const authState = await runDaytonaCommand(
+    sandbox,
+    [
+      "set -e",
+      `mkdir -p ${shellQuote(paths.codexHome)}`,
+      `chmod 700 ${shellQuote(paths.codexHome)}`,
+      `auth_hash=${shellQuote(authHash)}`,
+      `if [ -s ${shellQuote(authPath)} ] && grep -qxF -- "$auth_hash" ${shellQuote(authMarkerPath)} 2>/dev/null; then`,
+      `  printf '%s\\n' ${shellQuote(CODEX_AUTH_CURRENT)}`,
+      "fi",
+    ].join("\n"),
+    { signal, timeoutMs: 10_000 }
+  )
+
+  if (authState.exitCode !== 0) {
+    throw new Error(
+      compactLine(authState.stderr || authState.stdout) ||
+        "Unable to prepare Codex auth directory."
+    )
+  }
+
+  const authCurrent = authState.stdout.includes(CODEX_AUTH_CURRENT)
+  await Promise.all([
+    authCurrent
+      ? Promise.resolve()
+      : writeDaytonaTextFile(sandbox, authPath, authJson),
+    writeDaytonaTextFile(sandbox, paths.promptPath, prompt),
+  ])
+
+  const chmodResult = await runDaytonaCommand(
+    sandbox,
+    [
+      "set -e",
+      `chmod 600 ${shellQuote(paths.promptPath)} ${shellQuote(authPath)}`,
+      authCurrent
+        ? ""
+        : [
+            `printf '%s\\n' ${shellQuote(authHash)} > ${shellQuote(authMarkerPath)}`,
+            `chmod 600 ${shellQuote(authMarkerPath)}`,
+          ].join("\n"),
+    ].join("\n"),
+    { signal, timeoutMs: 10_000 }
+  )
+
+  if (chmodResult.exitCode !== 0) {
+    throw new Error(
+      compactLine(chmodResult.stderr || chmodResult.stdout) ||
+        "Unable to prepare Codex auth files."
+    )
+  }
+}
+
+async function writeCodexAuthMarker(
+  sandbox: Sandbox,
+  paths: DaytonaSandboxPaths,
+  authJson: string
+) {
+  await writeDaytonaTextFile(
+    sandbox,
+    codexAuthMarkerPath(paths),
+    `${sha256(authJson)}\n`
+  ).catch(() => undefined)
+}
+
 async function prepareSandboxRuntime(
   sandbox: Sandbox,
   input: RunCodexInSandboxInput,
@@ -1620,9 +1705,9 @@ async function cleanupRunFiles(
 ) {
   await runDaytonaCommand(
     sandbox,
-    `rm -f ${shellQuote(`${paths.codexHome}/auth.json`)} ${shellQuote(
-      paths.promptPath
-    )} ${shellQuote(paths.previousDiffPath)} ${shellQuote(paths.lastMessagePath)}`,
+    `rm -f ${shellQuote(paths.promptPath)} ${shellQuote(
+      paths.previousDiffPath
+    )} ${shellQuote(paths.lastMessagePath)}`,
     {
       signal,
       timeoutMs: 10_000,
@@ -1631,15 +1716,54 @@ async function cleanupRunFiles(
 }
 
 function trustMiseCommand(paths: DaytonaSandboxPaths) {
+  const markerPath = `${paths.codexHome}/mise-trust.sha256`
+  const configFileArgs = MISE_CONFIG_FILES.map(shellQuote).join(" ")
+
   return [
     "set -e",
+    `marker_path=${shellQuote(markerPath)}`,
+    `mkdir -p ${shellQuote(paths.codexHome)}`,
     `export MISE_TRUSTED_CONFIG_PATHS=${shellQuote(paths.repoPath)}`,
     `cd ${shellQuote(paths.repoPath)}`,
+    "hash_file() {",
+    "  if command -v sha256sum >/dev/null 2>&1; then",
+    "    sha256sum \"$1\" | awk '{print $1}'",
+    "  elif command -v shasum >/dev/null 2>&1; then",
+    "    shasum -a 256 \"$1\" | awk '{print $1}'",
+    "  else",
+    "    openssl dgst -sha256 \"$1\" | awk '{print $NF}'",
+    "  fi",
+    "}",
+    "hash_stream() {",
+    "  if command -v sha256sum >/dev/null 2>&1; then",
+    "    sha256sum | awk '{print $1}'",
+    "  elif command -v shasum >/dev/null 2>&1; then",
+    "    shasum -a 256 | awk '{print $1}'",
+    "  else",
+    "    openssl dgst -sha256 | awk '{print $NF}'",
+    "  fi",
+    "}",
     "has_mise_config=0",
-    ...MISE_CONFIG_FILES.map(
-      (file) => `[ ! -f ${shellQuote(file)} ] || has_mise_config=1`
-    ),
-    '[ "$has_mise_config" = "1" ] || exit 0',
+    `for file in ${configFileArgs}; do`,
+    '  [ ! -f "$file" ] || has_mise_config=1',
+    "done",
+    'if [ "$has_mise_config" != "1" ]; then',
+    "  config_hash=no-mise-config",
+    '  if grep -qxF -- "$config_hash" "$marker_path" 2>/dev/null; then exit 0; fi',
+    '  printf "%s\\n" "$config_hash" > "$marker_path"',
+    "  exit 0",
+    "fi",
+    "config_hash=$(",
+    "  {",
+    `    for file in ${configFileArgs}; do`,
+    '      [ -f "$file" ] || continue',
+    '      printf "%s\\n" "$file"',
+    '      hash_file "$file"',
+    "    done",
+    "  } | hash_stream",
+    ")",
+    '[ -n "$config_hash" ]',
+    'if grep -qxF -- "$config_hash" "$marker_path" 2>/dev/null; then exit 0; fi',
     "if ! command -v mise >/dev/null 2>&1; then",
     "  curl -fsSL https://mise.run | sh",
     '  export PATH="$HOME/.local/bin:$HOME/.mise/bin:$PATH"',
@@ -1648,6 +1772,7 @@ function trustMiseCommand(paths: DaytonaSandboxPaths) {
       (file) =>
         `[ ! -f ${shellQuote(file)} ] || mise trust -y ${shellQuote(file)}`
     ),
+    'printf "%s\\n" "$config_hash" > "$marker_path"',
   ].join("\n")
 }
 
@@ -1929,32 +2054,13 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
 
     await Promise.all([
       emitLog(input, { kind: "setup", message: "Preparing Codex auth" }),
-      runDaytonaCommand(
+      prepareCodexAuthAndPrompt({
+        authJson: input.authJson,
+        paths,
+        prompt,
         sandbox,
-        `mkdir -p ${shellQuote(paths.codexHome)} && chmod 700 ${shellQuote(
-          paths.codexHome
-        )}`,
-        { signal: input.signal, timeoutMs: 10_000 }
-      )
-        .then(() =>
-          Promise.all([
-            writeDaytonaTextFile(
-              sandbox,
-              `${paths.codexHome}/auth.json`,
-              input.authJson
-            ),
-            writeDaytonaTextFile(sandbox, paths.promptPath, prompt),
-          ])
-        )
-        .then(() =>
-          runDaytonaCommand(
-            sandbox,
-            `chmod 600 ${shellQuote(`${paths.codexHome}/auth.json`)} ${shellQuote(
-              paths.promptPath
-            )}`,
-            { timeoutMs: 10_000 }
-          )
-        ),
+        signal: input.signal,
+      }),
     ])
 
     const repoAlreadyExists = await repoAlreadyExistsPromise
@@ -2231,6 +2337,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         readDaytonaTextFile(sandbox, `${paths.codexHome}/auth.json`),
       ]).then(async ([lastMessage, updatedAuthJson]) => {
         await cleanupRunFiles(sandbox, paths, input.signal)
+        await writeCodexAuthMarker(sandbox, paths, updatedAuthJson)
         return { lastMessage, updatedAuthJson }
       }),
     ])

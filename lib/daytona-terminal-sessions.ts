@@ -15,6 +15,15 @@ import {
 const MAX_REPLAY_BYTES = 1_000_000
 const GITHUB_AUTH_VERSION = 6
 
+type StartedDaytonaSandbox = Awaited<
+  ReturnType<typeof getStartedDaytonaSandbox>
+>
+type DaytonaTerminalPaths = Awaited<ReturnType<typeof resolveDaytonaPaths>>
+type DaytonaTerminalContext = {
+  paths: DaytonaTerminalPaths
+  sandbox: StartedDaytonaSandbox
+}
+
 export type TerminalSubscriber = {
   active: boolean
   onData: (data: Uint8Array) => void | Promise<void>
@@ -154,7 +163,9 @@ export async function refreshDaytonaTerminalGitHubAuth({
   githubUserEmail,
   githubUserName,
   githubUsername,
+  paths: providedPaths,
   repoUrl,
+  sandbox: providedSandbox,
   sandboxId,
   terminalId,
 }: {
@@ -162,7 +173,9 @@ export async function refreshDaytonaTerminalGitHubAuth({
   githubUserEmail?: string
   githubUserName?: string
   githubUsername?: string | null
+  paths?: DaytonaTerminalPaths
   repoUrl?: string
+  sandbox?: StartedDaytonaSandbox
   sandboxId: string
   terminalId: string
 }) {
@@ -173,8 +186,8 @@ export async function refreshDaytonaTerminalGitHubAuth({
   }
   if (!githubToken?.trim()) return session.githubAuth ?? null
 
-  const sandbox = await getStartedDaytonaSandbox(sandboxId)
-  const paths = await resolveDaytonaPaths(sandbox)
+  const sandbox = providedSandbox ?? (await getStartedDaytonaSandbox(sandboxId))
+  const paths = providedPaths ?? (await resolveDaytonaPaths(sandbox))
   await session.githubAuth?.cleanup()
   const auth = await setupSandboxGitHubAuth({
     githubToken,
@@ -246,12 +259,7 @@ export async function connectDaytonaTerminal({
     }
   }
 
-  let sandboxAndPaths:
-    | Promise<{
-        paths: Awaited<ReturnType<typeof resolveDaytonaPaths>>
-        sandbox: Awaited<ReturnType<typeof getStartedDaytonaSandbox>>
-      }>
-    | undefined
+  let sandboxAndPaths: Promise<DaytonaTerminalContext> | undefined
   function getSandboxAndPaths() {
     sandboxAndPaths ??= (async () => {
       const sandbox = await getStartedDaytonaSandbox(sandboxId)
@@ -262,13 +270,15 @@ export async function connectDaytonaTerminal({
     return sandboxAndPaths
   }
 
-  async function ensureTerminalGitHubAuth() {
+  async function ensureTerminalGitHubAuth(context?: DaytonaTerminalContext) {
     return await refreshDaytonaTerminalGitHubAuth({
       githubToken,
       githubUserEmail,
       githubUserName,
       githubUsername,
+      paths: context?.paths,
       repoUrl,
+      sandbox: context?.sandbox,
       sandboxId,
       terminalId: cleanId,
     })
@@ -285,8 +295,9 @@ export async function connectDaytonaTerminal({
     return attachSubscriber(session.handle)
   }
 
-  const { paths, sandbox } = await getSandboxAndPaths()
-  const githubAuth = await ensureTerminalGitHubAuth()
+  const context = await getSandboxAndPaths()
+  const { paths, sandbox } = context
+  const githubAuth = await ensureTerminalGitHubAuth(context)
 
   const createOptions = {
     cols: safeCols,

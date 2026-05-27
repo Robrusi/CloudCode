@@ -24,6 +24,7 @@ import { ContextMenu } from "@/components/context-menu"
 import {
   killBrowserTerminalSession,
   registerTerminalCloser,
+  WARM_BROWSER_TERMINAL_EVENT,
 } from "@/components/sandbox-terminal-session"
 import { cn } from "@/lib/utils"
 
@@ -309,6 +310,40 @@ export function SandboxTerminalPanel({
       setStartedSandboxId(sandboxId)
     }
   }, [open, sandboxId, startedSandboxId])
+
+  useEffect(() => {
+    if (!sandboxId || startedSandboxId === sandboxId) return
+
+    const timeout = window.setTimeout(() => {
+      setStartedSandboxId((current) =>
+        current === sandboxId ? current : sandboxId
+      )
+    }, 250)
+
+    return () => window.clearTimeout(timeout)
+  }, [sandboxId, startedSandboxId])
+
+  useEffect(() => {
+    if (!sandboxId) return
+
+    function handleWarmTerminal(event: Event) {
+      const warmSandboxId = (event as CustomEvent<{ sandboxId?: unknown }>)
+        .detail?.sandboxId
+      if (warmSandboxId !== sandboxId) return
+
+      setStartedSandboxId((current) =>
+        current === sandboxId ? current : sandboxId
+      )
+    }
+
+    window.addEventListener(WARM_BROWSER_TERMINAL_EVENT, handleWarmTerminal)
+    return () => {
+      window.removeEventListener(
+        WARM_BROWSER_TERMINAL_EVENT,
+        handleWarmTerminal
+      )
+    }
+  }, [sandboxId])
 
   useEffect(() => {
     persistTerminalDock(dock)
@@ -863,14 +898,14 @@ function SandboxTerminalPane({
       macOptionIsMeta: true,
       minimumContrastRatio: 4,
       scrollback: 10_000,
-      smoothScrollDuration: 80,
+      smoothScrollDuration: 0,
       theme: paletteRef.current,
     })
     terminalRef.current = terminal
     const fitAddon = new FitAddon()
     const node = containerRef.current
     let disposed = false
-    let inputFlushTimer: ReturnType<typeof setTimeout> | undefined
+    let inputFlushScheduled = false
     let pendingInput = ""
     let resizeTimer: ReturnType<typeof setTimeout> | undefined
     let lastSize = { cols: 0, rows: 0 }
@@ -957,11 +992,12 @@ function SandboxTerminalPane({
 
     function queueInput(data: string) {
       pendingInput += data
-      if (inputFlushTimer) return
-      inputFlushTimer = setTimeout(() => {
-        inputFlushTimer = undefined
+      if (inputFlushScheduled) return
+      inputFlushScheduled = true
+      queueMicrotask(() => {
+        inputFlushScheduled = false
         flushInput()
-      }, 10)
+      })
     }
 
     const dataDisposable = terminal.onData(queueInput)
@@ -1076,7 +1112,6 @@ function SandboxTerminalPane({
       if (scheduleResizeRef.current === scheduleResize) {
         scheduleResizeRef.current = null
       }
-      if (inputFlushTimer) clearTimeout(inputFlushTimer)
       if (resizeTimer) clearTimeout(resizeTimer)
       flushInput()
       disposed = true
