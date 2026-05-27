@@ -2,6 +2,7 @@ const terminalClosers = new Map<string, Set<() => void>>()
 const terminalIds = new Map<string, Set<string>>()
 const TERMINAL_DOCK_KEY = "cloudcode:terminalDock:v1"
 const TERMINAL_ID_PATTERN = /^[A-Za-z0-9._:-]{1,120}$/
+export const WARM_BROWSER_TERMINAL_EVENT = "cloudcode:warmBrowserTerminal"
 
 function persistedTerminalIdsForSandbox(sandboxId: string) {
   if (typeof window === "undefined") return []
@@ -102,8 +103,16 @@ export function registerTerminalCloser(
 }
 
 export function warmBrowserTerminal(sandboxId?: string | null) {
-  void sandboxId
-  // Daytona PTYs are opened on demand when the panel mounts.
+  if (typeof window === "undefined") return
+
+  const warmSandboxId = sandboxId?.trim()
+  if (!warmSandboxId) return
+
+  window.dispatchEvent(
+    new CustomEvent(WARM_BROWSER_TERMINAL_EVENT, {
+      detail: { sandboxId: warmSandboxId },
+    })
+  )
 }
 
 export function closeBrowserTerminalSession(sandboxId?: string) {
