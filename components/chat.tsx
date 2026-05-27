@@ -261,6 +261,12 @@ type OptimisticRun = {
   messages: Message[]
 }
 
+type ThreadScrollSnapshot = {
+  atBottom: boolean
+  runKey: string
+  scrollTop: number
+}
+
 const REPO_KEY = "cloudcode:repoUrl"
 const BASE_BRANCH_KEY = "cloudcode:baseBranch"
 const MODEL_KEY = "cloudcode:model"
@@ -383,6 +389,7 @@ function ChatInner() {
       ? null
       : (localStorage.getItem(ACTIVE_KEY) as Id<"threads"> | null)
   )
+  const activeRunKey = activeId ? (activeId as string) : DRAFT_RUN_KEY
   const rawActiveChat = useQuery(
     api.chats.get,
     activeId ? { threadId: activeId } : "skip"
@@ -505,7 +512,15 @@ function ChatInner() {
   const composerRef = useRef<HTMLDivElement>(null)
   const threadRef = useRef<HTMLDivElement | null>(null)
   const isAtBottomRef = useRef(true)
+  const pendingThreadScrollRestoreRef = useRef<ThreadScrollSnapshot | null>(
+    null
+  )
+  const pendingThreadScrollRestoreFrameRef = useRef<number | null>(null)
   const [composerHeight, setComposerHeight] = useState(DEFAULT_COMPOSER_HEIGHT)
+
+  const isThreadAtBottom = useCallback((el: HTMLDivElement) => {
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 80
+  }, [])
 
   const scrollThreadToBottom = useCallback(() => {
     const el = threadRef.current
@@ -525,20 +540,76 @@ function ChatInner() {
     })
   }, [scrollThreadToBottom])
 
+  const captureThreadScrollForPanel = useCallback(() => {
+    const el = threadRef.current
+    if (!el) return
+
+    if (pendingThreadScrollRestoreFrameRef.current !== null) {
+      cancelAnimationFrame(pendingThreadScrollRestoreFrameRef.current)
+      pendingThreadScrollRestoreFrameRef.current = null
+    }
+
+    pendingThreadScrollRestoreRef.current = {
+      atBottom: isThreadAtBottom(el),
+      runKey: activeRunKey,
+      scrollTop: el.scrollTop,
+    }
+  }, [activeRunKey, isThreadAtBottom])
+
+  const restoreThreadScrollForPanel = useCallback(
+    (el: HTMLDivElement) => {
+      const snapshot = pendingThreadScrollRestoreRef.current
+      if (!snapshot || snapshot.runKey !== activeRunKey) return false
+
+      const applyScroll = () => {
+        el.style.scrollBehavior = "auto"
+        el.scrollTop = snapshot.atBottom
+          ? el.scrollHeight
+          : Math.min(
+              snapshot.scrollTop,
+              Math.max(0, el.scrollHeight - el.clientHeight)
+            )
+        isAtBottomRef.current = snapshot.atBottom
+      }
+
+      if (pendingThreadScrollRestoreFrameRef.current !== null) {
+        cancelAnimationFrame(pendingThreadScrollRestoreFrameRef.current)
+      }
+
+      applyScroll()
+      pendingThreadScrollRestoreFrameRef.current = requestAnimationFrame(() => {
+        applyScroll()
+        pendingThreadScrollRestoreFrameRef.current = requestAnimationFrame(
+          () => {
+            applyScroll()
+            if (pendingThreadScrollRestoreRef.current === snapshot) {
+              pendingThreadScrollRestoreRef.current = null
+            }
+            pendingThreadScrollRestoreFrameRef.current = null
+          }
+        )
+      })
+
+      return true
+    },
+    [activeRunKey]
+  )
+
   function onThreadScroll(event: ReactUIEvent<HTMLDivElement>) {
     const el = event.currentTarget
-    isAtBottomRef.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    isAtBottomRef.current = isThreadAtBottom(el)
   }
 
   const setThreadElement = useCallback(
     (el: HTMLDivElement | null) => {
       threadRef.current = el
       if (el) {
-        settleThreadAtBottom()
+        if (!restoreThreadScrollForPanel(el)) {
+          settleThreadAtBottom()
+        }
       }
     },
-    [settleThreadAtBottom]
+    [restoreThreadScrollForPanel, settleThreadAtBottom]
   )
 
   const revealNextLiveToken = useCallback(function revealNextLiveToken(
@@ -692,7 +763,6 @@ function ChatInner() {
       }),
     [chats, liveActiveRunState, liveRunStates, runningRunKeys, visibleLiveRun]
   )
-  const activeRunKey = activeId ? (activeId as string) : DRAFT_RUN_KEY
   const activeRunState = activeId
     ? {
         ...liveRunStates[activeId as string],
@@ -801,25 +871,34 @@ function ChatInner() {
     return name?.trim().split(/\s+/)[0] || null
   }, [user])
 
-  const openFile = useCallback((path: string) => {
-    setActiveFilePath(path)
-    setActiveFileMode("file")
-    setActiveFileDiff(null)
-    setAllDiffsOpen(false)
-  }, [])
+  const openFile = useCallback(
+    (path: string) => {
+      captureThreadScrollForPanel()
+      setActiveFilePath(path)
+      setActiveFileMode("file")
+      setActiveFileDiff(null)
+      setAllDiffsOpen(false)
+    },
+    [captureThreadScrollForPanel]
+  )
 
-  const openFileDiff = useCallback((path: string, diff: string) => {
-    setActiveFilePath(path)
-    setActiveFileMode("diff")
-    setActiveFileDiff(diff)
-    setAllDiffsOpen(false)
-  }, [])
+  const openFileDiff = useCallback(
+    (path: string, diff: string) => {
+      captureThreadScrollForPanel()
+      setActiveFilePath(path)
+      setActiveFileMode("diff")
+      setActiveFileDiff(diff)
+      setAllDiffsOpen(false)
+    },
+    [captureThreadScrollForPanel]
+  )
 
   const openAllDiffs = useCallback(() => {
+    captureThreadScrollForPanel()
     setActiveFilePath(null)
     setActiveFileDiff(null)
     setAllDiffsOpen(true)
-  }, [])
+  }, [captureThreadScrollForPanel])
 
   const refreshGitHubAuth = useCallback(async () => {
     try {
@@ -1015,9 +1094,22 @@ function ChatInner() {
   ])
 
   useLayoutEffect(() => {
+    if (pendingThreadScrollRestoreFrameRef.current !== null) {
+      cancelAnimationFrame(pendingThreadScrollRestoreFrameRef.current)
+      pendingThreadScrollRestoreFrameRef.current = null
+    }
+    pendingThreadScrollRestoreRef.current = null
     setActiveFileDiff(null)
     settleThreadAtBottom()
   }, [activeId, settleThreadAtBottom])
+
+  useEffect(() => {
+    return () => {
+      if (pendingThreadScrollRestoreFrameRef.current !== null) {
+        cancelAnimationFrame(pendingThreadScrollRestoreFrameRef.current)
+      }
+    }
+  }, [])
 
   useLayoutEffect(() => {
     if (!isAtBottomRef.current) return
@@ -1953,6 +2045,7 @@ function ChatInner() {
         activeMode={activeFileMode}
         onClose={() => setFilesOpen(false)}
         onOpenFile={(p, mode) => {
+          captureThreadScrollForPanel()
           setActiveFilePath(p)
           setActiveFileMode(mode)
           setActiveFileDiff(null)
