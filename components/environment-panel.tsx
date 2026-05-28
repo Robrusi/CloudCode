@@ -31,6 +31,13 @@ function rowsFromEntries(entries: EnvVar[]): LocalRow[] {
   return entries.map((entry) => ({ ...entry, id: makeId() }))
 }
 
+function entriesFromRows(rows: LocalRow[]): EnvVar[] {
+  return rows.map((row) => ({
+    name: row.name.trim(),
+    value: row.value,
+  }))
+}
+
 function maskedDots(value: string) {
   const length = Math.min(Math.max(value.length, 6), 18)
   return "•".repeat(length)
@@ -168,17 +175,6 @@ export function EnvironmentPanel({ sandboxId }: { sandboxId: string | null }) {
     )
   }, [])
 
-  const removeRow = useCallback((id: string) => {
-    dirtyRef.current = true
-    setRows((prev) => prev.filter((row) => row.id !== id))
-    setRevealed((prev) => {
-      if (!prev.has(id)) return prev
-      const next = new Set(prev)
-      next.delete(id)
-      return next
-    })
-  }, [])
-
   const toggleReveal = useCallback((id: string) => {
     setRevealed((prev) => {
       const next = new Set(prev)
@@ -254,13 +250,79 @@ export function EnvironmentPanel({ sandboxId }: { sandboxId: string | null }) {
     setError(null)
   }, [])
 
+  const persistEntries = useCallback(
+    async (allEntries: EnvVar[]) => {
+      if (!sandboxId) return false
+
+      const validationError = validateEntries(allEntries)
+
+      if (validationError) {
+        setError(validationError)
+        setStatus("error")
+        return false
+      }
+
+      setStatus("saving")
+      setError(null)
+
+      try {
+        const res = await fetch("/api/sandbox/env", {
+          body: JSON.stringify({ entries: allEntries, sandboxId }),
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        })
+        const data = (await res.json()) as {
+          entries?: EnvVar[]
+          error?: string
+          ok?: boolean
+        }
+
+        if (!res.ok || !data.ok) {
+          throw new Error(data.error ?? `Request failed (${res.status})`)
+        }
+
+        const next = cloneEntries(data.entries ?? allEntries)
+        envCache.set(sandboxId, next)
+        applyEntries(next)
+        setStatus("saved")
+
+        if (savedTimer.current) clearTimeout(savedTimer.current)
+        savedTimer.current = setTimeout(() => setStatus("idle"), 1500)
+        return true
+      } catch (err) {
+        setStatus("error")
+        setError(err instanceof Error ? err.message : "Failed to save")
+        return false
+      }
+    },
+    [applyEntries, sandboxId]
+  )
+
+  const removeRow = useCallback(
+    (id: string) => {
+      if (status === "saving") return
+
+      const nextRows = rows.filter((row) => row.id !== id)
+      dirtyRef.current = true
+      setRows(nextRows)
+      setRevealed((prev) => {
+        if (!prev.has(id)) return prev
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+
+      void persistEntries(entriesFromRows(nextRows))
+    },
+    [persistEntries, rows, status]
+  )
+
   const save = useCallback(async () => {
     if (!sandboxId || status === "saving") return
 
-    const entries = rows.map((row) => ({
-      name: row.name.trim(),
-      value: row.value,
-    }))
+    const entries = entriesFromRows(rows)
     const draftEntry =
       adding && draftName.trim()
         ? [{ name: draftName.trim(), value: draftValue }]
@@ -274,39 +336,8 @@ export function EnvironmentPanel({ sandboxId }: { sandboxId: string | null }) {
       return
     }
 
-    setStatus("saving")
-    setError(null)
-
-    try {
-      const res = await fetch("/api/sandbox/env", {
-        body: JSON.stringify({ entries: allEntries, sandboxId }),
-        cache: "no-store",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      })
-      const data = (await res.json()) as {
-        entries?: EnvVar[]
-        error?: string
-        ok?: boolean
-      }
-
-      if (!res.ok || !data.ok) {
-        throw new Error(data.error ?? `Request failed (${res.status})`)
-      }
-
-      const next = cloneEntries(data.entries ?? allEntries)
-      envCache.set(sandboxId, next)
-      applyEntries(next)
-      setStatus("saved")
-
-      if (savedTimer.current) clearTimeout(savedTimer.current)
-      savedTimer.current = setTimeout(() => setStatus("idle"), 1500)
-    } catch (err) {
-      setStatus("error")
-      setError(err instanceof Error ? err.message : "Failed to save")
-    }
-  }, [adding, applyEntries, draftName, draftValue, rows, sandboxId, status])
+    await persistEntries(allEntries)
+  }, [adding, draftName, draftValue, persistEntries, rows, sandboxId, status])
 
   if (!sandboxId) {
     return (
@@ -387,6 +418,7 @@ export function EnvironmentPanel({ sandboxId }: { sandboxId: string | null }) {
                   onToggleReveal={() => toggleReveal(row.id)}
                   revealed={revealed.has(row.id)}
                   row={row}
+                  saving={saving}
                 />
               ))}
               {adding ? (
@@ -473,12 +505,14 @@ function EnvRow({
   onChange,
   onRemove,
   onToggleReveal,
+  saving,
 }: {
   row: LocalRow
   revealed: boolean
   onChange: (patch: Partial<EnvVar>) => void
   onRemove: () => void
   onToggleReveal: () => void
+  saving: boolean
 }) {
   return (
     <li className="group flex items-center gap-3 border-b border-border/50 px-4 py-3 transition-colors last:border-b-0 focus-within:bg-muted/30 hover:bg-muted/30">
@@ -512,6 +546,7 @@ function EnvRow({
         <RowIconButton
           label={revealed ? "Hide value" : "Reveal value"}
           onClick={onToggleReveal}
+          disabled={saving}
         >
           {revealed ? (
             <EyeOff className="size-3.5" />
@@ -519,7 +554,11 @@ function EnvRow({
             <Eye className="size-3.5" />
           )}
         </RowIconButton>
-        <RowIconButton label="Delete variable" onClick={onRemove}>
+        <RowIconButton
+          label="Delete variable"
+          onClick={onRemove}
+          disabled={saving}
+        >
           <Trash2 className="size-3.5" />
         </RowIconButton>
       </div>
@@ -585,17 +624,20 @@ function DraftRow({
 
 function RowIconButton({
   children,
+  disabled,
   label,
   onClick,
 }: {
   children: React.ReactNode
+  disabled?: boolean
   label: string
   onClick: () => void
 }) {
   return (
     <button
       aria-label={label}
-      className="grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      className="grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+      disabled={disabled}
       onClick={onClick}
       title={label}
       type="button"

@@ -4,10 +4,45 @@ import { NextResponse } from "next/server"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { getConvexAuthToken } from "@/lib/codex-auth"
+import {
+  getDaytonaSandbox,
+  readDaytonaTextFile,
+  resolveDaytonaPaths,
+  runDaytonaCommand,
+  writeDaytonaTextFile,
+} from "@/lib/daytona-sandbox"
 import { requireSameOrigin } from "@/lib/request-security"
+import { removeCloudcodeEnvLocalVars } from "@/lib/sandbox-env"
 import { encryptSecret } from "@/lib/secret-crypto"
 
 export const runtime = "nodejs"
+export const maxDuration = 300
+
+type SecretCleanupResult = {
+  changed: boolean
+  error?: string
+  sandboxId: string
+  skipped?: string
+}
+
+type PresetSecretSummary = {
+  id: Id<"sandboxPresetSecrets">
+  name: string
+}
+
+type PresetSummary = {
+  environments?: Array<{
+    activeSandboxId?: string
+  }>
+  id: Id<"sandboxPresets">
+  secrets: PresetSecretSummary[]
+}
+
+type ChatSummary = {
+  sandboxId?: string
+  sandboxPresetId?: Id<"sandboxPresets">
+  sandboxState?: string
+}
 
 function getConvexUrl() {
   const url = process.env.NEXT_PUBLIC_CONVEX_URL
@@ -23,6 +58,112 @@ async function convexClient() {
   const client = new ConvexHttpClient(getConvexUrl())
   client.setAuth(await getConvexAuthToken())
   return client
+}
+
+function json(data: unknown, init?: ResponseInit) {
+  return NextResponse.json(data, {
+    ...init,
+    headers: {
+      "Cache-Control": "no-store, private",
+      ...init?.headers,
+    },
+  })
+}
+
+async function removeSecretFromSandboxEnvLocal(
+  sandboxId: string,
+  name: string
+): Promise<SecretCleanupResult> {
+  try {
+    const sandbox = await getDaytonaSandbox(sandboxId)
+    await sandbox.refreshData().catch(() => undefined)
+    if (sandbox.state !== "started") {
+      return {
+        changed: false,
+        sandboxId,
+        skipped: `Sandbox is ${sandbox.state || "not running"}.`,
+      }
+    }
+
+    const paths = await resolveDaytonaPaths(sandbox)
+    const result = await removeCloudcodeEnvLocalVars(
+      {
+        readTextFile: (path) => readDaytonaTextFile(sandbox, path),
+        runCommand: (command, options) =>
+          runDaytonaCommand(sandbox, command, {
+            cwd: paths.home,
+            timeoutMs: options?.timeoutMs,
+          }),
+        writeTextFile: (path, content) =>
+          writeDaytonaTextFile(sandbox, path, content),
+      },
+      paths.repoPath,
+      [name]
+    )
+
+    return {
+      changed: result.changed,
+      sandboxId,
+    }
+  } catch (error) {
+    return {
+      changed: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to update sandbox .env.local.",
+      sandboxId,
+    }
+  }
+}
+
+function activeSandboxId(record: ChatSummary) {
+  if (!record.sandboxId) return undefined
+  if (
+    record.sandboxState === "deleted" ||
+    record.sandboxState === "error" ||
+    record.sandboxState === "stopped"
+  ) {
+    return undefined
+  }
+
+  return record.sandboxId
+}
+
+function uniqueStrings(values: Array<string | undefined>) {
+  return Array.from(
+    new Set(values.filter((value): value is string => Boolean(value)))
+  )
+}
+
+async function secretRemovalPlan(
+  client: ConvexHttpClient,
+  secretId: Id<"sandboxPresetSecrets">
+) {
+  const [presets, chats] = await Promise.all([
+    client.query(api.sandboxPresets.listWithEnvironments, {}),
+    client.query(api.chats.list, {}),
+  ])
+  const preset = (presets as PresetSummary[]).find((candidate) =>
+    candidate.secrets.some((secret) => secret.id === secretId)
+  )
+  const secret = preset?.secrets.find((candidate) => candidate.id === secretId)
+
+  if (!preset || !secret) {
+    throw new Error("Secret not found.")
+  }
+
+  return {
+    name: secret.name,
+    sandboxIds: uniqueStrings([
+      ...(preset.environments ?? []).map(
+        (environment) => environment.activeSandboxId
+      ),
+      ...(chats as ChatSummary[])
+        .filter((chat) => chat.sandboxPresetId === preset.id)
+        .map(activeSandboxId),
+    ]),
+  }
 }
 
 export async function POST(request: Request) {
@@ -41,7 +182,7 @@ export async function POST(request: Request) {
       typeof body.name !== "string" ||
       typeof body.value !== "string"
     ) {
-      return NextResponse.json(
+      return json(
         { error: "presetId, name, and value are required." },
         { status: 400 }
       )
@@ -54,12 +195,64 @@ export async function POST(request: Request) {
       value: encryptSecret(body.value),
     })
 
-    return NextResponse.json({ id })
+    return json({ id })
   } catch (error) {
-    return NextResponse.json(
+    return json(
       {
         error:
           error instanceof Error ? error.message : "Failed to save secret.",
+      },
+      { status: 500 }
+    )
+  }
+}
+
+export async function DELETE(request: Request) {
+  const blocked = requireSameOrigin(request)
+  if (blocked) return blocked
+
+  try {
+    const body = (await request.json().catch(() => null)) as {
+      secretId?: unknown
+    } | null
+
+    if (typeof body?.secretId !== "string") {
+      return json({ error: "secretId is required." }, { status: 400 })
+    }
+
+    const secretId = body.secretId as Id<"sandboxPresetSecrets">
+    const client = await convexClient()
+    let cleanup: SecretCleanupResult[] = []
+    let cleanupError: string | undefined
+
+    try {
+      const plan = await secretRemovalPlan(client, secretId)
+      cleanup = await Promise.all(
+        plan.sandboxIds.map((sandboxId) =>
+          removeSecretFromSandboxEnvLocal(sandboxId, plan.name)
+        )
+      )
+    } catch (error) {
+      cleanupError =
+        error instanceof Error
+          ? error.message
+          : "Unable to prepare sandbox .env.local cleanup."
+    }
+
+    await client.mutation(api.sandboxPresets.removeSecret, {
+      secretId,
+    })
+
+    return json({
+      cleanup,
+      ...(cleanupError ? { cleanupError } : {}),
+      ok: true,
+    })
+  } catch (error) {
+    return json(
+      {
+        error:
+          error instanceof Error ? error.message : "Failed to delete secret.",
       },
       { status: 500 }
     )

@@ -1299,6 +1299,33 @@ function SandboxTerminalPane({
       }
 
       if (length === 0) {
+        const matchIndex = remaining.indexOf(pending)
+        if (matchIndex >= 0) {
+          const prefix = remaining.slice(0, matchIndex)
+          if (terminalEchoPrefixLooksIgnorable(prefix)) {
+            remaining = remaining.slice(matchIndex + pending.length)
+            pending = ""
+            break
+          }
+        }
+
+        const suffixLength = matchingEchoSuffixLength(remaining, pending)
+        if (
+          suffixLength > 0 &&
+          terminalEchoPrefixLooksIgnorable(
+            remaining.slice(0, remaining.length - suffixLength)
+          )
+        ) {
+          pending = pending.slice(suffixLength)
+          remaining = ""
+          break
+        }
+
+        if (terminalEchoPrefixLooksIgnorable(remaining)) {
+          remaining = ""
+          break
+        }
+
         pending = ""
         break
       }
@@ -1309,6 +1336,27 @@ function SandboxTerminalPane({
 
     pendingRemoteEchoRef.current = pending
     return remaining
+  }
+
+  function matchingEchoSuffixLength(value: string, echo: string) {
+    const maxLength = Math.min(value.length, echo.length)
+    for (let length = maxLength; length > 0; length -= 1) {
+      if (echo.startsWith(value.slice(-length))) return length
+    }
+    return 0
+  }
+
+  function terminalEchoPrefixLooksIgnorable(value: string) {
+    const plain = stripTerminalControlSequences(value).replaceAll("\r", "\n")
+    if (!plain.trim()) return true
+
+    const contentLines = plain
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+    if (contentLines.length !== 1) return false
+
+    return TERMINAL_SHELL_PROMPT_PATTERN.test(contentLines[0] ?? "")
   }
 
   function stripTerminalControlSequences(value: string) {
@@ -1601,6 +1649,7 @@ function SandboxTerminalPane({
     const expectedEcho =
       command.replace(/\r\n?/g, "\n").replaceAll("\n", "\r\n") + "\r\n"
     pendingRemoteEchoRef.current += utf8Binary(expectedEcho)
+    writeCursorMove(composeCursorRef.current, composeLength())
     terminalRef.current?.write("\r\n")
     composeAwaitingPromptRef.current = true
     composeInputReadyRef.current = false

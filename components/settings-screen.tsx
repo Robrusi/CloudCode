@@ -422,7 +422,6 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
   const createPreset = useMutation(api.sandboxPresets.create)
   const updatePreset = useMutation(api.sandboxPresets.update)
   const removePreset = useMutation(api.sandboxPresets.remove)
-  const removeSecret = useMutation(api.sandboxPresets.removeSecret)
   const [selectedId, setSelectedId] = useState<Id<"sandboxPresets"> | null>(
     null
   )
@@ -564,7 +563,22 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
     setSaving(true)
     setError("")
     try {
-      await removeSecret({ secretId })
+      const response = await fetch("/api/sandbox/presets/secrets", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ secretId }),
+      })
+      const data = (await response.json().catch(() => undefined)) as
+        | { error?: unknown }
+        | undefined
+
+      if (!response.ok) {
+        throw new Error(
+          typeof data?.error === "string"
+            ? data.error
+            : "Unable to delete secret."
+        )
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to delete secret.")
     } finally {

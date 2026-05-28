@@ -4,6 +4,8 @@ export const CLOUDCODE_ENV_START = "# cloudcode:preset-env:start"
 export const CLOUDCODE_ENV_END = "# cloudcode:preset-env:end"
 export const CLOUDCODE_LEGACY_PRESET_ENV_PATH = "/tmp/cloudcode-preset-env.sh"
 
+const ENV_LINE_PATTERN = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/
+
 export type SandboxPresetEnvVar = {
   name: string
   value: string
@@ -59,6 +61,53 @@ function managedEnvBlock(envVars: SandboxPresetEnvVar[]) {
   ].join("\n")
 }
 
+function managedEnvName(line: string) {
+  return line.match(ENV_LINE_PATTERN)?.[1]
+}
+
+function removeManagedEnvVars(content: string, names: Set<string>) {
+  const lines = content.split(/\r?\n/)
+  const next: string[] = []
+  let changed = false
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]
+
+    if (line !== CLOUDCODE_ENV_START) {
+      next.push(line)
+      continue
+    }
+
+    const endIndex = lines.indexOf(CLOUDCODE_ENV_END, index + 1)
+    if (endIndex === -1) {
+      next.push(...lines.slice(index))
+      break
+    }
+
+    const body = lines.slice(index + 1, endIndex)
+    const kept = body.filter((bodyLine) => {
+      const name = managedEnvName(bodyLine)
+      if (!name || !names.has(name)) return true
+      changed = true
+      return false
+    })
+    const hasEnvVars = kept.some((bodyLine) => managedEnvName(bodyLine))
+
+    if (hasEnvVars) {
+      next.push(CLOUDCODE_ENV_START, ...kept, CLOUDCODE_ENV_END)
+    }
+
+    index = endIndex
+  }
+
+  if (!changed) return content
+
+  return next
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd()
+}
+
 async function readFile(target: SandboxEnvTarget, path: string) {
   try {
     return await target.readTextFile(path)
@@ -104,6 +153,26 @@ export async function writeCloudcodeEnvLocal(
   if ((original ?? "").trimEnd() === next.trimEnd()) return
 
   await writeEnvLocal(target, repoPath, next || null)
+}
+
+export async function removeCloudcodeEnvLocalVars(
+  target: SandboxEnvTarget,
+  repoPath: string,
+  names: string[]
+) {
+  const namesToRemove = new Set(
+    names.map((name) => name.trim()).filter(Boolean)
+  )
+  if (namesToRemove.size === 0) return { changed: false }
+
+  const original = await readEnvLocal(target, repoPath)
+  if (original === null) return { changed: false }
+
+  const next = removeManagedEnvVars(original, namesToRemove)
+  if (original.trimEnd() === next.trimEnd()) return { changed: false }
+
+  await writeEnvLocal(target, repoPath, next || null)
+  return { changed: true }
 }
 
 export async function withoutCloudcodeEnvLocal<T>(
