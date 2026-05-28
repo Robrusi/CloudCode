@@ -7,6 +7,11 @@ const model = v.union(
   v.literal("gpt-5.4-mini")
 )
 const speed = v.union(v.literal("standard"), v.literal("fast"))
+const branchMode = v.union(
+  v.literal("auto"),
+  v.literal("custom"),
+  v.literal("base")
+)
 const thinking = v.union(
   v.literal("none"),
   v.literal("low"),
@@ -92,6 +97,7 @@ export default defineSchema({
   codexRuns: defineTable({
     assistantMessageId: v.id("messages"),
     baseBranch: v.optional(v.string()),
+    branchMode: v.optional(branchMode),
     branchName: v.optional(v.string()),
     codexThreadId: v.optional(v.string()),
     content: v.optional(v.string()),
@@ -269,6 +275,7 @@ export default defineSchema({
 
   threads: defineTable({
     baseBranch: v.optional(v.string()),
+    branchMode: v.optional(branchMode),
     codexThreadId: v.optional(v.string()),
     createdAt: v.number(),
     hasPendingMessage: v.optional(v.boolean()),

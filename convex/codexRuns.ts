@@ -12,6 +12,11 @@ const model = v.union(
   v.literal("gpt-5.4-mini")
 )
 const speed = v.union(v.literal("standard"), v.literal("fast"))
+const branchMode = v.union(
+  v.literal("auto"),
+  v.literal("custom"),
+  v.literal("base")
+)
 const thinking = v.union(
   v.literal("none"),
   v.literal("low"),
@@ -367,6 +372,7 @@ export const create = mutation({
   args: {
     assistantMessageId: v.id("messages"),
     baseBranch: v.optional(v.string()),
+    branchMode: v.optional(branchMode),
     branchName: v.optional(v.string()),
     codexThreadId: v.optional(v.string()),
     githubToken: v.optional(v.string()),
@@ -414,6 +420,7 @@ export const create = mutation({
     const runId = await ctx.db.insert("codexRuns", {
       assistantMessageId: args.assistantMessageId,
       ...(args.baseBranch ? { baseBranch: args.baseBranch } : {}),
+      ...(args.branchMode ? { branchMode: args.branchMode } : {}),
       ...(args.branchName ? { branchName: args.branchName } : {}),
       ...(args.codexThreadId ? { codexThreadId: args.codexThreadId } : {}),
       content: "",

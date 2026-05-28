@@ -5,6 +5,7 @@ import type { Sandbox } from "@daytona/sdk"
 import {
   defaultBranchName,
   defaultBranchNameWithSuffix,
+  parseBranchMode,
   shuffledCityBranchNames,
 } from "./codex-branch-names"
 import {
@@ -18,6 +19,7 @@ import {
   getDaytonaSandbox,
   installDaytonaTarWrapper,
   readDaytonaTextFile,
+  repoCommandEnv,
   resolveDaytonaPaths,
   runDaytonaCommand,
   shellQuote,
@@ -91,6 +93,7 @@ export type SandboxPresetInput = {
 export type RunCodexInSandboxInput = {
   authJson: string
   baseBranch?: string
+  branchMode?: "auto" | "custom" | "base"
   branchName?: string
   codexThreadId?: string
   githubToken?: string
@@ -911,18 +914,6 @@ function codexShellEnv(
   }
 }
 
-function repoCommandEnv(
-  paths: DaytonaSandboxPaths,
-  extraEnv: Record<string, string> = {}
-) {
-  return {
-    HOME: paths.runtimeHome,
-    MISE_TRUSTED_CONFIG_PATHS: paths.repoPath,
-    PATH: daytonaCodexPath(paths),
-    ...extraEnv,
-  }
-}
-
 function linkSandboxPathToolsCommand(paths: DaytonaSandboxPaths) {
   const dirs = [
     ...daytonaUserPathEntries(paths.home),
@@ -1009,6 +1000,41 @@ async function createBranch(
       )
     }
   }
+}
+
+async function readSandboxHeadBranch(
+  sandbox: Sandbox,
+  input: RunCodexInSandboxInput,
+  paths: DaytonaSandboxPaths
+): Promise<string | null> {
+  const result = await runDaytonaCommand(
+    sandbox,
+    `git -C ${shellQuote(paths.repoPath)} rev-parse --abbrev-ref HEAD`,
+    { env: repoCommandEnv(paths), signal: input.signal, timeoutMs: 10_000 }
+  )
+  const branch = result.stdout.trim()
+  return branch && branch !== "HEAD" ? branch : null
+}
+
+/**
+ * "base" mode keeps the run on the branch the clone/refresh already checked out
+ * instead of creating a new one. Returns that branch so commits, pushes, and the
+ * diff baseline all target it. Falls back to creating a branch only when HEAD is
+ * detached (e.g. the base ref is a tag or commit) so there is something to commit
+ * onto.
+ */
+async function resolveBaseModeBranch(
+  sandbox: Sandbox,
+  input: RunCodexInSandboxInput,
+  paths: DaytonaSandboxPaths,
+  baseBranch?: string
+): Promise<string> {
+  const branch = await readSandboxHeadBranch(sandbox, input, paths)
+  if (branch) return branch
+
+  const fallback = baseBranch?.trim() || defaultBranchName()
+  await createBranch(sandbox, input, paths, fallback)
+  return fallback
 }
 
 async function createDefaultBranch(
@@ -1866,6 +1892,7 @@ async function cloneRepo({
   sandbox,
   paths,
   gitAuth,
+  useBaseBranch,
 }: {
   baseBranch?: string
   branchName: string
@@ -1876,6 +1903,7 @@ async function cloneRepo({
   repoUrl: string
   sandbox: Sandbox
   paths: DaytonaSandboxPaths
+  useBaseBranch: boolean
 }) {
   const cloneRepository = async () => {
     await emitLog(input, {
@@ -1895,13 +1923,15 @@ async function cloneRepo({
     })
   }
 
+  await cloneRepository()
+
+  if (useBaseBranch) {
+    return resolveBaseModeBranch(sandbox, input, paths, baseBranch)
+  }
   if (requestedBranchName) {
-    await cloneRepository()
     await createBranch(sandbox, input, paths, requestedBranchName)
     return requestedBranchName
   }
-
-  await cloneRepository()
   return createDefaultBranch(sandbox, input, paths, branchName)
 }
 
@@ -1915,6 +1945,7 @@ async function prepareExistingRepoForFreshRun({
   requestedBranchName,
   restoreAutoEnvironmentBaseline,
   sandbox,
+  useBaseBranch,
 }: {
   baseBranch?: string
   branchName: string
@@ -1925,6 +1956,7 @@ async function prepareExistingRepoForFreshRun({
   requestedBranchName?: string
   restoreAutoEnvironmentBaseline?: boolean
   sandbox: Sandbox
+  useBaseBranch: boolean
 }) {
   await emitLog(input, {
     detail: baseBranch ? `branch ${baseBranch}` : undefined,
@@ -1978,6 +2010,9 @@ async function prepareExistingRepoForFreshRun({
     })
   }
 
+  if (useBaseBranch) {
+    return await resolveBaseModeBranch(sandbox, input, paths, baseBranch)
+  }
   if (requestedBranchName) {
     await createBranch(sandbox, input, paths, requestedBranchName)
     return requestedBranchName
@@ -1999,7 +2034,10 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
   const reasoningEffort = parseReasoningEffort(input.reasoningEffort)
   const repoUrl = parseRepoUrl(input.repoUrl)
   const baseBranch = parseGitRef(input.baseBranch, "baseBranch")
-  const requestedBranchName = parseGitRef(input.branchName, "branchName")
+  const useBaseBranch = parseBranchMode(input.branchMode) === "base"
+  const requestedBranchName = useBaseBranch
+    ? undefined
+    : parseGitRef(input.branchName, "branchName")
   let branchName = requestedBranchName ?? defaultBranchName()
   const githubToken = input.githubToken?.trim()
   const speed = parseSpeed(input.speed)
@@ -2102,6 +2140,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         repoUrl,
         sandbox,
         paths,
+        useBaseBranch,
       })
       await configureSandboxGitHubRemote({
         auth: gitAuth,
@@ -2135,6 +2174,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
           requestedBranchName,
           restoreAutoEnvironmentBaseline: isAutoEnvironmentRun(input),
           sandbox,
+          useBaseBranch,
         })
         await writeBaseRef(sandbox, paths)
         preparedFreshRepo = true
@@ -2145,6 +2185,11 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         kind: "command",
         message: `test -d ${paths.repoPath}/.git`,
       })
+      // No branch was created this run, so report the branch HEAD is actually on
+      // rather than the generated fallback. Matters most for "base" mode, where
+      // the work stays on the base branch across continuations.
+      const currentBranch = await readSandboxHeadBranch(sandbox, input, paths)
+      if (currentBranch) branchName = currentBranch
     }
     if (preparedFreshRepo && input.previousDiff?.trim()) {
       await Promise.all([

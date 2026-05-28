@@ -359,6 +359,7 @@ export const update = mutation({
     daytonaSnapshot: v.optional(v.string()),
     environmentSlug: v.optional(v.string()),
     installScript: v.optional(v.string()),
+    mode: v.optional(v.union(v.literal("manual"), v.literal("auto"))),
     name: v.string(),
     pathInstallScript: v.optional(v.string()),
     presetId: v.id("sandboxPresets"),
@@ -378,6 +379,9 @@ export const update = mutation({
           : {}),
         installScript: cleanInstallScript(args.installScript),
         memoryMB: undefined,
+        ...(Object.prototype.hasOwnProperty.call(args, "mode")
+          ? { mode: args.mode ?? "manual" }
+          : {}),
         name: cleanName(args.name),
         pathInstallScript: cleanInstallScript(args.pathInstallScript),
         snapshotId: undefined,
@@ -841,10 +845,7 @@ export const upsertSecret = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
-    const preset = await requireOwnedPreset(ctx, args.presetId, userId)
-    if (isAutoPreset(preset)) {
-      throw new Error("Secrets cannot be added to auto environment presets.")
-    }
+    await requireOwnedPreset(ctx, args.presetId, userId)
 
     const name = cleanEnvName(args.name)
     const value = args.value

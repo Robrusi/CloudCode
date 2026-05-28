@@ -1321,10 +1321,10 @@ function autoPresetForRun(
   return {
     cloudcodeYaml,
     daytonaSnapshot: preset.daytonaSnapshot,
-    installScript: undefined,
+    installScript: preset.installScript,
     mode: preset.mode,
     name: preset.name,
-    pathInstallScript: undefined,
+    pathInstallScript: preset.pathInstallScript,
     secrets: preset.secrets,
   }
 }

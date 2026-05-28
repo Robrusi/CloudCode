@@ -11,6 +11,11 @@ const model = v.union(
   v.literal("gpt-5.4-mini")
 )
 const speed = v.union(v.literal("standard"), v.literal("fast"))
+const branchMode = v.union(
+  v.literal("auto"),
+  v.literal("custom"),
+  v.literal("base")
+)
 const thinking = v.union(
   v.literal("none"),
   v.literal("low"),
@@ -146,6 +151,7 @@ async function presetNameForThread(
 async function threadSummaryRecord(ctx: QueryCtx, thread: Doc<"threads">) {
   return {
     baseBranch: thread.baseBranch,
+    branchMode: thread.branchMode,
     codexThreadId: thread.codexThreadId,
     createdAt: thread.createdAt,
     id: thread._id,
@@ -221,6 +227,7 @@ export const get = query({
 export const createThread = mutation({
   args: {
     baseBranch: v.optional(v.string()),
+    branchMode: v.optional(branchMode),
     model,
     prompt: v.string(),
     repoUrl: v.string(),
@@ -240,6 +247,7 @@ export const createThread = mutation({
     const trimmedBaseBranch = args.baseBranch?.trim()
     const threadId = await ctx.db.insert("threads", {
       ...(trimmedBaseBranch ? { baseBranch: trimmedBaseBranch } : {}),
+      ...(args.branchMode ? { branchMode: args.branchMode } : {}),
       createdAt: now,
       hasPendingMessage: true,
       lastUserMessageAt: now,

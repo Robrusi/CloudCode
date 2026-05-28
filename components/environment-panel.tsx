@@ -1,6 +1,14 @@
 "use client"
 
-import { Eye, EyeOff, Loader2, Plus, Trash2, TriangleAlert } from "lucide-react"
+import {
+  ClipboardPaste,
+  Eye,
+  EyeOff,
+  Loader2,
+  Plus,
+  Trash2,
+  TriangleAlert,
+} from "lucide-react"
 import {
   type KeyboardEvent,
   useCallback,
@@ -10,13 +18,17 @@ import {
   useState,
 } from "react"
 
+import {
+  dedupeEnvVars,
+  ENV_NAME_PATTERN,
+  parseDotenv,
+} from "@/lib/dotenv-parse"
 import { cn } from "@/lib/utils"
 
 type EnvVar = { name: string; value: string }
 type LocalRow = EnvVar & { id: string }
 type Status = "error" | "idle" | "loading" | "saved" | "saving"
 
-const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
 const envCache = new Map<string, EnvVar[]>()
 
 function makeId() {
@@ -98,11 +110,19 @@ export function EnvironmentPanel({ sandboxId }: { sandboxId: string | null }) {
   const [adding, setAdding] = useState(false)
   const [draftName, setDraftName] = useState("")
   const [draftValue, setDraftValue] = useState("")
+  const [pasting, setPasting] = useState(false)
+  const [pasteText, setPasteText] = useState("")
   const addNameRef = useRef<HTMLInputElement | null>(null)
+  const pasteRef = useRef<HTMLTextAreaElement | null>(null)
   const dirtyRef = useRef(false)
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const isDirty = useMemo(() => !entriesEqual(rows, original), [original, rows])
+  const pasteParsed = useMemo(() => parseDotenv(pasteText), [pasteText])
+  const pasteVars = useMemo(
+    () => dedupeEnvVars(pasteParsed.vars),
+    [pasteParsed]
+  )
 
   useEffect(() => {
     dirtyRef.current = isDirty
@@ -116,6 +136,8 @@ export function EnvironmentPanel({ sandboxId }: { sandboxId: string | null }) {
     setAdding(false)
     setDraftName("")
     setDraftValue("")
+    setPasting(false)
+    setPasteText("")
   }, [])
 
   useEffect(() => {
@@ -161,6 +183,10 @@ export function EnvironmentPanel({ sandboxId }: { sandboxId: string | null }) {
   useEffect(() => {
     if (adding) addNameRef.current?.focus()
   }, [adding])
+
+  useEffect(() => {
+    if (pasting) pasteRef.current?.focus()
+  }, [pasting])
 
   useEffect(() => {
     return () => {
@@ -249,6 +275,44 @@ export function EnvironmentPanel({ sandboxId }: { sandboxId: string | null }) {
     setAdding(false)
     setError(null)
   }, [])
+
+  const startPasting = useCallback(() => {
+    setPasting(true)
+    setError(null)
+  }, [])
+
+  const cancelPasting = useCallback(() => {
+    setPasting(false)
+    setPasteText("")
+    setError(null)
+  }, [])
+
+  const importPasted = useCallback(() => {
+    if (pasteVars.length === 0) return
+
+    dirtyRef.current = true
+    setRows((prev) => {
+      const next = [...prev]
+      const indexByName = new Map(
+        next.map((row, index) => [row.name.trim(), index])
+      )
+
+      for (const entry of pasteVars) {
+        const existingIndex = indexByName.get(entry.name)
+        if (existingIndex !== undefined) {
+          next[existingIndex] = { ...next[existingIndex], value: entry.value }
+        } else {
+          next.push({ id: makeId(), name: entry.name, value: entry.value })
+          indexByName.set(entry.name, next.length - 1)
+        }
+      }
+
+      return next
+    })
+    setPasteText("")
+    setPasting(false)
+    setError(null)
+  }, [pasteVars])
 
   const persistEntries = useCallback(
     async (allEntries: EnvVar[]) => {
@@ -348,7 +412,7 @@ export function EnvironmentPanel({ sandboxId }: { sandboxId: string | null }) {
   }
 
   const isLoadingInitial = status === "loading" && rows.length === 0
-  const isEmpty = rows.length === 0 && !adding && !isLoadingInitial
+  const isEmpty = rows.length === 0 && !adding && !pasting && !isLoadingInitial
   const showRevealAll = rows.length > 0
 
   const dirty = isDirty || adding
@@ -390,6 +454,19 @@ export function EnvironmentPanel({ sandboxId }: { sandboxId: string | null }) {
               </button>
             ) : null}
             <button
+              aria-label="Paste .env file"
+              aria-pressed={pasting}
+              className={cn(
+                "flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs transition-colors hover:bg-muted hover:text-foreground",
+                pasting ? "bg-muted text-foreground" : "text-muted-foreground"
+              )}
+              onClick={pasting ? cancelPasting : startPasting}
+              type="button"
+            >
+              <ClipboardPaste className="size-3.5" />
+              Paste
+            </button>
+            <button
               aria-label="Add variable"
               className="flex h-8 items-center gap-1.5 rounded-lg border border-border/60 bg-background px-2.5 text-xs text-foreground/80 transition-colors hover:bg-muted"
               onClick={startAdding}
@@ -401,13 +478,63 @@ export function EnvironmentPanel({ sandboxId }: { sandboxId: string | null }) {
           </div>
         </div>
 
+        {pasting ? (
+          <div className="mb-3 overflow-hidden rounded-xl border border-border/60 bg-background">
+            <textarea
+              ref={pasteRef}
+              aria-label="Paste .env file contents"
+              className="block max-h-72 min-h-32 w-full resize-y bg-transparent px-4 py-3 font-mono text-[13px] leading-5 text-foreground outline-none placeholder:text-muted-foreground/40"
+              onChange={(event) => setPasteText(event.target.value)}
+              placeholder={
+                "# Paste your .env file\nAPI_KEY=sk-...\nDATABASE_URL=postgres://..."
+              }
+              spellCheck={false}
+              value={pasteText}
+            />
+            <div className="flex items-center justify-between gap-2 border-t border-border/60 bg-muted/30 px-4 py-2.5">
+              <span className="min-w-0 truncate text-[11px] text-muted-foreground">
+                {pasteVars.length > 0
+                  ? `${pasteVars.length} variable${
+                      pasteVars.length === 1 ? "" : "s"
+                    }${
+                      pasteParsed.errors.length
+                        ? ` · ${pasteParsed.errors.length} line${
+                            pasteParsed.errors.length === 1 ? "" : "s"
+                          } skipped`
+                        : ""
+                    }`
+                  : pasteText.trim()
+                    ? "No valid variables found"
+                    : ""}
+              </span>
+              <div className="flex shrink-0 items-center gap-1">
+                <button
+                  className="inline-flex h-7 items-center rounded-md px-2.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  onClick={cancelPasting}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md bg-foreground px-3 text-xs font-medium text-background transition-opacity hover:opacity-85 disabled:opacity-40"
+                  disabled={pasteVars.length === 0}
+                  onClick={importPasted}
+                  type="button"
+                >
+                  {pasteVars.length > 0 ? `Add ${pasteVars.length}` : "Add"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {isLoadingInitial ? (
           <div className="grid h-32 place-items-center rounded-xl border border-border/60 bg-background">
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
           </div>
         ) : isEmpty ? (
           <EmptyState onAdd={startAdding} />
-        ) : (
+        ) : rows.length > 0 || adding ? (
           <div className="overflow-hidden rounded-xl border border-border/60 bg-background">
             <ul>
               {rows.map((row) => (
@@ -460,7 +587,7 @@ export function EnvironmentPanel({ sandboxId }: { sandboxId: string | null }) {
               </div>
             ) : null}
           </div>
-        )}
+        ) : null}
 
         {(isLoadingInitial || isEmpty) && error ? (
           <div className="mt-3 flex items-start gap-1.5 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">

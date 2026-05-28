@@ -232,6 +232,18 @@ export function daytonaCodexPath(
   return daytonaPathForHomes([paths.runtimeHome, paths.home])
 }
 
+export function repoCommandEnv(
+  paths: Pick<DaytonaSandboxPaths, "home" | "repoPath" | "runtimeHome">,
+  extraEnv: Record<string, string> = {}
+) {
+  return {
+    HOME: paths.runtimeHome,
+    MISE_TRUSTED_CONFIG_PATHS: paths.repoPath,
+    PATH: daytonaCodexPath(paths),
+    ...extraEnv,
+  }
+}
+
 function getDaytonaClient() {
   return new Daytona({
     apiKey: process.env.DAYTONA_API_KEY,

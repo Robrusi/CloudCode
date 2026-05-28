@@ -8,6 +8,7 @@ import {
   ExternalLink,
   Folder,
   FolderOpen,
+  GitBranch,
   Globe,
   Loader2,
   PanelLeft,
@@ -49,6 +50,7 @@ import {
 } from "@/components/sandbox-status"
 import {
   BranchChip,
+  BranchTargetChip,
   IconButton,
   Pill,
   PresetPill,
@@ -76,6 +78,7 @@ import {
   SPEEDS,
   THINKING_LABEL,
   THINKINGS,
+  type BranchMode,
   type Model,
   type Speed,
   type Thinking,
@@ -84,6 +87,11 @@ import { cn } from "@/lib/utils"
 
 const FileBrowser = dynamic(
   () => import("@/components/file-browser").then((mod) => mod.FileBrowser),
+  { ssr: false }
+)
+
+const GithubPanel = dynamic(
+  () => import("@/components/github-panel").then((mod) => mod.GithubPanel),
   { ssr: false }
 )
 
@@ -181,6 +189,7 @@ type GitHubAuthStatus = {
 
 type ChatRecord = {
   baseBranch?: string
+  branchMode?: BranchMode
   codexThreadId?: string
   id: Id<"threads">
   lastUserMessageAt?: number
@@ -269,6 +278,8 @@ type ThreadScrollSnapshot = {
 
 const REPO_KEY = "cloudcode:repoUrl"
 const BASE_BRANCH_KEY = "cloudcode:baseBranch"
+const BRANCH_MODE_KEY = "cloudcode:branchMode"
+const BRANCH_NAME_KEY = "cloudcode:branchName"
 const MODEL_KEY = "cloudcode:model"
 const PRESET_KEY = "cloudcode:sandboxPresetId"
 const SANDBOX_URL_KEY = "cloudcode:sandboxUrl"
@@ -427,6 +438,17 @@ function ChatInner() {
       ? ""
       : (localStorage.getItem(BASE_BRANCH_KEY) ?? "")
   )
+  const [draftBranchMode, setDraftBranchMode] = useState<BranchMode>(() => {
+    if (typeof window === "undefined") return "auto"
+    const stored = localStorage.getItem(BRANCH_MODE_KEY)
+    return stored === "custom" || stored === "base" ? stored : "auto"
+  })
+  const [draftBranchName, setDraftBranchName] = useState(() =>
+    typeof window === "undefined"
+      ? ""
+      : (localStorage.getItem(BRANCH_NAME_KEY) ?? "")
+  )
+  const [branchTargetOpen, setBranchTargetOpen] = useState(false)
   const [draftModel, setDraftModel] = useState<Model>(() => {
     if (typeof window === "undefined") return "gpt-5.5"
     const stored = localStorage.getItem(MODEL_KEY)
@@ -461,6 +483,7 @@ function ChatInner() {
   const [presetOpen, setPresetOpen] = useState(false)
   const [thinkingOpen, setThinkingOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
+  const [githubOpen, setGithubOpen] = useState(false)
   const [terminalOpen, setTerminalOpen] = useState(() =>
     typeof window === "undefined"
       ? false
@@ -833,6 +856,10 @@ function ChatInner() {
   const repoUrl = active ? active.repoUrl : draftRepo
   const baseBranch = active ? (active.baseBranch ?? "") : draftBaseBranch
   const model = active ? active.model : draftModel
+  const effectiveDraftBranchMode: BranchMode =
+    draftBranchMode === "custom" && !draftBranchName.trim()
+      ? "auto"
+      : draftBranchMode
   const sandboxPresetId = active ? active.sandboxPresetId : draftSandboxPresetId
   const speed = draftSpeed
   const thinking = draftThinking
@@ -1250,6 +1277,18 @@ function ChatInner() {
     else localStorage.removeItem(BASE_BRANCH_KEY)
   }
 
+  function persistDraftBranchMode(value: BranchMode) {
+    setDraftBranchMode(value)
+    if (value === "auto") localStorage.removeItem(BRANCH_MODE_KEY)
+    else localStorage.setItem(BRANCH_MODE_KEY, value)
+  }
+
+  function persistDraftBranchName(value: string) {
+    setDraftBranchName(value)
+    if (value) localStorage.setItem(BRANCH_NAME_KEY, value)
+    else localStorage.removeItem(BRANCH_NAME_KEY)
+  }
+
   function persistDraftSandboxPreset(next: Id<"sandboxPresets"> | "") {
     setDraftSandboxPresetId(next)
     if (next) localStorage.setItem(PRESET_KEY, next)
@@ -1422,6 +1461,7 @@ function ChatInner() {
         const trimmedBaseBranch = draftBaseBranch.trim()
         const created = await createThread({
           baseBranch: trimmedBaseBranch || undefined,
+          branchMode: effectiveDraftBranchMode,
           model: draftModel,
           prompt: trimmed,
           repoUrl: repoUrl.trim(),
@@ -1452,8 +1492,19 @@ function ChatInner() {
         .toReversed()
         .find((m) => m.role === "assistant" && (m.meta?.branch || m.meta?.diff))
       const cachedRunState = threadRunStateRef.current[chatId as string]
-      const branchName =
+      const continuationBranch =
         cachedRunState?.branch ?? previousAssistant?.meta?.branch
+      // Branch strategy is fixed per chat: existing chats reuse the stored mode
+      // (legacy chats predate it, so default to "auto"); new chats use the
+      // composer's choice. The branch name only seeds the very first run.
+      const runBranchMode: BranchMode = active
+        ? (active.branchMode ?? "auto")
+        : effectiveDraftBranchMode
+      const branchName =
+        continuationBranch ??
+        (runBranchMode === "custom"
+          ? draftBranchName.trim() || undefined
+          : undefined)
       const previousDiff = cachedRunState?.diff ?? previousAssistant?.meta?.diff
       const runSandboxId = hasCachedRunKey(cachedRunState, "sandboxId")
         ? cachedRunState?.sandboxId
@@ -1478,6 +1529,7 @@ function ChatInner() {
         body: JSON.stringify({
           baseBranch:
             (active?.baseBranch ?? draftBaseBranch).trim() || undefined,
+          branchMode: runBranchMode,
           branchName,
           codexThreadId: cachedRunState?.codexThreadId ?? active?.codexThreadId,
           assistantMessageId,
@@ -1844,6 +1896,15 @@ function ChatInner() {
               onChange={persistBaseBranch}
               locked={false}
             />
+            <BranchTargetChip
+              mode={draftBranchMode}
+              branchName={draftBranchName}
+              baseBranch={baseBranch}
+              open={branchTargetOpen}
+              setOpen={setBranchTargetOpen}
+              onChangeMode={persistDraftBranchMode}
+              onChangeBranchName={persistDraftBranchName}
+            />
             <div className="ml-auto">
               <PresetPill
                 value={sandboxPresetId ?? ""}
@@ -1923,7 +1984,20 @@ function ChatInner() {
           sandboxState={activeSandboxState}
           filesOpen={filesOpen}
           canOpenFiles={view !== "settings" && Boolean(activeFileCacheScope)}
-          onToggleFiles={() => setFilesOpen((v) => !v)}
+          onToggleFiles={() =>
+            setFilesOpen((v) => {
+              if (!v) setGithubOpen(false)
+              return !v
+            })
+          }
+          githubOpen={githubOpen}
+          canOpenGithub={view !== "settings" && Boolean(activeSandboxId)}
+          onToggleGithub={() =>
+            setGithubOpen((v) => {
+              if (!v) setFilesOpen(false)
+              return !v
+            })
+          }
           terminalOpen={terminalVisible}
           onToggleTerminal={() => setTerminalOpen((v) => !v)}
           onSandboxStateChange={handleSandboxStateChange}
@@ -2055,6 +2129,22 @@ function ChatInner() {
         diffStyle={diffStyle}
         onDiffStyleChange={setDiffStyle}
       />
+      <GithubPanel
+        open={githubOpen && Boolean(activeSandboxId)}
+        sandboxId={activeSandboxId}
+        repoUrl={repoUrl}
+        baseBranch={baseBranch}
+        diff={activeDiff ?? undefined}
+        githubConnected={Boolean(githubStatus?.connected)}
+        onClose={() => setGithubOpen(false)}
+        onOpenFile={(p, mode) => {
+          captureThreadScrollForPanel()
+          setActiveFilePath(p)
+          setActiveFileMode(mode)
+          setActiveFileDiff(null)
+          setAllDiffsOpen(false)
+        }}
+      />
     </div>
   )
 }
@@ -2130,6 +2220,9 @@ function TopBar({
   filesOpen,
   canOpenFiles,
   onToggleFiles,
+  githubOpen,
+  canOpenGithub,
+  onToggleGithub,
   onSandboxStateChange,
   onSandboxMissing,
   sandboxAction,
@@ -2151,6 +2244,9 @@ function TopBar({
   filesOpen: boolean
   canOpenFiles: boolean
   onToggleFiles: () => void
+  githubOpen: boolean
+  canOpenGithub: boolean
+  onToggleGithub: () => void
   onSandboxStateChange: (state: SandboxState, sandboxId: string) => void
   onSandboxMissing: (sandboxId: string) => void
   sandboxAction: SandboxAction | null
@@ -2251,6 +2347,14 @@ function TopBar({
               ) : (
                 <Folder className="size-3.5" />
               )}
+            </TopBarIconButton>
+            <TopBarIconButton
+              onClick={onToggleGithub}
+              active={githubOpen}
+              disabled={!canOpenGithub}
+              label={githubOpen ? "Hide GitHub panel" : "Show GitHub panel"}
+            >
+              <GitBranch className="size-3.5" />
             </TopBarIconButton>
           </div>
         ) : null}

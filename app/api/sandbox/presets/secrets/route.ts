@@ -11,6 +11,7 @@ import {
   runDaytonaCommand,
   writeDaytonaTextFile,
 } from "@/lib/daytona-sandbox"
+import { dedupeEnvVars, type ParsedEnvVar } from "@/lib/dotenv-parse"
 import { requireSameOrigin } from "@/lib/request-security"
 import { removeCloudcodeEnvLocalVars } from "@/lib/sandbox-env"
 import { encryptSecret } from "@/lib/secret-crypto"
@@ -166,6 +167,56 @@ async function secretRemovalPlan(
   }
 }
 
+function parseSecretEntries(value: unknown): ParsedEnvVar[] | null {
+  if (!Array.isArray(value)) return null
+
+  const entries: ParsedEnvVar[] = []
+  for (const item of value) {
+    if (
+      !item ||
+      typeof item !== "object" ||
+      typeof (item as { name?: unknown }).name !== "string" ||
+      typeof (item as { value?: unknown }).value !== "string"
+    ) {
+      return null
+    }
+    entries.push({
+      name: (item as { name: string }).name,
+      value: (item as { value: string }).value,
+    })
+  }
+
+  return entries
+}
+
+async function upsertSecrets(
+  client: ConvexHttpClient,
+  presetId: Id<"sandboxPresets">,
+  entries: ParsedEnvVar[]
+) {
+  const saved: Array<{ id: Id<"sandboxPresetSecrets">; name: string }> = []
+  const failed: Array<{ error: string; name: string }> = []
+
+  for (const entry of entries) {
+    try {
+      const id = await client.mutation(api.sandboxPresets.upsertSecret, {
+        name: entry.name,
+        presetId,
+        value: encryptSecret(entry.value),
+      })
+      saved.push({ id, name: entry.name })
+    } catch (error) {
+      failed.push({
+        error:
+          error instanceof Error ? error.message : "Failed to save secret.",
+        name: entry.name,
+      })
+    }
+  }
+
+  return { failed, saved }
+}
+
 export async function POST(request: Request) {
   const blocked = requireSameOrigin(request)
   if (blocked) return blocked
@@ -174,14 +225,35 @@ export async function POST(request: Request) {
     const body = (await request.json()) as {
       name?: unknown
       presetId?: unknown
+      secrets?: unknown
       value?: unknown
     }
 
-    if (
-      typeof body.presetId !== "string" ||
-      typeof body.name !== "string" ||
-      typeof body.value !== "string"
-    ) {
+    if (typeof body.presetId !== "string") {
+      return json({ error: "presetId is required." }, { status: 400 })
+    }
+    const presetId = body.presetId as Id<"sandboxPresets">
+
+    if (body.secrets !== undefined) {
+      const entries = parseSecretEntries(body.secrets)
+      if (!entries) {
+        return json(
+          { error: "secrets must be an array of { name, value } pairs." },
+          { status: 400 }
+        )
+      }
+
+      const deduped = dedupeEnvVars(entries)
+      if (deduped.length === 0) {
+        return json({ error: "No secrets to import." }, { status: 400 })
+      }
+
+      const client = await convexClient()
+      const { failed, saved } = await upsertSecrets(client, presetId, deduped)
+      return json({ failed, saved }, { status: failed.length ? 207 : 200 })
+    }
+
+    if (typeof body.name !== "string" || typeof body.value !== "string") {
       return json(
         { error: "presetId, name, and value are required." },
         { status: 400 }
@@ -191,7 +263,7 @@ export async function POST(request: Request) {
     const client = await convexClient()
     const id = await client.mutation(api.sandboxPresets.upsertSecret, {
       name: body.name,
-      presetId: body.presetId as Id<"sandboxPresets">,
+      presetId,
       value: encryptSecret(body.value),
     })
 

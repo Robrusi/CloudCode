@@ -6,14 +6,13 @@ import {
   resolveDaytonaPaths,
 } from "./daytona-sandbox"
 import {
-  cleanupSandboxGitHubAuth,
   configureSandboxGitHubRemote,
   setupSandboxGitHubAuth,
   type SandboxGitHubAuth,
 } from "./sandbox-github-auth"
 
 const MAX_REPLAY_BYTES = 1_000_000
-const GITHUB_AUTH_VERSION = 6
+const GITHUB_AUTH_VERSION = 7
 
 type StartedDaytonaSandbox = Awaited<
   ReturnType<typeof getStartedDaytonaSandbox>
@@ -195,6 +194,7 @@ export async function refreshDaytonaTerminalGitHubAuth({
     githubUserName,
     githubUsername,
     installGlobal: true,
+    persistCredentials: true,
     paths,
     repoUrl,
     sandbox,
@@ -295,29 +295,27 @@ export async function connectDaytonaTerminal({
     return attachSubscriber(session.handle)
   }
 
-  const context = await getSandboxAndPaths()
-  const { paths, sandbox } = context
-  const githubAuth = await ensureTerminalGitHubAuth(context)
-
-  const createOptions = {
-    cols: safeCols,
-    envs: {
-      CLICOLOR: "1",
-      COLORTERM: "truecolor",
-      CODEX_HOME: paths.codexHome,
-      FORCE_COLOR: "1",
-      LANG: "C.UTF-8",
-      LC_ALL: "C.UTF-8",
-      PATH: daytonaTerminalPath(paths.home),
-      TERM: "xterm-256color",
-      ...githubAuth?.env,
-    },
-    id: cleanId,
-    onData,
-    rows: safeRows,
-  }
-
   async function connectHandle() {
+    const context = await getSandboxAndPaths()
+    const { paths, sandbox } = context
+    const githubAuth = await ensureTerminalGitHubAuth(context)
+    const createOptions = {
+      cols: safeCols,
+      envs: {
+        CLICOLOR: "1",
+        COLORTERM: "truecolor",
+        CODEX_HOME: paths.codexHome,
+        FORCE_COLOR: "1",
+        LANG: "C.UTF-8",
+        LC_ALL: "C.UTF-8",
+        PATH: daytonaTerminalPath(paths.home),
+        TERM: "xterm-256color",
+        ...githubAuth?.env,
+      },
+      id: cleanId,
+      onData,
+      rows: safeRows,
+    }
     let handle: PtyHandle
     const broadcast = (data: Uint8Array) => emitToSubscribers(session, data)
     const persistentCreateOptions = { ...createOptions, onData: broadcast }
@@ -347,6 +345,8 @@ export async function connectDaytonaTerminal({
       }
     }
 
+    session.githubAuth = githubAuth
+    session.githubAuthVersion = githubAuth ? GITHUB_AUTH_VERSION : undefined
     return handle
   }
 
@@ -354,15 +354,10 @@ export async function connectDaytonaTerminal({
     session.connecting ??= connectHandle().then(
       (handle) => {
         session.handle = handle
-        session.githubAuth = githubAuth
-        session.githubAuthVersion = githubAuth ? GITHUB_AUTH_VERSION : undefined
         session.connecting = undefined
         return handle
       },
       async (error: unknown) => {
-        if (!session.handle) {
-          await githubAuth?.cleanup()
-        }
         session.connecting = undefined
         throw error
       }
@@ -384,23 +379,28 @@ export async function sendDaytonaTerminalInput({
 }) {
   const key = terminalSessionKey(sandboxId, terminalId)
   const session = sessions.get(key)
-  const handle = session?.handle
+  let handle = session?.handle
+  if (!handle?.isConnected() && session?.connecting) {
+    handle = await session.connecting
+  }
+
   if (handle?.isConnected()) {
     await handle.sendInput(data)
     return
   }
 
-  sessions.delete(key)
   const sandbox = await getStartedDaytonaSandbox(sandboxId)
-  const detachedHandle = await sandbox.process.connectPty(
-    cleanTerminalId(terminalId),
-    { onData: () => undefined }
-  )
+  const cleanId = cleanTerminalId(terminalId)
+  const onData = session
+    ? (chunk: Uint8Array) => emitToSubscribers(session, chunk)
+    : () => undefined
+  const detachedHandle = await sandbox.process.connectPty(cleanId, { onData })
+  if (session) session.handle = detachedHandle
 
   try {
     await detachedHandle.sendInput(data)
   } finally {
-    await detachedHandle.disconnect().catch(() => undefined)
+    if (!session) await detachedHandle.disconnect().catch(() => undefined)
   }
 }
 
@@ -419,14 +419,27 @@ export async function resizeDaytonaTerminal({
   const safeRows = cleanSize(rows, 30, 8, 120)
   const key = terminalSessionKey(sandboxId, terminalId)
   const session = sessions.get(key)
-  const handle = session?.handle
+  let handle = session?.handle
+  if (!handle?.isConnected() && session?.connecting) {
+    handle = await session.connecting
+  }
 
   if (handle?.isConnected()) {
     await handle.resize(safeCols, safeRows)
     return
   }
 
-  if (session) session.handle = undefined
+  if (session) {
+    const sandbox = await getStartedDaytonaSandbox(sandboxId)
+    const cleanId = cleanTerminalId(terminalId)
+    const connectedHandle = await sandbox.process.connectPty(cleanId, {
+      onData: (data) => emitToSubscribers(session, data),
+    })
+    session.handle = connectedHandle
+    await connectedHandle.resize(safeCols, safeRows)
+    return
+  }
+
   const sandbox = await getStartedDaytonaSandbox(sandboxId)
   await sandbox.process.resizePtySession(
     cleanTerminalId(terminalId),
@@ -454,37 +467,21 @@ export async function killDaytonaTerminal(
   const key = terminalSessionKey(sandboxId, terminalId)
   const session = sessions.get(key)
   sessions.delete(key)
-  const handle = session?.handle
-  const githubAuth = session?.githubAuth
-  let sandbox: Awaited<ReturnType<typeof getStartedDaytonaSandbox>> | undefined
-
-  async function cleanupGitHubAuth() {
-    if (githubAuth) {
-      await githubAuth.cleanup()
-      return
-    }
-
-    sandbox ??= await getStartedDaytonaSandbox(sandboxId)
-    const paths = await resolveDaytonaPaths(sandbox)
-    await cleanupSandboxGitHubAuth({
-      installGlobal: true,
-      paths,
-      sandbox,
-    })
+  let handle = session?.handle
+  if (!handle && session?.connecting) {
+    handle = await session.connecting.catch(() => undefined)
   }
 
   if (handle) {
     await handle.kill().catch(() => undefined)
     await handle.disconnect().catch(() => undefined)
-    await cleanupGitHubAuth()
     return
   }
 
-  sandbox = await getStartedDaytonaSandbox(sandboxId)
+  const sandbox = await getStartedDaytonaSandbox(sandboxId)
   await sandbox.process
     .killPtySession(cleanTerminalId(terminalId))
     .catch(() => {
       // The PTY may already be gone.
     })
-  await cleanupGitHubAuth()
 }

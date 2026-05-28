@@ -22,6 +22,7 @@ export type WorkerRunPayload = {
 type WorkerRunRecord = {
   assistantMessageId: Id<"messages">
   baseBranch?: string
+  branchMode?: RunCodexInSandboxInput["branchMode"]
   branchName?: string
   codexThreadId?: string
   githubToken?: string
@@ -155,6 +156,7 @@ export async function startAndLoadWorkerRun(
     input: {
       authJson,
       baseBranch: response.run.baseBranch,
+      branchMode: response.run.branchMode,
       branchName: response.run.branchName,
       codexThreadId: response.run.codexThreadId,
       githubToken: response.run.githubToken

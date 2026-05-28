@@ -151,6 +151,18 @@ const BRANCH_CITIES = [
   "zurich",
 ] as const
 
+/**
+ * How a run decides which branch its work lands on:
+ * - "auto": create a new branch with a generated city name (default).
+ * - "custom": create a new branch with the caller-provided branch name.
+ * - "base": stay on the base branch and commit directly to it.
+ */
+export type BranchMode = "auto" | "custom" | "base"
+
+export function parseBranchMode(value: unknown): BranchMode {
+  return value === "custom" || value === "base" ? value : "auto"
+}
+
 export function defaultBranchName() {
   const city = BRANCH_CITIES[Math.floor(Math.random() * BRANCH_CITIES.length)]
 

@@ -3,6 +3,7 @@
 import { useMutation, useQuery } from "convex/react"
 import {
   ChevronRight,
+  ClipboardPaste,
   CornerDownRight,
   KeyRound,
   Layers3,
@@ -11,10 +12,11 @@ import {
   Trash2,
   X,
 } from "lucide-react"
-import { useState } from "react"
+import { useMemo, useState } from "react"
 
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import { dedupeEnvVars, parseDotenv } from "@/lib/dotenv-parse"
 import { cn } from "@/lib/utils"
 
 const card = "overflow-hidden rounded-xl border border-border/60 bg-background"
@@ -42,7 +44,7 @@ const inputClass =
   "h-9 w-full rounded-xl border border-border/70 bg-background px-3 text-sm transition-colors outline-none placeholder:text-muted-foreground/50 focus:border-ring focus:ring-3 focus:ring-ring/20 disabled:opacity-60"
 
 const textareaClass =
-  "w-full resize-y rounded-xl border border-border/70 bg-background px-3 py-2 font-mono text-xs leading-5 transition-colors outline-none placeholder:text-muted-foreground/50 focus:border-ring focus:ring-3 focus:ring-ring/20"
+  "w-full resize-y rounded-xl border border-border/70 bg-background px-3 py-2 font-[family-name:var(--font-mono)] text-xs leading-5 transition-colors outline-none placeholder:text-muted-foreground/50 focus:border-ring focus:ring-3 focus:ring-ring/20"
 
 const fieldLabel = "grid gap-1.5 text-xs font-medium text-foreground/80"
 
@@ -428,22 +430,34 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
   const selected = presets.find((preset) => preset.id === selectedId) ?? null
   const selectedIsAuto = selected?.mode === "auto"
   const [name, setName] = useState("")
+  const [autoEnvironment, setAutoEnvironment] = useState(false)
   const [pathInstallScript, setPathInstallScript] = useState("")
   const [installScript, setInstallScript] = useState("")
   const [secretName, setSecretName] = useState("")
   const [secretValue, setSecretValue] = useState("")
+  const [importMode, setImportMode] = useState(false)
+  const [importText, setImportText] = useState("")
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
   const [creating, setCreating] = useState(false)
+
+  const parsedImport = useMemo(() => parseDotenv(importText), [importText])
+  const importVars = useMemo(
+    () => dedupeEnvVars(parsedImport.vars),
+    [parsedImport]
+  )
 
   function resetEditor() {
     setSelectedId(null)
     setCreating(false)
     setName("")
+    setAutoEnvironment(false)
     setPathInstallScript("")
     setInstallScript("")
     setSecretName("")
     setSecretValue("")
+    setImportMode(false)
+    setImportText("")
     setError("")
   }
 
@@ -456,10 +470,13 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
     setSelectedId(preset.id)
     setCreating(false)
     setName(preset.name)
+    setAutoEnvironment(preset.mode === "auto")
     setPathInstallScript(preset.pathInstallScript ?? "")
     setInstallScript(preset.installScript ?? "")
     setSecretName("")
     setSecretValue("")
+    setImportMode(false)
+    setImportText("")
     setError("")
   }
 
@@ -467,9 +484,11 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
     setSaving(true)
     setError("")
     try {
+      const mode = autoEnvironment ? "auto" : "manual"
       if (selected) {
         await updatePreset({
           installScript: installScript.trim() || undefined,
+          mode,
           name,
           pathInstallScript: pathInstallScript.trim() || undefined,
           presetId: selected.id,
@@ -477,6 +496,7 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
       } else {
         const id = await createPreset({
           installScript: installScript.trim() || undefined,
+          mode,
           name,
           pathInstallScript: pathInstallScript.trim() || undefined,
         })
@@ -508,28 +528,29 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
     }
   }
 
-  async function saveSecret() {
-    if (selectedIsAuto) {
-      setError("Secrets cannot be added to auto environment presets.")
-      return
+  async function ensurePresetId(): Promise<Id<"sandboxPresets"> | null> {
+    if (selected?.id) return selected.id
+    if (!name.trim()) {
+      setError("Name the preset before adding secrets.")
+      return null
     }
+    const presetId = await createPreset({
+      installScript: installScript.trim() || undefined,
+      mode: autoEnvironment ? "auto" : "manual",
+      name,
+      pathInstallScript: pathInstallScript.trim() || undefined,
+    })
+    setSelectedId(presetId)
+    setCreating(false)
+    return presetId
+  }
+
+  async function saveSecret() {
     setSaving(true)
     setError("")
     try {
-      let presetId = selected?.id
-      if (!presetId) {
-        if (!name.trim()) {
-          setError("Name the preset before adding secrets.")
-          return
-        }
-        presetId = await createPreset({
-          installScript: installScript.trim() || undefined,
-          name,
-          pathInstallScript: pathInstallScript.trim() || undefined,
-        })
-        setSelectedId(presetId)
-        setCreating(false)
-      }
+      const presetId = await ensurePresetId()
+      if (!presetId) return
       const response = await fetch("/api/sandbox/presets/secrets", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -554,6 +575,48 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
       setSecretValue("")
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to save secret.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function importSecrets() {
+    if (importVars.length === 0) return
+    setSaving(true)
+    setError("")
+    try {
+      const presetId = await ensurePresetId()
+      if (!presetId) return
+      const response = await fetch("/api/sandbox/presets/secrets", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ presetId, secrets: importVars }),
+      })
+      const data = (await response.json().catch(() => undefined)) as
+        | { error?: unknown; failed?: Array<{ error: string; name: string }> }
+        | undefined
+
+      if (!response.ok && response.status !== 207) {
+        throw new Error(
+          typeof data?.error === "string"
+            ? data.error
+            : "Unable to import secrets."
+        )
+      }
+
+      const failed = data?.failed ?? []
+      if (failed.length > 0) {
+        setError(
+          `Imported, but skipped ${failed.length}: ${failed
+            .map((entry) => entry.name)
+            .join(", ")}`
+        )
+      } else {
+        setImportMode(false)
+      }
+      setImportText("")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to import secrets.")
     } finally {
       setSaving(false)
     }
@@ -622,30 +685,24 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
         ) : (
           presets.map((preset) => {
             const active = selected?.id === preset.id
+            const readyEnvironments =
+              preset.environments?.filter(
+                (environment) => environment.status === "ready"
+              ).length ?? 0
             const subtitle =
-              preset.mode === "auto"
-                ? [
-                    "Scans cloudcode.yaml",
-                    preset.environments?.some(
-                      (environment) => environment.status === "ready"
-                    )
-                      ? `${preset.environments.filter((environment) => environment.status === "ready").length} ready`
-                      : "",
-                    preset.secrets.length
-                      ? `${preset.secrets.length} secret${preset.secrets.length === 1 ? "" : "s"}`
-                      : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")
-                : [
-                    preset.pathInstallScript ? "PATH tools" : "",
-                    preset.installScript ? "repo install" : "",
-                    preset.secrets.length
-                      ? `${preset.secrets.length} secret${preset.secrets.length === 1 ? "" : "s"}`
-                      : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" · ") || "Cloudcode default environment"
+              [
+                preset.mode === "auto" ? "Auto environment" : "",
+                preset.mode === "auto" && readyEnvironments
+                  ? `${readyEnvironments} ready`
+                  : "",
+                preset.pathInstallScript ? "PATH tools" : "",
+                preset.installScript ? "repo install" : "",
+                preset.secrets.length
+                  ? `${preset.secrets.length} secret${preset.secrets.length === 1 ? "" : "s"}`
+                  : "",
+              ]
+                .filter(Boolean)
+                .join(" · ") || "Cloudcode default environment"
 
             return (
               <button
@@ -736,119 +793,192 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
               />
             </label>
 
-            {selectedIsAuto ? (
-              <div className="space-y-1.5">
+            <div className="flex items-start justify-between gap-3 rounded-xl border border-border/70 bg-background px-3 py-2.5">
+              <div className="min-w-0">
                 <div className="text-xs font-medium text-foreground/80">
-                  Automatic cloudcode.yaml environments
+                  Auto environment
                 </div>
                 <p className={fieldHint}>
-                  When this preset runs against a repo, Cloudcode scans the
-                  repo, writes cloudcode.yaml, executes its setup commands in a
-                  builder sandbox once, then reuses that sandbox for later
-                  chats.
+                  Scan the repo&apos;s cloudcode.yaml and build the environment
+                  once in a builder sandbox, then reuse it. The scripts and
+                  secrets below run after the environment is ready.
                 </p>
-                {selected.environments?.length ? (
-                  <div className="-mx-4 mt-3 border-y border-border/60">
-                    {selected.environments.map((environment) => (
-                      <div
-                        key={environment.id}
-                        className="flex items-center gap-2 border-b border-border/60 px-4 py-2 last:border-0"
-                      >
-                        <span className="min-w-0 flex-1 truncate text-xs text-foreground/80">
-                          {environment.repoUrl.replace(/^https?:\/\//, "")}
-                        </span>
-                        <span className={metaPill}>{environment.status}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
               </div>
-            ) : (
-              <>
-                <label className={fieldLabel}>
-                  PATH setup script
-                  <textarea
-                    aria-label="PATH setup script"
-                    value={pathInstallScript}
-                    onChange={(event) =>
-                      setPathInstallScript(event.target.value)
-                    }
-                    placeholder={
-                      "curl -fsSL https://vite.plus | bash\nnpm install -g vercel"
-                    }
-                    spellCheck={false}
-                    className={cn(textareaClass, "min-h-24 font-normal")}
-                  />
-                  <span className={fieldHint}>
-                    Runs from the sandbox home before repo setup. Use it for
-                    CLIs and language tools that should be available on PATH.
-                  </span>
-                </label>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={autoEnvironment}
+                aria-label="Auto environment"
+                onClick={() => setAutoEnvironment((value) => !value)}
+                className={cn(
+                  "relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus-visible:ring-3 focus-visible:ring-ring/30 focus-visible:outline-none",
+                  autoEnvironment ? "bg-foreground" : "bg-border"
+                )}
+              >
+                <span
+                  className={cn(
+                    "inline-block size-4 rounded-full bg-background transition-transform",
+                    autoEnvironment ? "translate-x-4" : "translate-x-0.5"
+                  )}
+                />
+              </button>
+            </div>
 
-                <label className={fieldLabel}>
-                  Repo install script
-                  <textarea
-                    aria-label="Repo install script"
-                    value={installScript}
-                    onChange={(event) => setInstallScript(event.target.value)}
-                    placeholder={"pnpm install\npnpm test -- --runInBand"}
-                    spellCheck={false}
-                    className={cn(textareaClass, "min-h-28 font-normal")}
-                  />
-                  <span className={fieldHint}>
-                    Runs from the cloned repo root before Codex starts. Leave
-                    blank when the base environment already has everything.
-                  </span>
-                </label>
-              </>
-            )}
-
-            {!selectedIsAuto ? (
-              <div className="border-t border-border/60 pt-4">
-                <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground/80">
-                  <KeyRound className="size-3.5 text-muted-foreground" />
-                  Secrets
-                  {selected?.secrets.length ? (
-                    <span className={metaPill}>{selected.secrets.length}</span>
-                  ) : null}
-                </div>
-
-                {selected?.secrets.length ? (
-                  <div className="-mx-4 mb-3 border-y border-border/60">
-                    {selected.secrets.map((secret) => (
-                      <div
-                        key={secret.id}
-                        className="flex items-center gap-2 border-b border-border/60 px-4 py-2 last:border-0"
-                      >
-                        <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground/85">
-                          {secret.name}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => deleteSecret(secret.id)}
-                          disabled={saving}
-                          aria-label={`Delete ${secret.name}`}
-                          title={`Delete ${secret.name}`}
-                          className={cn(iconBtn, "hover:text-destructive")}
-                        >
-                          <Trash2 className="size-3.5" />
-                        </button>
-                      </div>
-                    ))}
+            {autoEnvironment && selected?.environments?.length ? (
+              <div className="-mx-4 border-y border-border/60">
+                {selected.environments.map((environment) => (
+                  <div
+                    key={environment.id}
+                    className="flex items-center gap-2 border-b border-border/60 px-4 py-2 last:border-0"
+                  >
+                    <span className="min-w-0 flex-1 truncate text-xs text-foreground/80">
+                      {environment.repoUrl.replace(/^https?:\/\//, "")}
+                    </span>
+                    <span className={metaPill}>{environment.status}</span>
                   </div>
-                ) : selected ? (
-                  <p className="mb-3 text-xs text-muted-foreground">
-                    No preset secrets.
-                  </p>
-                ) : null}
+                ))}
+              </div>
+            ) : null}
 
+            <label className={fieldLabel}>
+              PATH setup script
+              <textarea
+                aria-label="PATH setup script"
+                value={pathInstallScript}
+                onChange={(event) => setPathInstallScript(event.target.value)}
+                placeholder={
+                  "curl -fsSL https://vite.plus | bash\nnpm install -g vercel"
+                }
+                spellCheck={false}
+                className={cn(textareaClass, "min-h-24 font-normal")}
+              />
+              <span className={fieldHint}>
+                Runs from the sandbox home before repo setup. Use it for CLIs
+                and language tools that should be available on PATH.
+              </span>
+            </label>
+
+            <label className={fieldLabel}>
+              Repo install script
+              <textarea
+                aria-label="Repo install script"
+                value={installScript}
+                onChange={(event) => setInstallScript(event.target.value)}
+                placeholder={"pnpm install\npnpm test -- --runInBand"}
+                spellCheck={false}
+                className={cn(textareaClass, "min-h-28 font-normal")}
+              />
+              <span className={fieldHint}>
+                Runs from the cloned repo root before Codex starts. Leave blank
+                when the base environment already has everything.
+              </span>
+            </label>
+
+            <div className="border-t border-border/60 pt-4">
+              <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground/80">
+                <KeyRound className="size-3.5 text-muted-foreground" />
+                Secrets
+                {selected?.secrets.length ? (
+                  <span className={metaPill}>{selected.secrets.length}</span>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setImportMode((value) => !value)
+                    setError("")
+                  }}
+                  className={cn(navAction, "ml-auto h-7 px-2.5")}
+                >
+                  <ClipboardPaste className="size-3.5" />
+                  {importMode ? "Add manually" : "Paste .env"}
+                </button>
+              </div>
+
+              {selected?.secrets.length ? (
+                <div className="-mx-4 mb-3 border-y border-border/60">
+                  {selected.secrets.map((secret) => (
+                    <div
+                      key={secret.id}
+                      className="flex items-center gap-2 border-b border-border/60 px-4 py-2 last:border-0"
+                    >
+                      <span className="min-w-0 flex-1 truncate font-[family-name:var(--font-mono)] text-xs text-foreground/85">
+                        {secret.name}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => deleteSecret(secret.id)}
+                        disabled={saving}
+                        aria-label={`Delete ${secret.name}`}
+                        title={`Delete ${secret.name}`}
+                        className={cn(iconBtn, "hover:text-destructive")}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : selected ? (
+                <p className="mb-3 text-xs text-muted-foreground">
+                  No preset secrets.
+                </p>
+              ) : null}
+
+              {importMode ? (
+                <div className="grid gap-2">
+                  <textarea
+                    aria-label="Paste .env file"
+                    value={importText}
+                    onChange={(event) => setImportText(event.target.value)}
+                    placeholder={
+                      "# Paste the contents of your .env file\nSUPABASE_URL=https://xyz.supabase.co\nSUPABASE_SERVICE_ROLE_KEY=ey..."
+                    }
+                    spellCheck={false}
+                    className={cn(textareaClass, "min-h-32")}
+                  />
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={fieldHint}>
+                      {importVars.length > 0
+                        ? `${importVars.length} variable${
+                            importVars.length === 1 ? "" : "s"
+                          } detected${
+                            parsedImport.errors.length
+                              ? ` · ${parsedImport.errors.length} line${
+                                  parsedImport.errors.length === 1 ? "" : "s"
+                                } skipped`
+                              : ""
+                          }`
+                        : importText.trim()
+                          ? "No valid variables found."
+                          : "Paste KEY=value lines from a .env file."}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={importSecrets}
+                      disabled={saving || importVars.length === 0}
+                      className={cn(
+                        navPrimary,
+                        "h-9 shrink-0 justify-center px-4"
+                      )}
+                    >
+                      {saving
+                        ? "Importing"
+                        : importVars.length > 0
+                          ? `Import ${importVars.length}`
+                          : "Import"}
+                    </button>
+                  </div>
+                </div>
+              ) : (
                 <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
                   <input
                     aria-label="Secret name"
                     value={secretName}
                     onChange={(event) => setSecretName(event.target.value)}
                     placeholder="SUPABASE_SERVICE_ROLE_KEY"
-                    className={cn(inputClass, "font-mono text-xs")}
+                    className={cn(
+                      inputClass,
+                      "font-[family-name:var(--font-mono)] text-xs"
+                    )}
                     spellCheck={false}
                   />
                   <input
@@ -868,8 +998,8 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                     Add
                   </button>
                 </div>
-              </div>
-            ) : null}
+              )}
+            </div>
 
             {error ? (
               <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
@@ -901,20 +1031,14 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
               >
                 Cancel
               </button>
-              {!selectedIsAuto ? (
-                <button
-                  type="button"
-                  onClick={savePreset}
-                  disabled={saving || !name.trim()}
-                  className={navPrimary}
-                >
-                  {saving
-                    ? "Saving"
-                    : selected
-                      ? "Save preset"
-                      : "Create preset"}
-                </button>
-              ) : null}
+              <button
+                type="button"
+                onClick={savePreset}
+                disabled={saving || !name.trim()}
+                className={navPrimary}
+              >
+                {saving ? "Saving" : selected ? "Save preset" : "Create preset"}
+              </button>
             </div>
           </div>
         </div>

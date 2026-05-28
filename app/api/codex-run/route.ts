@@ -4,6 +4,7 @@ import { NextResponse } from "next/server"
 
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import { parseBranchMode } from "@/lib/codex-branch-names"
 import { getConvexAuthToken } from "@/lib/codex-auth"
 import { findDaytonaSandboxInfoForRun } from "@/lib/daytona-sandbox"
 import type { CodexSpeed, ReasoningEffort } from "@/lib/daytona-codex-agent"
@@ -107,6 +108,7 @@ export async function POST(request: Request) {
     const body = (await request.json()) as {
       assistantMessageId?: unknown
       baseBranch?: unknown
+      branchMode?: unknown
       branchName?: unknown
       codexThreadId?: unknown
       model?: unknown
@@ -166,6 +168,7 @@ export async function POST(request: Request) {
       assistantMessageId,
       baseBranch:
         typeof body.baseBranch === "string" ? body.baseBranch : undefined,
+      branchMode: parseBranchMode(body.branchMode),
       branchName:
         typeof body.branchName === "string" ? body.branchName : undefined,
       codexThreadId:

@@ -1,5 +1,17 @@
+import type { BranchMode } from "./codex-branch-names"
+
+export type { BranchMode }
+
 export const MODELS = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"] as const
 export type Model = (typeof MODELS)[number]
+
+export const BRANCH_MODES = ["auto", "custom", "base"] as const
+
+export const BRANCH_MODE_LABEL: Record<BranchMode, string> = {
+  auto: "New branch",
+  custom: "Custom name",
+  base: "Continue on base",
+}
 
 export const SPEEDS = ["standard", "fast"] as const
 export type Speed = (typeof SPEEDS)[number]
