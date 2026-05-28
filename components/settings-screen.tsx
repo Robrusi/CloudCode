@@ -793,213 +793,251 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
               />
             </label>
 
-            <div className="flex items-start justify-between gap-3 rounded-xl border border-border/70 bg-background px-3 py-2.5">
-              <div className="min-w-0">
+            {selectedIsAuto ? (
+              <div className="space-y-1.5">
                 <div className="text-xs font-medium text-foreground/80">
-                  Auto environment
+                  Automatic cloudcode.yaml environments
                 </div>
                 <p className={fieldHint}>
-                  Scan the repo&apos;s cloudcode.yaml and build the environment
-                  once in a builder sandbox, then reuse it. The scripts and
-                  secrets below run after the environment is ready.
+                  When this preset runs against a repo, Cloudcode scans the
+                  repo, writes cloudcode.yaml, executes its setup commands in a
+                  builder sandbox once, then reuses that sandbox for later
+                  chats.
                 </p>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={autoEnvironment}
-                aria-label="Auto environment"
-                onClick={() => setAutoEnvironment((value) => !value)}
-                className={cn(
-                  "relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus-visible:ring-3 focus-visible:ring-ring/30 focus-visible:outline-none",
-                  autoEnvironment ? "bg-foreground" : "bg-border"
-                )}
-              >
-                <span
-                  className={cn(
-                    "inline-block size-4 rounded-full bg-background transition-transform",
-                    autoEnvironment ? "translate-x-4" : "translate-x-0.5"
-                  )}
-                />
-              </button>
-            </div>
-
-            {autoEnvironment && selected?.environments?.length ? (
-              <div className="-mx-4 border-y border-border/60">
-                {selected.environments.map((environment) => (
-                  <div
-                    key={environment.id}
-                    className="flex items-center gap-2 border-b border-border/60 px-4 py-2 last:border-0"
-                  >
-                    <span className="min-w-0 flex-1 truncate text-xs text-foreground/80">
-                      {environment.repoUrl.replace(/^https?:\/\//, "")}
-                    </span>
-                    <span className={metaPill}>{environment.status}</span>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-
-            <label className={fieldLabel}>
-              PATH setup script
-              <textarea
-                aria-label="PATH setup script"
-                value={pathInstallScript}
-                onChange={(event) => setPathInstallScript(event.target.value)}
-                placeholder={
-                  "curl -fsSL https://vite.plus | bash\nnpm install -g vercel"
-                }
-                spellCheck={false}
-                className={cn(textareaClass, "min-h-24 font-normal")}
-              />
-              <span className={fieldHint}>
-                Runs from the sandbox home before repo setup. Use it for CLIs
-                and language tools that should be available on PATH.
-              </span>
-            </label>
-
-            <label className={fieldLabel}>
-              Repo install script
-              <textarea
-                aria-label="Repo install script"
-                value={installScript}
-                onChange={(event) => setInstallScript(event.target.value)}
-                placeholder={"pnpm install\npnpm test -- --runInBand"}
-                spellCheck={false}
-                className={cn(textareaClass, "min-h-28 font-normal")}
-              />
-              <span className={fieldHint}>
-                Runs from the cloned repo root before Codex starts. Leave blank
-                when the base environment already has everything.
-              </span>
-            </label>
-
-            <div className="border-t border-border/60 pt-4">
-              <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground/80">
-                <KeyRound className="size-3.5 text-muted-foreground" />
-                Secrets
-                {selected?.secrets.length ? (
-                  <span className={metaPill}>{selected.secrets.length}</span>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setImportMode((value) => !value)
-                    setError("")
-                  }}
-                  className={cn(navAction, "ml-auto h-7 px-2.5")}
-                >
-                  <ClipboardPaste className="size-3.5" />
-                  {importMode ? "Add manually" : "Paste .env"}
-                </button>
-              </div>
-
-              {selected?.secrets.length ? (
-                <div className="-mx-4 mb-3 border-y border-border/60">
-                  {selected.secrets.map((secret) => (
-                    <div
-                      key={secret.id}
-                      className="flex items-center gap-2 border-b border-border/60 px-4 py-2 last:border-0"
-                    >
-                      <span className="min-w-0 flex-1 truncate font-[family-name:var(--font-mono)] text-xs text-foreground/85">
-                        {secret.name}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => deleteSecret(secret.id)}
-                        disabled={saving}
-                        aria-label={`Delete ${secret.name}`}
-                        title={`Delete ${secret.name}`}
-                        className={cn(iconBtn, "hover:text-destructive")}
+                {selected?.environments?.length ? (
+                  <div className="-mx-4 mt-3 border-y border-border/60">
+                    {selected.environments.map((environment) => (
+                      <div
+                        key={environment.id}
+                        className="flex items-center gap-2 border-b border-border/60 px-4 py-2 last:border-0"
                       >
-                        <Trash2 className="size-3.5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : selected ? (
-                <p className="mb-3 text-xs text-muted-foreground">
-                  No preset secrets.
-                </p>
-              ) : null}
-
-              {importMode ? (
-                <div className="grid gap-2">
-                  <textarea
-                    aria-label="Paste .env file"
-                    value={importText}
-                    onChange={(event) => setImportText(event.target.value)}
-                    placeholder={
-                      "# Paste the contents of your .env file\nSUPABASE_URL=https://xyz.supabase.co\nSUPABASE_SERVICE_ROLE_KEY=ey..."
-                    }
-                    spellCheck={false}
-                    className={cn(textareaClass, "min-h-32")}
-                  />
-                  <div className="flex items-center justify-between gap-2">
-                    <span className={fieldHint}>
-                      {importVars.length > 0
-                        ? `${importVars.length} variable${
-                            importVars.length === 1 ? "" : "s"
-                          } detected${
-                            parsedImport.errors.length
-                              ? ` · ${parsedImport.errors.length} line${
-                                  parsedImport.errors.length === 1 ? "" : "s"
-                                } skipped`
-                              : ""
-                          }`
-                        : importText.trim()
-                          ? "No valid variables found."
-                          : "Paste KEY=value lines from a .env file."}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={importSecrets}
-                      disabled={saving || importVars.length === 0}
-                      className={cn(
-                        navPrimary,
-                        "h-9 shrink-0 justify-center px-4"
-                      )}
-                    >
-                      {saving
-                        ? "Importing"
-                        : importVars.length > 0
-                          ? `Import ${importVars.length}`
-                          : "Import"}
-                    </button>
+                        <span className="min-w-0 flex-1 truncate text-xs text-foreground/80">
+                          {environment.repoUrl.replace(/^https?:\/\//, "")}
+                        </span>
+                        <span className={metaPill}>{environment.status}</span>
+                      </div>
+                    ))}
                   </div>
-                </div>
-              ) : (
-                <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
-                  <input
-                    aria-label="Secret name"
-                    value={secretName}
-                    onChange={(event) => setSecretName(event.target.value)}
-                    placeholder="SUPABASE_SERVICE_ROLE_KEY"
-                    className={cn(
-                      inputClass,
-                      "font-[family-name:var(--font-mono)] text-xs"
-                    )}
-                    spellCheck={false}
-                  />
-                  <input
-                    aria-label="Secret value"
-                    value={secretValue}
-                    onChange={(event) => setSecretValue(event.target.value)}
-                    placeholder="Value"
-                    type="password"
-                    className={cn(inputClass, "text-xs")}
-                  />
+                ) : null}
+              </div>
+            ) : (
+              <>
+                <div className="flex items-start justify-between gap-3 rounded-xl border border-border/70 bg-background px-3 py-2.5">
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium text-foreground/80">
+                      Auto environment
+                    </div>
+                    <p className={fieldHint}>
+                      Scan the repo&apos;s cloudcode.yaml and build the
+                      environment once in a builder sandbox, then reuse it. The
+                      scripts and secrets below run after the environment is
+                      ready.
+                    </p>
+                  </div>
                   <button
                     type="button"
-                    onClick={saveSecret}
-                    disabled={saving || !secretName || !secretValue}
-                    className={cn(navPrimary, "h-9 justify-center px-4")}
+                    role="switch"
+                    aria-checked={autoEnvironment}
+                    aria-label="Auto environment"
+                    onClick={() => setAutoEnvironment((value) => !value)}
+                    className={cn(
+                      "relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus-visible:ring-3 focus-visible:ring-ring/30 focus-visible:outline-none",
+                      autoEnvironment ? "bg-foreground" : "bg-border"
+                    )}
                   >
-                    Add
+                    <span
+                      className={cn(
+                        "inline-block size-4 rounded-full bg-background transition-transform",
+                        autoEnvironment ? "translate-x-4" : "translate-x-0.5"
+                      )}
+                    />
                   </button>
                 </div>
-              )}
-            </div>
+
+                {autoEnvironment && selected?.environments?.length ? (
+                  <div className="-mx-4 border-y border-border/60">
+                    {selected.environments.map((environment) => (
+                      <div
+                        key={environment.id}
+                        className="flex items-center gap-2 border-b border-border/60 px-4 py-2 last:border-0"
+                      >
+                        <span className="min-w-0 flex-1 truncate text-xs text-foreground/80">
+                          {environment.repoUrl.replace(/^https?:\/\//, "")}
+                        </span>
+                        <span className={metaPill}>{environment.status}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+
+                <label className={fieldLabel}>
+                  PATH setup script
+                  <textarea
+                    aria-label="PATH setup script"
+                    value={pathInstallScript}
+                    onChange={(event) =>
+                      setPathInstallScript(event.target.value)
+                    }
+                    placeholder={
+                      "curl -fsSL https://vite.plus | bash\nnpm install -g vercel"
+                    }
+                    spellCheck={false}
+                    className={cn(textareaClass, "min-h-24 font-normal")}
+                  />
+                  <span className={fieldHint}>
+                    Runs from the sandbox home before repo setup. Use it for
+                    CLIs and language tools that should be available on PATH.
+                  </span>
+                </label>
+
+                <label className={fieldLabel}>
+                  Repo install script
+                  <textarea
+                    aria-label="Repo install script"
+                    value={installScript}
+                    onChange={(event) => setInstallScript(event.target.value)}
+                    placeholder={"pnpm install\npnpm test -- --runInBand"}
+                    spellCheck={false}
+                    className={cn(textareaClass, "min-h-28 font-normal")}
+                  />
+                  <span className={fieldHint}>
+                    Runs from the cloned repo root before Codex starts. Leave
+                    blank when the base environment already has everything.
+                  </span>
+                </label>
+
+                <div className="border-t border-border/60 pt-4">
+                  <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground/80">
+                    <KeyRound className="size-3.5 text-muted-foreground" />
+                    Secrets
+                    {selected?.secrets.length ? (
+                      <span className={metaPill}>
+                        {selected.secrets.length}
+                      </span>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setImportMode((value) => !value)
+                        setError("")
+                      }}
+                      className={cn(navAction, "ml-auto h-7 px-2.5")}
+                    >
+                      <ClipboardPaste className="size-3.5" />
+                      {importMode ? "Add manually" : "Paste .env"}
+                    </button>
+                  </div>
+
+                  {selected?.secrets.length ? (
+                    <div className="-mx-4 mb-3 border-y border-border/60">
+                      {selected.secrets.map((secret) => (
+                        <div
+                          key={secret.id}
+                          className="flex items-center gap-2 border-b border-border/60 px-4 py-2 last:border-0"
+                        >
+                          <span className="min-w-0 flex-1 truncate font-[family-name:var(--font-mono)] text-xs text-foreground/85">
+                            {secret.name}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => deleteSecret(secret.id)}
+                            disabled={saving}
+                            aria-label={`Delete ${secret.name}`}
+                            title={`Delete ${secret.name}`}
+                            className={cn(iconBtn, "hover:text-destructive")}
+                          >
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : selected ? (
+                    <p className="mb-3 text-xs text-muted-foreground">
+                      No preset secrets.
+                    </p>
+                  ) : null}
+
+                  {importMode ? (
+                    <div className="grid gap-2">
+                      <textarea
+                        aria-label="Paste .env file"
+                        value={importText}
+                        onChange={(event) => setImportText(event.target.value)}
+                        placeholder={
+                          "# Paste the contents of your .env file\nSUPABASE_URL=https://xyz.supabase.co\nSUPABASE_SERVICE_ROLE_KEY=ey..."
+                        }
+                        spellCheck={false}
+                        className={cn(textareaClass, "min-h-32")}
+                      />
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={fieldHint}>
+                          {importVars.length > 0
+                            ? `${importVars.length} variable${
+                                importVars.length === 1 ? "" : "s"
+                              } detected${
+                                parsedImport.errors.length
+                                  ? ` · ${parsedImport.errors.length} line${
+                                      parsedImport.errors.length === 1
+                                        ? ""
+                                        : "s"
+                                    } skipped`
+                                  : ""
+                              }`
+                            : importText.trim()
+                              ? "No valid variables found."
+                              : "Paste KEY=value lines from a .env file."}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={importSecrets}
+                          disabled={saving || importVars.length === 0}
+                          className={cn(
+                            navPrimary,
+                            "h-9 shrink-0 justify-center px-4"
+                          )}
+                        >
+                          {saving
+                            ? "Importing"
+                            : importVars.length > 0
+                              ? `Import ${importVars.length}`
+                              : "Import"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                      <input
+                        aria-label="Secret name"
+                        value={secretName}
+                        onChange={(event) => setSecretName(event.target.value)}
+                        placeholder="SUPABASE_SERVICE_ROLE_KEY"
+                        className={cn(
+                          inputClass,
+                          "font-[family-name:var(--font-mono)] text-xs"
+                        )}
+                        spellCheck={false}
+                      />
+                      <input
+                        aria-label="Secret value"
+                        value={secretValue}
+                        onChange={(event) => setSecretValue(event.target.value)}
+                        placeholder="Value"
+                        type="password"
+                        className={cn(inputClass, "text-xs")}
+                      />
+                      <button
+                        type="button"
+                        onClick={saveSecret}
+                        disabled={saving || !secretName || !secretValue}
+                        className={cn(navPrimary, "h-9 justify-center px-4")}
+                      >
+                        Add
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
 
             {error ? (
               <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
