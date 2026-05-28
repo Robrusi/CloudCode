@@ -1333,6 +1333,8 @@ export async function ensureAutoEnvironmentSandbox(
   input: EnsureAutoEnvironmentInput
 ): Promise<AutoEnvironmentResult> {
   const currentSandboxId = input.currentSandboxId?.trim()
+  const repoCloudcodeYaml = await readRepoCloudcodeYamlFromGitHub(input)
+
   if (!currentSandboxId) {
     await input.onLog?.({
       kind: "setup",
@@ -1344,35 +1346,60 @@ export async function ensureAutoEnvironmentSandbox(
   const existingCloudcodeYaml = existing?.cloudcodeYaml?.trim()
     ? normalizeCloudcodeYaml(existing.cloudcodeYaml)
     : undefined
-  let cloudcodeYamlSource:
+  const repoCloudcodeYamlChanged = Boolean(
+    repoCloudcodeYaml &&
+    existingCloudcodeYaml &&
+    !cloudcodeYamlMatchesRepoSource(repoCloudcodeYaml, existingCloudcodeYaml)
+  )
+  const cloudcodeYamlSource:
     | {
         source: CloudcodeYamlSource
         yaml: string
       }
-    | undefined = existingCloudcodeYaml
+    | undefined = repoCloudcodeYaml
     ? {
-        source: "convex" as const,
-        yaml: existingCloudcodeYaml,
+        source: "repo" as const,
+        yaml: repoCloudcodeYaml,
       }
-    : undefined
+    : existingCloudcodeYaml
+      ? {
+          source: "convex" as const,
+          yaml: existingCloudcodeYaml,
+        }
+      : undefined
+  const reusableCloudcodeYaml =
+    existingCloudcodeYaml && !repoCloudcodeYamlChanged
+      ? existingCloudcodeYaml
+      : undefined
+
+  if (repoCloudcodeYamlChanged) {
+    await input.onLog?.({
+      kind: "setup",
+      message: "Repo cloudcode.yaml changed; rebuilding auto environment",
+    })
+  }
 
   if (
     currentSandboxId &&
     existing?.status === "ready" &&
     existing.activeSandboxId === currentSandboxId &&
-    existingCloudcodeYaml
+    reusableCloudcodeYaml
   ) {
     return {
-      cloudcodeYaml: existingCloudcodeYaml,
+      cloudcodeYaml: reusableCloudcodeYaml,
       preparedSandboxFresh: false,
-      preset: autoPresetForRun(input.sandboxPreset, existingCloudcodeYaml),
+      preset: autoPresetForRun(input.sandboxPreset, reusableCloudcodeYaml),
       requireExistingSandbox: true,
       sandboxId: currentSandboxId,
     }
   }
 
   let usableActiveSandboxId = existing?.activeSandboxId
-  if (usableActiveSandboxId && existing?.status === "ready") {
+  if (
+    usableActiveSandboxId &&
+    existing?.status === "ready" &&
+    reusableCloudcodeYaml
+  ) {
     try {
       await getStartedDaytonaSandbox(usableActiveSandboxId)
     } catch {
@@ -1388,7 +1415,7 @@ export async function ensureAutoEnvironmentSandbox(
   if (
     usableActiveSandboxId &&
     existing?.status === "ready" &&
-    existingCloudcodeYaml
+    reusableCloudcodeYaml
   ) {
     await input.onLog?.({
       detail: usableActiveSandboxId,
@@ -1396,31 +1423,10 @@ export async function ensureAutoEnvironmentSandbox(
       message: "Using prepared auto environment sandbox",
     })
     return {
-      cloudcodeYaml: existingCloudcodeYaml,
+      cloudcodeYaml: reusableCloudcodeYaml,
       preparedSandboxFresh: false,
-      preset: autoPresetForRun(input.sandboxPreset, existingCloudcodeYaml),
+      preset: autoPresetForRun(input.sandboxPreset, reusableCloudcodeYaml),
       sandboxId: usableActiveSandboxId,
-    }
-  }
-
-  if (!cloudcodeYamlSource) {
-    const repoCloudcodeYaml = await readRepoCloudcodeYamlFromGitHub(input)
-    const repoCloudcodeYamlChanged = Boolean(
-      repoCloudcodeYaml &&
-      !cloudcodeYamlMatchesRepoSource(repoCloudcodeYaml, existingCloudcodeYaml)
-    )
-    cloudcodeYamlSource = repoCloudcodeYaml
-      ? {
-          source: "repo" as const,
-          yaml: repoCloudcodeYaml,
-        }
-      : undefined
-
-    if (repoCloudcodeYamlChanged) {
-      await input.onLog?.({
-        kind: "setup",
-        message: "Repo cloudcode.yaml changed; rebuilding auto environment",
-      })
     }
   }
 
