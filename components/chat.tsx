@@ -2116,7 +2116,7 @@ function ChatInner() {
                       </h1>
                       <div
                         ref={composerRef}
-                        className="mt-4 flex w-full justify-center md:mt-8"
+                        className="mt-6 flex w-full justify-center md:mt-8"
                       >
                         {composerBlock}
                       </div>
