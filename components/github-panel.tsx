@@ -314,7 +314,7 @@ export function GithubPanel({
 
   return (
     <aside
-      className="fixed inset-0 z-40 flex h-full min-h-0 w-full flex-col overflow-hidden border-l border-border/60 bg-sidebar text-sidebar-foreground md:relative md:inset-auto md:z-auto md:w-[var(--panel-width)] md:shrink-0"
+      className="fixed inset-0 z-40 flex h-full min-h-0 w-full flex-col overflow-hidden border-l border-border/60 bg-sidebar pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-sidebar-foreground md:relative md:inset-auto md:z-auto md:w-[var(--panel-width)] md:shrink-0 md:pt-0 md:pb-0"
       style={{ "--panel-width": `${width}px` } as CSSProperties}
       data-github-panel
     >
@@ -449,9 +449,13 @@ function SectionHeading({
   trailing?: ReactNode
 }) {
   return (
-    <div className="flex items-center justify-between gap-2 px-0.5 pb-2">
-      <h2 className="text-sm font-medium text-foreground/85">{children}</h2>
-      {trailing}
+    <div className="flex items-center gap-2 px-0.5 pb-2">
+      <h2 className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground/80 uppercase">
+        {children}
+      </h2>
+      {trailing ? (
+        <div className="ml-auto flex items-center gap-2">{trailing}</div>
+      ) : null}
     </div>
   )
 }
@@ -506,7 +510,7 @@ function ChangesSection({
       <SectionHeading
         trailing={
           files.length > 0 ? (
-            <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+            <span className="rounded-full bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground tabular-nums">
               {files.length}
             </span>
           ) : undefined
@@ -608,7 +612,7 @@ function CommitSection({
   return (
     <div className="mt-4">
       <SectionHeading>Commit</SectionHeading>
-      <div className="overflow-hidden rounded-xl border border-border/60 bg-background">
+      <div className="overflow-hidden rounded-xl border border-border/60 bg-background transition-[border-color,box-shadow] focus-within:border-border focus-within:ring-2 focus-within:ring-ring/15">
         <textarea
           aria-label="Commit message"
           value={value}
@@ -616,7 +620,7 @@ function CommitSection({
           placeholder="Message"
           rows={3}
           spellCheck={false}
-          className="block w-full resize-none bg-transparent px-3 py-2.5 text-[13px] text-foreground outline-none placeholder:text-muted-foreground/40"
+          className="block w-full resize-none bg-transparent px-3 py-2.5 text-[13px] leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/40"
         />
         <div className="flex items-center justify-end gap-2 border-t border-border/60 bg-muted/30 px-2.5 py-2">
           <SecondaryButton
@@ -696,7 +700,7 @@ function PullRequestSection({
       <SectionHeading
         trailing={
           prs.length > 1 ? (
-            <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+            <span className="rounded-full bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground tabular-nums">
               {prs.length}
             </span>
           ) : undefined
@@ -786,7 +790,7 @@ function CreatePrForm({
   title: string
 }) {
   return (
-    <div className="overflow-hidden rounded-xl border border-border/60 bg-background">
+    <div className="overflow-hidden rounded-xl border border-border/60 bg-background transition-[border-color,box-shadow] focus-within:border-border focus-within:ring-2 focus-within:ring-ring/15">
       <div className="flex items-center gap-1.5 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
         <span className="truncate text-foreground">{head ?? "HEAD"}</span>
         <span className="text-muted-foreground/50">→</span>
@@ -931,17 +935,24 @@ function PullRequestCard({
 
 function PrStateBadge({ pr }: { pr: PullRequestSummary }) {
   const { className, label } = pr.merged
-    ? { className: "text-emerald-600 dark:text-emerald-400", label: "Merged" }
+    ? {
+        className: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+        label: "Merged",
+      }
     : pr.state === "closed"
-      ? { className: "text-destructive", label: "Closed" }
+      ? { className: "bg-destructive/10 text-destructive", label: "Closed" }
       : pr.draft
-        ? { className: "text-muted-foreground", label: "Draft" }
-        : { className: "text-emerald-600 dark:text-emerald-400", label: "Open" }
+        ? { className: "bg-muted text-muted-foreground", label: "Draft" }
+        : {
+            className:
+              "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+            label: "Open",
+          }
 
   return (
     <span
       className={cn(
-        "flex items-center gap-1 text-[11px] font-medium",
+        "inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium",
         className
       )}
     >
@@ -1146,7 +1157,7 @@ function PrimaryButton({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        "inline-flex h-7 items-center justify-center gap-1.5 rounded-md bg-foreground px-3 text-xs font-medium text-background transition-opacity hover:opacity-85 disabled:pointer-events-none disabled:opacity-40",
+        "inline-flex h-7 items-center justify-center gap-1.5 rounded-md bg-foreground px-3 text-xs font-medium text-background transition-[opacity,background-color] duration-150 hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40",
         className
       )}
     >
@@ -1175,7 +1186,7 @@ function SecondaryButton({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        "inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-border/60 bg-background px-3 text-xs font-medium text-foreground/80 transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-40",
+        "inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-border/60 bg-background px-3 text-xs font-medium text-foreground/80 transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40",
         className
       )}
     >

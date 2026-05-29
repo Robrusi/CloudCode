@@ -637,7 +637,7 @@ export function SandboxTerminalPanel({
   return (
     <section
       aria-hidden={!open}
-      className="absolute inset-x-0 bottom-0 z-20 flex min-h-0 flex-col overflow-hidden border-t border-border/60 bg-background text-foreground"
+      className="absolute inset-x-0 bottom-0 z-20 flex max-h-[85dvh] min-h-0 flex-col overflow-hidden border-t border-border/60 bg-background text-foreground"
       style={{
         height: open ? height : 0,
         visibility: open ? "visible" : "hidden",
@@ -738,7 +738,7 @@ export function SandboxTerminalPanel({
         </div>
       </div>
       <div
-        className="min-h-0 flex-1 overflow-hidden px-3 pt-3 pb-1"
+        className="min-h-0 flex-1 overflow-hidden px-3 pt-3 pb-[max(0.25rem,env(safe-area-inset-bottom))]"
         style={{ background: palette.background, color: palette.foreground }}
       >
         <div className="relative h-full w-full overflow-hidden">

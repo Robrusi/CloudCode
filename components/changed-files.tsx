@@ -8,6 +8,7 @@ import { type CSSProperties, useMemo, useState } from "react"
 
 import { TreeFileIcon } from "@/components/tree-file-icon"
 import { Button } from "@/components/ui/button"
+import { useIsMobile } from "@/hooks/use-is-mobile"
 import {
   getDiffStats,
   parsePatchDiff,
@@ -304,6 +305,9 @@ export function DiffList({
   diff: string
   diffStyle?: DiffStyle
 }) {
+  // Side-by-side diffs don't fit a phone's width; collapse to a single column.
+  const isMobile = useIsMobile()
+  const effectiveDiffStyle: DiffStyle = isMobile ? "unified" : diffStyle
   const files = useMemo(() => parsePatchDiff(diff), [diff])
   const fileStats = useMemo(() => {
     const map = new Map<string, { additions: number; deletions: number }>()
@@ -326,7 +330,7 @@ export function DiffList({
   const diffOptions = useMemo<FileDiffOptions<undefined>>(
     () => ({
       diffIndicators: "bars",
-      diffStyle,
+      diffStyle: effectiveDiffStyle,
       disableFileHeader: true,
       disableLineNumbers: false,
       hunkSeparators: "line-info-basic",
@@ -335,7 +339,7 @@ export function DiffList({
       theme: PIERRE_CODE_THEMES,
       themeType,
     }),
-    [diffStyle, themeType]
+    [effectiveDiffStyle, themeType]
   )
 
   if (files.length === 0) {

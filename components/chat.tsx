@@ -4,12 +4,14 @@ import { Show, SignInButton, useUser } from "@clerk/nextjs"
 import { useMutation, useQuery } from "convex/react"
 import {
   ArrowUp,
+  Check,
   ChevronDown,
   Folder,
   FolderOpen,
   GitBranch,
   Loader2,
   PanelLeft,
+  PanelRight,
   Plus,
   SquareTerminal,
   Square,
@@ -538,6 +540,7 @@ function ChatInner() {
   const composerRef = useRef<HTMLDivElement>(null)
   const threadRef = useRef<HTMLDivElement | null>(null)
   const isAtBottomRef = useRef(true)
+  const promptFocusedRef = useRef(false)
   const pendingThreadScrollRestoreRef = useRef<ThreadScrollSnapshot | null>(
     null
   )
@@ -552,19 +555,25 @@ function ChatInner() {
     const el = threadRef.current
     if (!el) return
     el.style.scrollBehavior = "auto"
-    el.scrollTop = el.scrollHeight
+    el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight)
     isAtBottomRef.current = true
   }, [])
 
   const settleThreadAtBottom = useCallback(() => {
+    if (isMobile && promptFocusedRef.current) return
+
     isAtBottomRef.current = true
     scrollThreadToBottom()
 
     requestAnimationFrame(() => {
+      if (isMobile && promptFocusedRef.current) return
       scrollThreadToBottom()
-      requestAnimationFrame(scrollThreadToBottom)
+      requestAnimationFrame(() => {
+        if (isMobile && promptFocusedRef.current) return
+        scrollThreadToBottom()
+      })
     })
-  }, [scrollThreadToBottom])
+  }, [isMobile, scrollThreadToBottom])
 
   const captureThreadScrollForPanel = useCallback(() => {
     const el = threadRef.current
@@ -590,7 +599,7 @@ function ChatInner() {
       const applyScroll = () => {
         el.style.scrollBehavior = "auto"
         el.scrollTop = snapshot.atBottom
-          ? el.scrollHeight
+          ? Math.max(0, el.scrollHeight - el.clientHeight)
           : Math.min(
               snapshot.scrollTop,
               Math.max(0, el.scrollHeight - el.clientHeight)
@@ -852,9 +861,10 @@ function ChatInner() {
   const terminalVisible =
     terminalOpen && (Boolean(activeSandboxId) || activeRunPending)
   const threadBottomInset =
-    Math.max(composerHeight, DEFAULT_COMPOSER_HEIGHT) +
     THREAD_BOTTOM_CLEARANCE +
-    (terminalVisible ? terminalHeight : 0)
+    (terminalVisible
+      ? Math.max(composerHeight, DEFAULT_COMPOSER_HEIGHT) + terminalHeight
+      : 0)
 
   const repoUrl = active ? active.repoUrl : draftRepo
   const baseBranch = active ? (active.baseBranch ?? "") : draftBaseBranch
@@ -867,6 +877,19 @@ function ChatInner() {
   const speed = draftSpeed
   const thinking = draftThinking
   const empty = messages.length === 0
+  const threadScrollable = !isMobile || !empty
+  const threadContentVersion = messages
+    .map((message) =>
+      [
+        message.id,
+        message.content.length,
+        message.pending ? 1 : 0,
+        message.error ? 1 : 0,
+        message.meta?.logs?.length ?? 0,
+        message.meta?.status ?? "",
+      ].join(":")
+    )
+    .join("|")
   const activeDiff = useMemo(
     () =>
       active
@@ -900,6 +923,9 @@ function ChatInner() {
       user?.primaryEmailAddress?.emailAddress?.split("@")[0]
     return name?.trim().split(/\s+/)[0] || null
   }, [user])
+  const emptyPromptTitle = userFirstName
+    ? `What are we building, ${userFirstName}?`
+    : "What are we building?"
 
   const openFile = useCallback(
     (path: string) => {
@@ -1065,13 +1091,16 @@ function ChatInner() {
   useEffect(() => {
     const el = textareaRef.current
     if (!el) return
+    const minHeight = isMobile ? 64 : 80
+    const maxHeight = isMobile ? 144 : 200
     el.style.height = "0px"
-    el.style.height = Math.min(Math.max(el.scrollHeight, 80), 200) + "px"
-  }, [input])
+    el.style.height =
+      Math.min(Math.max(el.scrollHeight, minHeight), maxHeight) + "px"
+  }, [input, isMobile])
 
   useEffect(() => {
     const el = composerRef.current
-    if (!el) return
+    if (!el || !terminalVisible) return
 
     const updateComposerHeight = () => {
       setComposerHeight(Math.ceil(el.getBoundingClientRect().height))
@@ -1082,7 +1111,7 @@ function ChatInner() {
     observer.observe(el)
 
     return () => observer.disconnect()
-  }, [activeFilePath])
+  }, [activeFilePath, empty, terminalVisible])
 
   useEffect(() => {
     if (
@@ -1124,6 +1153,7 @@ function ChatInner() {
   ])
 
   useLayoutEffect(() => {
+    if (isMobile && empty) return
     if (pendingThreadScrollRestoreFrameRef.current !== null) {
       cancelAnimationFrame(pendingThreadScrollRestoreFrameRef.current)
       pendingThreadScrollRestoreFrameRef.current = null
@@ -1131,7 +1161,7 @@ function ChatInner() {
     pendingThreadScrollRestoreRef.current = null
     setActiveFileDiff(null)
     settleThreadAtBottom()
-  }, [activeId, settleThreadAtBottom])
+  }, [activeId, empty, isMobile, settleThreadAtBottom])
 
   useEffect(() => {
     return () => {
@@ -1142,23 +1172,16 @@ function ChatInner() {
   }, [])
 
   useLayoutEffect(() => {
+    if (isMobile && promptFocusedRef.current) return
     if (!isAtBottomRef.current) return
     settleThreadAtBottom()
-  }, [threadBottomInset, settleThreadAtBottom])
+  }, [isMobile, threadBottomInset, settleThreadAtBottom])
 
-  useEffect(() => {
-    const el = threadRef.current
-    if (!el) return
-
-    const observer = new ResizeObserver(() => {
-      if (!isAtBottomRef.current) return
-      scrollThreadToBottom()
-    })
-    observer.observe(el)
-    if (el.firstElementChild) observer.observe(el.firstElementChild)
-
-    return () => observer.disconnect()
-  }, [activeId, activeFilePath, scrollThreadToBottom])
+  useLayoutEffect(() => {
+    if (isMobile && promptFocusedRef.current) return
+    if (!isAtBottomRef.current) return
+    scrollThreadToBottom()
+  }, [isMobile, scrollThreadToBottom, threadContentVersion])
 
   function mergeThreadRunState(threadId: Id<"threads">, patch: CachedRunState) {
     const key = threadId as string
@@ -1336,6 +1359,7 @@ function ChatInner() {
   }
 
   function startNewChat() {
+    promptFocusedRef.current = false
     setActiveId(null)
     setInput("")
     setEditingRepo(false)
@@ -1344,7 +1368,6 @@ function ChatInner() {
     setTerminalOpen(false)
     setView("chat")
     if (isMobile) setSidebarOpen(false)
-    requestAnimationFrame(() => textareaRef.current?.focus())
   }
 
   function startNewChatInRepo(repoUrl: string) {
@@ -1353,6 +1376,7 @@ function ChatInner() {
   }
 
   function selectChat(id: Id<"threads">) {
+    promptFocusedRef.current = false
     setActiveId(id)
     setInput("")
     setEditingRepo(false)
@@ -1364,6 +1388,7 @@ function ChatInner() {
   }
 
   function showSettings() {
+    promptFocusedRef.current = false
     setView("settings")
     setActiveFilePath(null)
     setFilesOpen(false)
@@ -1804,18 +1829,28 @@ function ChatInner() {
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && !e.shiftKey) {
+    // On touch keyboards Enter should add a newline; sending is done via the
+    // button. On desktop, Enter sends and Shift+Enter inserts a newline.
+    if (e.key === "Enter" && !e.shiftKey && !isMobile) {
       e.preventDefault()
       send(input)
     }
   }
 
+  function onTextareaFocus() {
+    promptFocusedRef.current = true
+  }
+
+  function onTextareaBlur() {
+    promptFocusedRef.current = false
+  }
+
   const composerBlock =
     view === "settings" || activeFilePath ? null : (
-      <div className="pointer-events-auto w-full max-w-3xl">
+      <div className="pointer-events-auto w-full max-w-3xl rounded-3xl shadow-[0_1px_2px_rgba(0,0,0,0.04),0_10px_28px_-14px_rgba(0,0,0,0.18)]">
         <form
           onSubmit={onSubmit}
-          className="relative z-[1] w-full rounded-3xl border border-border/70 bg-background shadow-[0_1px_2px_rgba(0,0,0,0.04),0_10px_28px_-14px_rgba(0,0,0,0.18)] transition-colors focus-within:border-border"
+          className="relative z-[1] w-full rounded-3xl border border-border/70 bg-background transition-colors focus-within:border-border"
         >
           <textarea
             ref={textareaRef}
@@ -1827,17 +1862,20 @@ function ChatInner() {
               setInput(e.target.value)
             }
             onKeyDown={onKeyDown}
+            onFocus={onTextareaFocus}
+            onBlur={onTextareaBlur}
             rows={1}
             placeholder={empty ? "Ask anything…" : "Ask for follow-up changes"}
-            className="block min-h-20 w-full resize-none bg-transparent px-5 pt-4 pb-1 text-[15px] leading-6 outline-none placeholder:text-muted-foreground/70"
+            enterKeyHint={isMobile ? "enter" : "send"}
+            className="block min-h-16 w-full resize-none bg-transparent px-4 pt-3 pb-1 text-base leading-6 outline-none placeholder:text-muted-foreground/70 md:min-h-20 md:px-5 md:pt-4 md:text-[15px]"
           />
 
           <div className="flex items-center gap-1.5 px-2.5 pt-1 pb-2.5">
-            <IconButton aria-label="Attach" disabled>
+            <IconButton aria-label="Attach" disabled className="hidden sm:grid">
               <Plus className="size-[18px]" />
             </IconButton>
 
-            <div className="ml-auto flex items-center gap-1.5">
+            <div className="ml-auto flex min-w-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto overscroll-x-contain md:flex-wrap md:overflow-visible">
               <Pill
                 header="Model"
                 value={model}
@@ -1869,6 +1907,7 @@ function ChatInner() {
                   disabled={!canStopActiveRun}
                   aria-label="Stop"
                   title={canStopActiveRun ? "Stop" : "Run finishing elsewhere"}
+                  className="size-9 md:size-8"
                 >
                   <Square className="size-3.5 fill-current" />
                 </Button>
@@ -1878,6 +1917,7 @@ function ChatInner() {
                   size="icon-sm"
                   disabled={!input.trim()}
                   aria-label="Send"
+                  className="size-9 md:size-8"
                 >
                   <ArrowUp className="size-4" strokeWidth={2.4} />
                 </Button>
@@ -1887,31 +1927,40 @@ function ChatInner() {
         </form>
 
         {active ? null : (
-          <div className="-mt-3 flex flex-wrap items-center gap-1 rounded-b-3xl border border-t-0 border-border/60 bg-muted/40 px-3 pt-5 pb-2">
-            <RepoChip
-              value={repoUrl}
-              editing={editingRepo}
-              setEditing={setEditingRepo}
-              onChange={persistRepo}
-              locked={false}
+          <div className="-mt-3 flex flex-col items-stretch gap-1 rounded-b-3xl border border-t-0 border-border/60 bg-muted/40 px-2.5 pt-5 pb-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-1 sm:gap-y-0.5 sm:px-3 sm:pb-2">
+            <ComposerSettingRow label="Repository">
+              <RepoChip
+                value={repoUrl}
+                editing={editingRepo}
+                setEditing={setEditingRepo}
+                onChange={persistRepo}
+                locked={false}
+              />
+            </ComposerSettingRow>
+            <span
+              aria-hidden
+              className="hidden h-3.5 w-px bg-border/70 sm:block"
             />
-            <span aria-hidden className="h-3.5 w-px bg-border/70" />
-            <BranchChip
-              value={baseBranch}
-              repoUrl={repoUrl}
-              onChange={persistBaseBranch}
-              locked={false}
-            />
-            <BranchTargetChip
-              mode={draftBranchMode}
-              branchName={draftBranchName}
-              baseBranch={baseBranch}
-              open={branchTargetOpen}
-              setOpen={setBranchTargetOpen}
-              onChangeMode={persistDraftBranchMode}
-              onChangeBranchName={persistDraftBranchName}
-            />
-            <div className="ml-auto">
+            <ComposerSettingRow label="Base branch">
+              <BranchChip
+                value={baseBranch}
+                repoUrl={repoUrl}
+                onChange={persistBaseBranch}
+                locked={false}
+              />
+            </ComposerSettingRow>
+            <ComposerSettingRow label="Branch target">
+              <BranchTargetChip
+                mode={draftBranchMode}
+                branchName={draftBranchName}
+                baseBranch={baseBranch}
+                open={branchTargetOpen}
+                setOpen={setBranchTargetOpen}
+                onChangeMode={persistDraftBranchMode}
+                onChangeBranchName={persistDraftBranchName}
+              />
+            </ComposerSettingRow>
+            <ComposerSettingRow label="Preset" className="sm:ml-auto">
               <PresetPill
                 value={sandboxPresetId ?? ""}
                 presets={sandboxPresets}
@@ -1920,7 +1969,7 @@ function ChatInner() {
                 onSelect={persistSandboxPreset}
                 locked={false}
               />
-            </div>
+            </ComposerSettingRow>
           </div>
         )}
       </div>
@@ -2053,26 +2102,27 @@ function ChatInner() {
                 key={activeRunKey}
                 ref={setThreadElement}
                 onScroll={onThreadScroll}
-                className="min-h-0 flex-1 overflow-y-auto [contain:paint]"
+                className={cn(
+                  "min-h-0 flex-1 overscroll-contain [contain:paint] [overflow-anchor:none]",
+                  threadScrollable ? "overflow-y-auto" : "overflow-hidden"
+                )}
                 style={{ scrollPaddingBottom: threadBottomInset }}
               >
                 <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col px-4 pt-16 md:px-6">
                   {empty ? (
-                    <div className="flex flex-col items-center pt-[22vh]">
-                      <h1 className="text-center text-3xl font-medium tracking-tight text-foreground/90">
-                        {userFirstName
-                          ? `What are we building, ${userFirstName}?`
-                          : "What are we building?"}
+                    <div className="flex min-h-full flex-col items-center justify-end pb-[calc(clamp(3rem,18dvh,7.5rem)+env(safe-area-inset-bottom))] md:min-h-0 md:justify-start md:pt-[22vh] md:pb-0">
+                      <h1 className="text-center text-2xl font-normal tracking-tight text-balance text-foreground/90 md:text-3xl">
+                        {emptyPromptTitle}
                       </h1>
                       <div
                         ref={composerRef}
-                        className="mt-8 flex w-full justify-center"
+                        className="mt-4 flex w-full justify-center md:mt-8"
                       >
                         {composerBlock}
                       </div>
                     </div>
                   ) : (
-                    <div className="mx-auto w-full max-w-2xl space-y-8">
+                    <div className="mx-auto w-full max-w-2xl space-y-6 md:space-y-8">
                       {messages.map((m) => (
                         <MessageBlock
                           key={m.id}
@@ -2101,18 +2151,31 @@ function ChatInner() {
               onHeightChange={setTerminalHeight}
             />
 
-            {empty ? null : (
-              <div
-                ref={composerRef}
-                className={cn(
-                  "pointer-events-none absolute inset-x-0 z-10 flex justify-center bg-background px-4 pt-3 pb-6",
-                  (activeFilePath || allDiffsOpen) && "hidden"
-                )}
-                style={{ bottom: terminalVisible ? terminalHeight : 0 }}
-              >
-                {composerBlock}
-              </div>
-            )}
+            {composerBlock && !empty ? (
+              terminalVisible ? (
+                <div
+                  ref={composerRef}
+                  className={cn(
+                    "pointer-events-none absolute inset-x-0 z-10 flex justify-center bg-background px-3 pt-3 pb-4 md:px-4 md:pb-6",
+                    (activeFilePath || allDiffsOpen) && "hidden"
+                  )}
+                  style={{
+                    bottom: terminalVisible
+                      ? terminalHeight
+                      : "env(safe-area-inset-bottom)",
+                  }}
+                >
+                  {composerBlock}
+                </div>
+              ) : (
+                <div
+                  ref={composerRef}
+                  className="shrink-0 bg-background px-3 pt-1 pb-[calc(0.625rem+env(safe-area-inset-bottom))] md:px-4 md:pt-3 md:pb-[calc(1.5rem+env(safe-area-inset-bottom))]"
+                >
+                  <div className="flex justify-center">{composerBlock}</div>
+                </div>
+              )
+            ) : null}
           </>
         )}
       </div>
@@ -2158,6 +2221,33 @@ function ChatInner() {
   )
 }
 
+// New-chat composer settings: on mobile each control becomes a full-width row
+// with a leading label (the chips have no room for tooltips on touch); on `sm+`
+// the wrapper collapses to just the inline chip so the desktop bar is unchanged.
+function ComposerSettingRow({
+  label,
+  className,
+  children,
+}: {
+  label: string
+  className?: string
+  children: ReactNode
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between gap-3 sm:w-auto sm:justify-start sm:gap-0",
+        className
+      )}
+    >
+      <span className="pl-1.5 text-xs text-muted-foreground sm:hidden">
+        {label}
+      </span>
+      {children}
+    </div>
+  )
+}
+
 function AllDiffsPanel({
   diff,
   diffStyle,
@@ -2195,7 +2285,7 @@ function AllDiffsPanel({
 
 function SignedOutScreen() {
   return (
-    <div className="fixed inset-0 flex overflow-hidden bg-background px-6 text-foreground">
+    <div className="fixed inset-x-0 top-0 flex h-[100dvh] overflow-hidden bg-background px-6 text-foreground">
       <div className="flex min-h-0 flex-1 items-center justify-center">
         <div className="w-full max-w-sm text-center">
           <h1 className="text-3xl font-medium tracking-tight text-foreground/90">
@@ -2276,29 +2366,32 @@ function TopBar({
     showSandboxSection || Boolean(sandboxId || canOpenFiles)
 
   return (
-    <header className="flex h-[3.25rem] shrink-0 items-center gap-2.5 border-b border-border/60 bg-background/80 pr-3 pl-2 backdrop-blur-xl">
+    <header className="flex h-[calc(3.25rem+env(safe-area-inset-top))] shrink-0 items-center gap-2.5 border-b border-border/60 bg-background/80 pt-[env(safe-area-inset-top)] pr-3 pl-2 backdrop-blur-xl">
       <button
         type="button"
         onClick={onToggleSidebar}
         aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
         title={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
-        className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className="inline-flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:size-7"
       >
         <PanelLeft className="size-3.5" />
       </button>
       <span
         title={displayTitle === fullTitle ? undefined : fullTitle}
         aria-label={fullTitle}
-        className="max-w-[45vw] min-w-0 truncate text-sm font-medium text-foreground/85 md:max-w-[42ch]"
+        className="max-w-[55vw] min-w-0 truncate text-sm font-medium text-foreground/85 md:max-w-[42ch]"
       >
         {displayTitle}
       </span>
       {repo ? (
         <>
-          <span className="text-muted-foreground/40" aria-hidden>
+          <span
+            className="hidden text-muted-foreground/40 sm:inline"
+            aria-hidden
+          >
             /
           </span>
-          <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <div className="hidden min-w-0 items-center gap-1.5 text-xs text-muted-foreground sm:flex">
             <Folder className="size-4 shrink-0" />
             <span className="truncate">{repo}</span>
           </div>
@@ -2325,46 +2418,212 @@ function TopBar({
         ) : null}
 
         {showToolsSection ? (
-          <div className="flex items-center gap-0.5">
-            <TopBarIconButton
-              onClick={onToggleTerminal}
-              onFocus={() => warmBrowserTerminal(sandboxId)}
-              onPointerDown={() => warmBrowserTerminal(sandboxId)}
-              onPointerEnter={() => warmBrowserTerminal(sandboxId)}
-              active={terminalOpen}
-              disabled={!sandboxId && !sandboxPending}
-              label={
-                terminalOpen
-                  ? "Hide sandbox terminals"
-                  : "Show sandbox terminals"
-              }
-            >
-              <SquareTerminal className="size-3.5" />
-            </TopBarIconButton>
-            <TopBarIconButton
-              onClick={onToggleFiles}
-              active={filesOpen}
-              disabled={!canOpenFiles}
-              label={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
-            >
-              {filesOpen ? (
-                <FolderOpen className="size-3.5" />
-              ) : (
-                <Folder className="size-3.5" />
-              )}
-            </TopBarIconButton>
-            <TopBarIconButton
-              onClick={onToggleGithub}
-              active={githubOpen}
-              disabled={!canOpenGithub}
-              label={githubOpen ? "Hide GitHub panel" : "Show GitHub panel"}
-            >
-              <GitBranch className="size-3.5" />
-            </TopBarIconButton>
-          </div>
+          <>
+            <div className="hidden items-center gap-0.5 md:flex">
+              <TopBarIconButton
+                onClick={onToggleTerminal}
+                onFocus={() => warmBrowserTerminal(sandboxId)}
+                onPointerDown={() => warmBrowserTerminal(sandboxId)}
+                onPointerEnter={() => warmBrowserTerminal(sandboxId)}
+                active={terminalOpen}
+                disabled={!sandboxId && !sandboxPending}
+                label={
+                  terminalOpen
+                    ? "Hide sandbox terminals"
+                    : "Show sandbox terminals"
+                }
+              >
+                <SquareTerminal className="size-3.5" />
+              </TopBarIconButton>
+              <TopBarIconButton
+                onClick={onToggleFiles}
+                active={filesOpen}
+                disabled={!canOpenFiles}
+                label={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
+              >
+                {filesOpen ? (
+                  <FolderOpen className="size-3.5" />
+                ) : (
+                  <Folder className="size-3.5" />
+                )}
+              </TopBarIconButton>
+              <TopBarIconButton
+                onClick={onToggleGithub}
+                active={githubOpen}
+                disabled={!canOpenGithub}
+                label={githubOpen ? "Hide GitHub panel" : "Show GitHub panel"}
+              >
+                <GitBranch className="size-3.5" />
+              </TopBarIconButton>
+            </div>
+            <TopBarToolsMenu
+              className="md:hidden"
+              sandboxId={sandboxId}
+              sandboxPending={sandboxPending}
+              terminalOpen={terminalOpen}
+              onToggleTerminal={onToggleTerminal}
+              filesOpen={filesOpen}
+              canOpenFiles={canOpenFiles}
+              onToggleFiles={onToggleFiles}
+              githubOpen={githubOpen}
+              canOpenGithub={canOpenGithub}
+              onToggleGithub={onToggleGithub}
+            />
+          </>
         ) : null}
       </div>
     </header>
+  )
+}
+
+function TopBarToolsMenu({
+  className,
+  sandboxId,
+  sandboxPending,
+  terminalOpen,
+  onToggleTerminal,
+  filesOpen,
+  canOpenFiles,
+  onToggleFiles,
+  githubOpen,
+  canOpenGithub,
+  onToggleGithub,
+}: {
+  className?: string
+  sandboxId: string | null
+  sandboxPending: boolean
+  terminalOpen: boolean
+  onToggleTerminal: () => void
+  filesOpen: boolean
+  canOpenFiles: boolean
+  onToggleFiles: () => void
+  githubOpen: boolean
+  canOpenGithub: boolean
+  onToggleGithub: () => void
+}) {
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(
+    null
+  )
+  const open = menuPos !== null
+  const triggerRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function onKey(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") setMenuPos(null)
+    }
+    document.addEventListener("keydown", onKey)
+    return () => document.removeEventListener("keydown", onKey)
+  }, [open])
+
+  function openMenu() {
+    const rect = triggerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    setMenuPos({
+      top: rect.bottom + 6,
+      right: Math.max(8, window.innerWidth - rect.right),
+    })
+  }
+
+  const anyOpen = terminalOpen || filesOpen || githubOpen
+  const items = [
+    {
+      key: "terminal",
+      label: terminalOpen ? "Hide terminals" : "Terminals",
+      icon: <SquareTerminal className="size-4" />,
+      active: terminalOpen,
+      disabled: !sandboxId && !sandboxPending,
+      onSelect: onToggleTerminal,
+    },
+    {
+      key: "files",
+      label: filesOpen ? "Hide files" : "Files",
+      icon: filesOpen ? (
+        <FolderOpen className="size-4" />
+      ) : (
+        <Folder className="size-4" />
+      ),
+      active: filesOpen,
+      disabled: !canOpenFiles,
+      onSelect: onToggleFiles,
+    },
+    {
+      key: "github",
+      label: githubOpen ? "Hide GitHub" : "GitHub",
+      icon: <GitBranch className="size-4" />,
+      active: githubOpen,
+      disabled: !canOpenGithub,
+      onSelect: onToggleGithub,
+    },
+  ]
+
+  return (
+    <div className={cn("relative", className)}>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => {
+          if (open) {
+            setMenuPos(null)
+            return
+          }
+          warmBrowserTerminal(sandboxId)
+          openMenu()
+        }}
+        aria-label="Sandbox tools"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className={cn(
+          "inline-flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+          (open || anyOpen) && "bg-accent text-foreground"
+        )}
+      >
+        <PanelRight className="size-[18px]" />
+      </button>
+      {open && menuPos && typeof document !== "undefined"
+        ? createPortal(
+            <>
+              <button
+                type="button"
+                aria-label="Close tools menu"
+                className="fixed inset-0 z-[60] cursor-default border-0 bg-transparent p-0"
+                onClick={() => setMenuPos(null)}
+              />
+              <div
+                role="menu"
+                tabIndex={-1}
+                style={{ top: menuPos.top, right: menuPos.right }}
+                className="fixed z-[61] min-w-44 overflow-hidden rounded-2xl border border-black/[0.06] bg-popover p-1.5 text-popover-foreground shadow-[0_10px_30px_-12px_rgba(0,0,0,0.18)] dark:border-white/10"
+              >
+                {items.map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    role="menuitem"
+                    disabled={item.disabled}
+                    onClick={() => {
+                      item.onSelect()
+                      setMenuPos(null)
+                    }}
+                    className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-40"
+                  >
+                    <span className="shrink-0 text-muted-foreground">
+                      {item.icon}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">
+                      {item.label}
+                    </span>
+                    {item.active ? (
+                      <Check className="size-4 shrink-0" strokeWidth={2.25} />
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            </>,
+            document.body
+          )
+        : null}
+    </div>
   )
 }
 
@@ -2402,7 +2661,7 @@ function TopBarIconButton({
       aria-pressed={active}
       disabled={disabled}
       className={cn(
-        "inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
+        "inline-flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40 md:size-7",
         active && "bg-accent text-foreground"
       )}
     >
@@ -2629,7 +2888,7 @@ function ConfirmDialog({
   return (
     <dialog
       open
-      className="fixed inset-0 z-50 m-0 flex h-screen max-h-none w-screen max-w-none items-center justify-center border-0 bg-black/40 p-0 backdrop-blur-sm"
+      className="fixed inset-0 z-50 m-0 flex h-dvh max-h-none w-screen max-w-none items-center justify-center border-0 bg-black/40 p-4 backdrop-blur-sm"
       onCancel={(e) => {
         e.preventDefault()
         onCancel()
@@ -2654,7 +2913,7 @@ function ConfirmDialog({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-xl border border-border/70 px-3 py-1.5 text-sm text-foreground/80 transition-colors hover:bg-muted"
+            className="rounded-xl border border-border/70 px-3 py-2 text-sm text-foreground/80 transition-colors hover:bg-muted"
           >
             {cancelLabel}
           </button>
@@ -2662,7 +2921,7 @@ function ConfirmDialog({
             type="button"
             onClick={onConfirm}
             className={cn(
-              "rounded-xl px-3 py-1.5 text-sm transition-colors",
+              "rounded-xl px-3 py-2 text-sm transition-colors",
               destructive
                 ? "text-destructive-foreground bg-destructive hover:bg-destructive/90"
                 : "bg-foreground text-background hover:bg-foreground/90"
