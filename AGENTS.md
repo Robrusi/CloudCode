@@ -49,8 +49,8 @@ Long term maintainability is a core priority. If you add new functionality, firs
   effects.
 - `lib/daytona-*`: Daytona sandbox lifecycle, command execution, terminal, and
   sandbox filesystem integration.
-- `lib/sandbox-*`: sandbox authorization, environment, presets, file cache,
-  preview proxy, and GitHub setup helpers.
+- `lib/sandbox-*`: sandbox authorization, environment, presets, file cache, and
+  GitHub setup helpers.
 - `lib/codex-*`: Codex auth, run log parsing, worker loading, branch naming, and
   run orchestration helpers.
 - `lib/github-*`: GitHub OAuth and token handling.
