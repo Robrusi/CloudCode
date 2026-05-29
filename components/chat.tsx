@@ -5,11 +5,9 @@ import { useMutation, useQuery } from "convex/react"
 import {
   ArrowUp,
   ChevronDown,
-  ExternalLink,
   Folder,
   FolderOpen,
   GitBranch,
-  Globe,
   Loader2,
   PanelLeft,
   Plus,
@@ -283,7 +281,6 @@ const BRANCH_MODE_KEY = "cloudcode:branchMode"
 const BRANCH_NAME_KEY = "cloudcode:branchName"
 const MODEL_KEY = "cloudcode:model"
 const PRESET_KEY = "cloudcode:sandboxPresetId"
-const SANDBOX_URL_KEY = "cloudcode:sandboxUrl"
 
 function hasCachedRunKey<K extends keyof CachedRunState>(
   state: CachedRunState | undefined,
@@ -2329,10 +2326,6 @@ function TopBar({
 
         {showToolsSection ? (
           <div className="flex items-center gap-0.5">
-            <SandboxUrlOpener
-              sandboxId={sandboxId}
-              sandboxPending={sandboxPending}
-            />
             <TopBarIconButton
               onClick={onToggleTerminal}
               onFocus={() => warmBrowserTerminal(sandboxId)}
@@ -2372,197 +2365,6 @@ function TopBar({
         ) : null}
       </div>
     </header>
-  )
-}
-
-function SandboxUrlOpener({
-  sandboxId,
-  sandboxPending,
-}: {
-  sandboxId: string | null
-  sandboxPending: boolean
-}) {
-  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(
-    null
-  )
-  const open = menuPos !== null
-  const [input, setInput] = useState(() =>
-    typeof window === "undefined"
-      ? "localhost:3000"
-      : (localStorage.getItem(SANDBOX_URL_KEY) ?? "localhost:3000")
-  )
-  const [opening, setOpening] = useState(false)
-  const [error, setError] = useState("")
-  const triggerRef = useRef<HTMLButtonElement>(null)
-  const popoverRef = useRef<HTMLFormElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
-  const disabled = !sandboxId
-  const label = sandboxPending ? "Waiting for sandbox URL" : "Open sandbox URL"
-
-  function openPopover() {
-    const rect = triggerRef.current?.getBoundingClientRect()
-    if (!rect) return
-    setMenuPos({
-      top: rect.bottom + 8,
-      right: Math.max(8, window.innerWidth - rect.right),
-    })
-  }
-
-  function closePopover() {
-    setMenuPos(null)
-  }
-
-  useEffect(() => {
-    if (!open) return
-
-    setError("")
-    const frame = window.requestAnimationFrame(() => {
-      inputRef.current?.focus()
-      inputRef.current?.select()
-    })
-
-    function onPointerDown(event: globalThis.PointerEvent) {
-      const target = event.target as Node
-      if (popoverRef.current?.contains(target)) return
-      if (triggerRef.current?.contains(target)) return
-      closePopover()
-    }
-
-    function onKeyDown(event: globalThis.KeyboardEvent) {
-      if (event.key === "Escape") closePopover()
-    }
-
-    document.addEventListener("pointerdown", onPointerDown)
-    document.addEventListener("keydown", onKeyDown)
-    return () => {
-      window.cancelAnimationFrame(frame)
-      document.removeEventListener("pointerdown", onPointerDown)
-      document.removeEventListener("keydown", onKeyDown)
-    }
-  }, [open])
-
-  async function openSandboxUrl(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!sandboxId || opening) return
-
-    const url = input.trim()
-    if (!url) {
-      setError("Enter a sandbox URL.")
-      return
-    }
-
-    setOpening(true)
-    setError("")
-    localStorage.setItem(SANDBOX_URL_KEY, url)
-
-    const previewWindow = window.open("about:blank", "_blank")
-    if (previewWindow) {
-      previewWindow.opener = null
-      previewWindow.document.title = "Opening sandbox preview"
-      previewWindow.document.body.style.margin = "0"
-      previewWindow.document.body.style.font =
-        "14px system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
-      previewWindow.document.body.style.display = "grid"
-      previewWindow.document.body.style.placeItems = "center"
-      previewWindow.document.body.textContent = "Opening sandbox preview..."
-    }
-
-    try {
-      const res = await fetch("/api/sandbox/open-url", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sandboxId,
-          url,
-        }),
-      })
-      const data = (await res.json().catch(() => ({}))) as {
-        error?: unknown
-        url?: unknown
-      }
-      if (!res.ok || typeof data.url !== "string") {
-        throw new Error(
-          typeof data.error === "string"
-            ? data.error
-            : "Failed to open sandbox URL."
-        )
-      }
-      if (previewWindow && !previewWindow.closed) {
-        previewWindow.location.replace(data.url)
-      } else {
-        const opened = window.open(data.url, "_blank", "noopener,noreferrer")
-        if (!opened) throw new Error("Allow popups to open the sandbox URL.")
-      }
-
-      closePopover()
-    } catch (err) {
-      if (previewWindow && !previewWindow.closed) previewWindow.close()
-      setError(
-        err instanceof Error ? err.message : "Failed to open sandbox URL."
-      )
-    } finally {
-      setOpening(false)
-    }
-  }
-
-  return (
-    <>
-      <TopBarIconButton
-        ref={triggerRef}
-        onClick={() => (open ? closePopover() : openPopover())}
-        active={open}
-        disabled={disabled}
-        label={label}
-      >
-        <Globe className="size-3.5" />
-      </TopBarIconButton>
-      {open && menuPos && typeof document !== "undefined"
-        ? createPortal(
-            <form
-              ref={popoverRef}
-              onSubmit={openSandboxUrl}
-              style={{ top: menuPos.top, right: menuPos.right }}
-              className="fixed z-[61] w-[min(22rem,calc(100vw-1.5rem))] overflow-hidden rounded-2xl border border-black/[0.06] bg-popover p-3.5 text-popover-foreground shadow-[0_10px_30px_-12px_rgba(0,0,0,0.18)] dark:border-white/10"
-            >
-              <div className="text-sm font-medium text-foreground">
-                Open in browser
-              </div>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                Forward a sandbox port or URL through the preview proxy.
-              </p>
-              <input
-                ref={inputRef}
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-                placeholder="localhost:3000"
-                aria-label="Sandbox URL"
-                disabled={opening}
-                className="mt-3 h-9 w-full min-w-0 rounded-xl border border-border/70 bg-background px-3 font-mono text-[13px] text-foreground transition-colors outline-none placeholder:font-sans placeholder:text-muted-foreground/50 focus:border-ring focus:ring-3 focus:ring-ring/20 disabled:opacity-60"
-              />
-              {error ? (
-                <div className="mt-2 text-xs leading-5 text-destructive">
-                  {error}
-                </div>
-              ) : null}
-              <div className="mt-3 flex justify-end">
-                <button
-                  type="submit"
-                  disabled={opening || !input.trim()}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-xl bg-foreground px-3 text-sm font-medium text-background transition-colors hover:bg-foreground/90 disabled:pointer-events-none disabled:opacity-50"
-                >
-                  {opening ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <ExternalLink className="size-3.5" />
-                  )}
-                  <span>Open</span>
-                </button>
-              </div>
-            </form>,
-            document.body
-          )
-        : null}
-    </>
   )
 }
 

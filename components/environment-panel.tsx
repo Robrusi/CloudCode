@@ -423,7 +423,9 @@ export function EnvironmentPanel({ sandboxId }: { sandboxId: string | null }) {
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-4 pb-4">
         <div className="flex items-center justify-between gap-2 px-0.5 pb-3">
           <div className="flex min-w-0 items-center gap-2">
-            <h2 className="text-sm font-medium text-foreground/85">Secrets</h2>
+            <h2 className="truncate text-sm font-medium text-foreground/85">
+              Secrets
+            </h2>
             {status === "loading" ? (
               <Loader2
                 aria-label="Refreshing"
@@ -436,8 +438,9 @@ export function EnvironmentPanel({ sandboxId }: { sandboxId: string | null }) {
               <button
                 aria-label={allRevealed ? "Hide values" : "Reveal values"}
                 aria-pressed={allRevealed}
+                title={allRevealed ? "Hide values" : "Reveal values"}
                 className={cn(
-                  "flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs transition-colors hover:bg-muted hover:text-foreground",
+                  "grid size-7 place-items-center rounded-md transition-colors hover:bg-muted hover:text-foreground",
                   allRevealed
                     ? "bg-muted text-foreground"
                     : "text-muted-foreground"
@@ -450,25 +453,24 @@ export function EnvironmentPanel({ sandboxId }: { sandboxId: string | null }) {
                 ) : (
                   <Eye className="size-3.5" />
                 )}
-                {allRevealed ? "Hide" : "Reveal"}
               </button>
             ) : null}
             <button
               aria-label="Paste .env file"
               aria-pressed={pasting}
+              title="Paste .env file"
               className={cn(
-                "flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs transition-colors hover:bg-muted hover:text-foreground",
+                "grid size-7 place-items-center rounded-md transition-colors hover:bg-muted hover:text-foreground",
                 pasting ? "bg-muted text-foreground" : "text-muted-foreground"
               )}
               onClick={pasting ? cancelPasting : startPasting}
               type="button"
             >
               <ClipboardPaste className="size-3.5" />
-              Paste
             </button>
             <button
               aria-label="Add variable"
-              className="flex h-8 items-center gap-1.5 rounded-lg border border-border/60 bg-background px-2.5 text-xs text-foreground/80 transition-colors hover:bg-muted"
+              className="flex h-7 items-center gap-1.5 rounded-md border border-border/60 bg-background px-2.5 text-xs text-foreground/80 transition-colors hover:bg-muted"
               onClick={startAdding}
               type="button"
             >
@@ -483,7 +485,7 @@ export function EnvironmentPanel({ sandboxId }: { sandboxId: string | null }) {
             <textarea
               ref={pasteRef}
               aria-label="Paste .env file contents"
-              className="block max-h-72 min-h-32 w-full resize-y bg-transparent px-4 py-3 font-mono text-[13px] leading-5 text-foreground outline-none placeholder:text-muted-foreground/40"
+              className="block max-h-72 min-h-32 w-full resize-y bg-transparent px-4 py-3 text-[13px] leading-5 text-foreground outline-none placeholder:text-muted-foreground/40"
               onChange={(event) => setPasteText(event.target.value)}
               placeholder={
                 "# Paste your .env file\nAPI_KEY=sk-...\nDATABASE_URL=postgres://..."
@@ -602,13 +604,13 @@ export function EnvironmentPanel({ sandboxId }: { sandboxId: string | null }) {
 
 const nameInputClass = cn(
   "w-full min-w-0 border-0 bg-transparent p-0 outline-none",
-  "font-mono text-[13px] font-medium text-foreground",
+  "text-[13px] font-medium text-foreground",
   "placeholder:font-medium placeholder:text-muted-foreground/40"
 )
 
 const valueInputClass = cn(
   "w-full min-w-0 border-0 bg-transparent p-0 outline-none",
-  "font-mono text-[13px] text-muted-foreground",
+  "text-[13px] text-muted-foreground",
   "placeholder:text-muted-foreground/40 focus:text-foreground/80"
 )
 

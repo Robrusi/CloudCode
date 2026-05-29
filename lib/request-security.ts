@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server"
 
-function firstHeaderValue(value: string | null) {
-  return value?.split(",")[0]?.trim() || null
-}
+import { firstHeaderValue, forwardedHeaderParts } from "@/lib/request-headers"
 
 function normalizeOrigin(value: string | null) {
   if (!value) return null
@@ -18,12 +16,15 @@ function requestOrigins(request: Request) {
   const url = new URL(request.url)
   const origins = new Set<string>([url.origin])
   const requestProtocol = url.protocol.replace(/:$/, "")
+  const forwarded = forwardedHeaderParts(request.headers.get("forwarded"))
   const forwardedProtocol =
     firstHeaderValue(request.headers.get("x-forwarded-proto")) ??
+    forwarded.proto ??
     requestProtocol
   const hosts = [
     firstHeaderValue(request.headers.get("host")),
     firstHeaderValue(request.headers.get("x-forwarded-host")),
+    forwarded.host,
   ].filter((host): host is string => Boolean(host))
 
   for (const host of hosts) {
