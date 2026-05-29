@@ -29,7 +29,7 @@ const chipTrigger =
   "flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/30 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50"
 
 const popoverPanel =
-  "absolute z-10 min-w-44 overflow-hidden rounded-2xl border border-border bg-popover p-1.5 text-popover-foreground shadow-lg"
+  "absolute z-10 max-w-[calc(100vw-1.5rem)] min-w-44 overflow-hidden rounded-2xl border border-black/[0.08] bg-popover p-1.5 text-popover-foreground dark:border-white/10"
 
 const popoverItem =
   "flex w-full items-center justify-between gap-6 rounded-xl px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-muted"
@@ -162,12 +162,9 @@ export function RepoChip({
       .slice(0, 8)
 
     return (
-      <div className="relative">
-        <div className="flex h-8 items-center rounded-lg border border-border bg-background pr-1 pl-2.5 text-xs focus-within:ring-3 focus-within:ring-ring/30">
-          <GitBranch className="mr-1.5 size-3.5 shrink-0 text-muted-foreground" />
-          <span className="text-muted-foreground/70 select-none">
-            github.com/
-          </span>
+      <div className="relative min-w-0">
+        <div className="flex h-8 min-w-0 items-center gap-1.5 rounded-lg border border-border bg-background pr-1 pl-2.5 text-xs focus-within:ring-3 focus-within:ring-ring/30">
+          <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
           <input
             ref={setFocusedInputRef}
             aria-label="Repository"
@@ -185,18 +182,18 @@ export function RepoChip({
               }
             }}
             placeholder="owner/repo"
-            className="w-44 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60"
+            className="w-36 min-w-0 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60 sm:w-40"
             spellCheck={false}
           />
           {reposLoading ? (
-            <LoaderCircle className="ml-1.5 size-3.5 shrink-0 animate-spin text-muted-foreground" />
+            <LoaderCircle className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
           ) : null}
         </div>
         {visibleRepos.length || reposError ? (
           <div
             className={cn(
               popoverPanel,
-              "top-10 left-0 w-72 max-w-[calc(100vw-2rem)]"
+              "top-10 right-0 w-72 max-w-[calc(100vw-2rem)] sm:right-auto sm:left-0"
             )}
           >
             {visibleRepos.map((repo) => (
@@ -372,7 +369,7 @@ export function BranchChip({
           <div
             className={cn(
               popoverPanel,
-              "top-10 left-0 w-60 max-w-[calc(100vw-2rem)]"
+              "top-10 right-0 w-60 max-w-[calc(100vw-2rem)] sm:right-auto sm:left-0"
             )}
           >
             {visibleBranches.map((branch) => (
@@ -502,7 +499,12 @@ export function BranchTargetChip({
         {locked ? null : <ChevronDown className="size-3 opacity-60" />}
       </button>
       {open && !locked ? (
-        <div className={cn(popoverPanel, "bottom-10 left-0 w-64")}>
+        <div
+          className={cn(
+            popoverPanel,
+            "right-0 bottom-10 w-64 sm:right-auto sm:left-0"
+          )}
+        >
           <div className="px-3 pt-1.5 pb-1 text-xs text-muted-foreground">
             Branch
           </div>
@@ -615,7 +617,12 @@ export function PresetPill({
         {locked ? null : <ChevronDown className="size-3 opacity-60" />}
       </button>
       {open && !locked ? (
-        <div className={cn(popoverPanel, "bottom-10 left-0 min-w-52")}>
+        <div
+          className={cn(
+            popoverPanel,
+            "right-0 bottom-10 min-w-52 sm:right-auto sm:left-0"
+          )}
+        >
           <div className="px-3 pt-1.5 pb-1 text-xs text-muted-foreground">
             Preset
           </div>

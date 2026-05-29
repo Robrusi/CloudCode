@@ -157,7 +157,7 @@ export function SettingsScreen({
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
-        <div className="mx-auto w-full max-w-2xl px-6 pt-10 pb-20">
+        <div className="mx-auto w-full max-w-2xl px-4 pt-10 pb-[calc(5rem+env(safe-area-inset-bottom))] md:px-6">
           <h1 className="text-2xl font-medium tracking-tight text-foreground/90">
             Settings
           </h1>

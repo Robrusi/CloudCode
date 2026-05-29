@@ -130,6 +130,8 @@
   html,
   body {
     @apply h-full overflow-hidden;
+    /* Prevent iOS from rubber-banding the whole document on touch scroll. */
+    overscroll-behavior: none;
   }
   body {
     @apply bg-background text-foreground;
@@ -139,6 +141,11 @@
   }
   html {
     @apply font-sans;
+    /* Keep font sizes stable in landscape and drop the grey tap flash so the
+       UI feels native on touch devices. */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
   }
   *::-webkit-scrollbar {
     width: 2px;
@@ -163,5 +170,20 @@
   }
   *::-webkit-scrollbar-corner {
     background: transparent;
+  }
+}
+
+/* iOS zooms the page when focused editable text is under 16px. Floor every
+   editable control at 16px on touch devices so focusing text never triggers a
+   zoom. `!important` is required to beat Tailwind's `text-xs`/`text-sm` utility
+   classes, and `pointer: coarse` covers phones/tablets in any orientation while
+   leaving mouse/desktop layouts at their denser sizing. */
+@media (pointer: coarse) {
+  input,
+  textarea,
+  select,
+  [contenteditable]:not([contenteditable="false"]),
+  [role="textbox"] {
+    font-size: 16px !important;
   }
 }

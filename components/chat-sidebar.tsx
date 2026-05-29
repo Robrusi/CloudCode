@@ -3,6 +3,7 @@
 import { useClerk } from "@clerk/nextjs"
 import {
   ChevronRight,
+  Ellipsis,
   LaptopMinimal,
   Plus,
   Settings,
@@ -155,7 +156,7 @@ export function Sidebar({
 
   return (
     <aside
-      className="fixed inset-0 z-40 flex h-full min-h-0 w-full flex-col overflow-hidden border-r border-border/60 bg-sidebar text-sidebar-foreground md:relative md:inset-auto md:z-auto md:w-[var(--panel-width)] md:shrink-0"
+      className="fixed inset-0 z-40 flex h-full min-h-0 w-full flex-col overflow-hidden border-r border-border/60 bg-sidebar pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-sidebar-foreground md:relative md:inset-auto md:z-auto md:w-[var(--panel-width)] md:shrink-0 md:pt-0 md:pb-0"
       style={{ "--panel-width": `${width}px` } as CSSProperties}
     >
       <ResizeHandle
@@ -381,27 +382,49 @@ function SidebarItem({
           className="min-w-0 flex-1 truncate rounded-md bg-background px-2 py-1 text-[0.8125rem] text-foreground ring-1 ring-border outline-none focus:ring-foreground/40"
         />
       ) : (
-        <button
-          type="button"
-          onClick={onSelect}
-          className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left"
-        >
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="min-w-0 truncate text-[0.8125rem] text-foreground">
-              {chat.title || "Untitled"}
+        <>
+          <button
+            type="button"
+            onClick={onSelect}
+            className="flex min-w-0 flex-1 items-center gap-2 py-2 pr-1 pl-2.5 text-left md:pr-2.5"
+          >
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="min-w-0 truncate text-[0.8125rem] text-foreground">
+                {chat.title || "Untitled"}
+              </span>
+              <span className="min-w-0 truncate text-[0.6875rem] text-muted-foreground">
+                {relativeTime(chat.lastUserMessageAt)}
+              </span>
+            </div>
+            <span className="flex size-5 shrink-0 items-center justify-center">
+              {pending ? (
+                <BrailleSpinner className="text-muted-foreground" />
+              ) : (
+                <SandboxDot state={chat.sandboxState} starting={false} />
+              )}
             </span>
-            <span className="min-w-0 truncate text-[0.6875rem] text-muted-foreground">
-              {relativeTime(chat.lastUserMessageAt)}
-            </span>
-          </div>
-          <span className="flex size-5 shrink-0 items-center justify-center">
-            {pending ? (
-              <BrailleSpinner className="text-muted-foreground" />
-            ) : (
-              <SandboxDot state={chat.sandboxState} starting={false} />
-            )}
-          </span>
-        </button>
+          </button>
+          <button
+            type="button"
+            aria-label="Chat options"
+            onClick={(e) => {
+              e.stopPropagation()
+              const rect = e.currentTarget.getBoundingClientRect()
+              const menuWidth = 180
+              const menuHeight = 96
+              setMenu({
+                x: Math.max(
+                  8,
+                  Math.min(rect.right, window.innerWidth - 8) - menuWidth
+                ),
+                y: Math.min(rect.bottom + 4, window.innerHeight - menuHeight),
+              })
+            }}
+            className="mr-1 grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
+          >
+            <Ellipsis className="size-4" />
+          </button>
+        </>
       )}
 
       {menu ? (

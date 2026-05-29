@@ -649,7 +649,7 @@ function FileViewer({
           text={content ?? ""}
           repoName={null}
           onOpenFile={onOpenFile ?? (() => undefined)}
-          className="mx-auto max-w-3xl px-6 py-5 text-sm leading-6"
+          className="mx-auto max-w-3xl px-4 py-5 text-sm leading-6 md:px-6"
         />
       </div>
     )

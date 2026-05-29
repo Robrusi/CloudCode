@@ -424,7 +424,7 @@ export function FileBrowser({
 
   return (
     <aside
-      className="fixed inset-0 z-40 flex h-full min-h-0 w-full flex-col overflow-hidden border-l border-border/60 bg-sidebar text-sidebar-foreground md:relative md:inset-auto md:z-auto md:w-[var(--panel-width)] md:shrink-0"
+      className="fixed inset-0 z-40 flex h-full min-h-0 w-full flex-col overflow-hidden border-l border-border/60 bg-sidebar pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-sidebar-foreground md:relative md:inset-auto md:z-auto md:w-[var(--panel-width)] md:shrink-0 md:pt-0 md:pb-0"
       style={{ "--panel-width": `${width}px` } as CSSProperties}
       data-file-browser
     >
@@ -447,7 +447,7 @@ export function FileBrowser({
           <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
         ) : null}
         {view === "diffs" && diffStyle && onDiffStyleChange ? (
-          <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          <div className="ml-auto hidden shrink-0 items-center gap-0.5 md:flex">
             <DiffStyleButton
               active={diffStyle === "unified"}
               label="Unified"
@@ -466,10 +466,7 @@ export function FileBrowser({
           type="button"
           onClick={onClose}
           aria-label="Close file browser"
-          className={cn(
-            "inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground",
-            view === "diffs" && diffStyle && onDiffStyleChange ? "" : "ml-auto"
-          )}
+          className="ml-auto inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
         >
           <X className="size-4" />
         </button>
