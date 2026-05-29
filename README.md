@@ -144,6 +144,14 @@ chat is deleted.
 
 ## Run
 
+Install dependencies first:
+
+```bash
+pnpm install
+```
+
+Then start the dev server:
+
 ```bash
 pnpm dev
 ```
