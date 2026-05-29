@@ -18,6 +18,7 @@ import {
   XCircle,
 } from "lucide-react"
 import {
+  type CSSProperties,
   type ReactNode,
   useCallback,
   useEffect,
@@ -37,6 +38,9 @@ import type {
 } from "@/lib/github-pull-requests"
 import type { SandboxGitFile, SandboxGitStatus } from "@/lib/sandbox-git"
 import { cn } from "@/lib/utils"
+import { ResizeHandle } from "@/components/resize-handle"
+import { useIsMobile } from "@/hooks/use-is-mobile"
+import { useResizablePanel } from "@/hooks/use-resizable-panel"
 
 type PrEntry = PullRequestSummary & { checks: ChecksSummary | null }
 
@@ -76,6 +80,15 @@ export function GithubPanel({
   onClose: () => void
   onOpenFile: (path: string, mode: FileBrowserOpenMode) => void
 }) {
+  const isMobile = useIsMobile()
+  const { width, resizing, onResizeStart, resetWidth } = useResizablePanel({
+    storageKey: "cloudcode:githubPanelWidth",
+    defaultWidth: 304,
+    minWidth: 240,
+    maxWidth: 560,
+    edge: "left",
+    enabled: !isMobile,
+  })
   const [status, setStatus] = useState<SandboxGitStatus | null>(null)
   const [statusError, setStatusError] = useState<string | null>(null)
   const [prData, setPrData] = useState<PrResponse | null>(null)
@@ -301,9 +314,17 @@ export function GithubPanel({
 
   return (
     <aside
-      className="flex h-full min-h-0 w-[19rem] shrink-0 flex-col overflow-hidden border-l border-border/60 bg-sidebar text-sidebar-foreground"
+      className="fixed inset-0 z-40 flex h-full min-h-0 w-full flex-col overflow-hidden border-l border-border/60 bg-sidebar text-sidebar-foreground md:relative md:inset-auto md:z-auto md:w-[var(--panel-width)] md:shrink-0"
+      style={{ "--panel-width": `${width}px` } as CSSProperties}
       data-github-panel
     >
+      <ResizeHandle
+        edge="left"
+        resizing={resizing}
+        onResizeStart={onResizeStart}
+        onReset={resetWidth}
+        ariaLabel="Resize GitHub panel"
+      />
       <header className="flex h-[3.25rem] shrink-0 items-center gap-2 border-b border-border/60 px-3">
         <span className="text-sm font-medium text-foreground/85">GitHub</span>
         {loading || busy ? (

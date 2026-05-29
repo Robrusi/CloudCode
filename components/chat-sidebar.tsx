@@ -8,11 +8,15 @@ import {
   Settings,
   SquarePen,
   User,
+  X,
 } from "lucide-react"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react"
 
 import { ContextMenu } from "@/components/context-menu"
+import { ResizeHandle } from "@/components/resize-handle"
 import type { Id } from "@/convex/_generated/dataModel"
+import { useIsMobile } from "@/hooks/use-is-mobile"
+import { useResizablePanel } from "@/hooks/use-resizable-panel"
 import { cn } from "@/lib/utils"
 
 type SandboxState = "running" | "stopped" | "deleted" | "error"
@@ -107,6 +111,7 @@ export function Sidebar({
   onDelete,
   onRename,
   onShowSettings,
+  onClose,
   brandClassName,
 }: {
   chats: SidebarChat[]
@@ -118,9 +123,19 @@ export function Sidebar({
   onDelete: (id: Id<"threads">) => void
   onRename: (id: Id<"threads">, title: string) => void
   onShowSettings: () => void
+  onClose: () => void
   brandClassName: string
 }) {
   const clerk = useClerk()
+  const isMobile = useIsMobile()
+  const { width, resizing, onResizeStart, resetWidth } = useResizablePanel({
+    storageKey: "cloudcode:sidebarWidth",
+    defaultWidth: 256,
+    minWidth: 200,
+    maxWidth: 480,
+    edge: "right",
+    enabled: !isMobile,
+  })
   const groups = useMemo(() => {
     const map = new Map<string, SidebarChat[]>()
     for (const c of chats) {
@@ -139,8 +154,18 @@ export function Sidebar({
   }, [chats])
 
   return (
-    <aside className="flex h-full min-h-0 w-64 shrink-0 flex-col overflow-hidden border-r border-border/60 bg-sidebar text-sidebar-foreground">
-      <div className="px-[1.125rem] pt-6 pb-5">
+    <aside
+      className="fixed inset-0 z-40 flex h-full min-h-0 w-full flex-col overflow-hidden border-r border-border/60 bg-sidebar text-sidebar-foreground md:relative md:inset-auto md:z-auto md:w-[var(--panel-width)] md:shrink-0"
+      style={{ "--panel-width": `${width}px` } as CSSProperties}
+    >
+      <ResizeHandle
+        edge="right"
+        resizing={resizing}
+        onResizeStart={onResizeStart}
+        onReset={resetWidth}
+        ariaLabel="Resize sidebar"
+      />
+      <div className="flex items-center justify-between px-[1.125rem] pt-6 pb-5">
         <span
           className={cn(
             brandClassName,
@@ -149,21 +174,29 @@ export function Sidebar({
         >
           CloudCode
         </span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close sidebar"
+          className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
+        >
+          <X className="size-5" />
+        </button>
       </div>
       <div className="px-2 pt-2">
         <button
           type="button"
           onClick={onNewChat}
-          className="flex w-full items-center gap-2 rounded-xl px-[0.625rem] py-2 text-sm text-foreground/80 transition-colors hover:bg-muted"
+          className="flex w-full items-center gap-2 rounded-xl px-[0.625rem] py-2 text-[0.8125rem] text-foreground/80 transition-colors hover:bg-muted"
         >
-          <SquarePen className="size-3.5 shrink-0" />
+          <SquarePen className="size-3 shrink-0" />
           <span>New chat</span>
         </button>
       </div>
 
       <div className="mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-4">
         {groups.length === 0 ? (
-          <div className="px-3 pt-4 text-xs text-muted-foreground/80">
+          <div className="px-3 pt-4 text-[0.6875rem] text-muted-foreground/80">
             No chats yet
           </div>
         ) : (
@@ -190,21 +223,21 @@ export function Sidebar({
           type="button"
           onClick={onShowSettings}
           className={cn(
-            "flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-sm transition-colors",
+            "flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-[0.8125rem] transition-colors",
             currentView === "settings"
               ? "bg-muted text-foreground"
               : "text-foreground/80 hover:bg-muted"
           )}
         >
-          <Settings className="size-4" />
+          <Settings className="size-3.5" />
           <span className="truncate">Settings</span>
         </button>
         <button
           type="button"
           onClick={() => clerk.openUserProfile()}
-          className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-sm text-foreground/80 transition-colors hover:bg-muted"
+          className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-[0.8125rem] text-foreground/80 transition-colors hover:bg-muted"
         >
-          <User className="size-4" />
+          <User className="size-3.5" />
           <span className="truncate">User</span>
         </button>
       </div>
@@ -235,7 +268,7 @@ function FolderGroup({
 
   return (
     <div>
-      <div className="group/folder flex w-full items-center gap-1 px-2.5 py-1.5 text-sm text-muted-foreground">
+      <div className="group/folder flex w-full items-center gap-1 px-2.5 py-1.5 text-[0.8125rem] text-muted-foreground">
         <button
           type="button"
           onClick={() => setOpen(!open)}
@@ -243,7 +276,7 @@ function FolderGroup({
         >
           <ChevronRight
             className={cn(
-              "size-3.5 shrink-0 transition-transform",
+              "size-3 shrink-0 transition-transform",
               open && "rotate-90"
             )}
           />
@@ -255,7 +288,7 @@ function FolderGroup({
           aria-label={`New chat in ${label}`}
           className="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
-          <Plus className="size-3.5" />
+          <Plus className="size-3" />
         </button>
       </div>
       {open && (
@@ -345,7 +378,7 @@ function SidebarItem({
             }
           }}
           onClick={(e) => e.stopPropagation()}
-          className="min-w-0 flex-1 truncate rounded-md bg-background px-2 py-1 text-sm text-foreground ring-1 ring-border outline-none focus:ring-foreground/40"
+          className="min-w-0 flex-1 truncate rounded-md bg-background px-2 py-1 text-[0.8125rem] text-foreground ring-1 ring-border outline-none focus:ring-foreground/40"
         />
       ) : (
         <button
@@ -354,10 +387,10 @@ function SidebarItem({
           className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left"
         >
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="min-w-0 truncate text-sm text-foreground">
+            <span className="min-w-0 truncate text-[0.8125rem] text-foreground">
               {chat.title || "Untitled"}
             </span>
-            <span className="min-w-0 truncate text-xs text-muted-foreground">
+            <span className="min-w-0 truncate text-[0.6875rem] text-muted-foreground">
               {relativeTime(chat.lastUserMessageAt)}
             </span>
           </div>

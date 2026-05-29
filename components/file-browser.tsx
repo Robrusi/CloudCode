@@ -29,6 +29,9 @@ import {
   writeCachedFileList,
 } from "@/lib/sandbox-file-cache"
 import { EnvironmentPanel } from "@/components/environment-panel"
+import { ResizeHandle } from "@/components/resize-handle"
+import { useIsMobile } from "@/hooks/use-is-mobile"
+import { useResizablePanel } from "@/hooks/use-resizable-panel"
 
 type FileEntry = { path: string; type: "file" | "dir" }
 export type FileBrowserOpenMode = "diff" | "file" | "preview"
@@ -151,6 +154,15 @@ export function FileBrowser({
   const [error, setError] = useState<string | null>(null)
   const [truncated, setTruncated] = useState(false)
   const [view, setView] = useState<BrowserView>("files")
+  const isMobile = useIsMobile()
+  const { width, resizing, onResizeStart, resetWidth } = useResizablePanel({
+    storageKey: "cloudcode:fileBrowserWidth",
+    defaultWidth: 304,
+    minWidth: 240,
+    maxWidth: 560,
+    edge: "left",
+    enabled: !isMobile,
+  })
 
   const diffStats = useMemo(() => getDiffStats(diff), [diff])
   const liveEntries = useMemo(
@@ -412,9 +424,17 @@ export function FileBrowser({
 
   return (
     <aside
-      className="flex h-full min-h-0 w-[19rem] shrink-0 flex-col overflow-hidden border-l border-border/60 bg-sidebar text-sidebar-foreground"
+      className="fixed inset-0 z-40 flex h-full min-h-0 w-full flex-col overflow-hidden border-l border-border/60 bg-sidebar text-sidebar-foreground md:relative md:inset-auto md:z-auto md:w-[var(--panel-width)] md:shrink-0"
+      style={{ "--panel-width": `${width}px` } as CSSProperties}
       data-file-browser
     >
+      <ResizeHandle
+        edge="left"
+        resizing={resizing}
+        onResizeStart={onResizeStart}
+        onReset={resetWidth}
+        ariaLabel="Resize file browser"
+      />
       <header className="flex h-[3.25rem] shrink-0 items-center gap-2 border-b border-border/60 px-3">
         <span className="text-sm font-medium text-foreground/85">
           {view === "diffs"

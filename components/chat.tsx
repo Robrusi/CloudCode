@@ -63,6 +63,7 @@ import { Button } from "@/components/ui/button"
 import type { FileBrowserOpenMode } from "@/components/file-browser"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import { MOBILE_MEDIA_QUERY, useIsMobile } from "@/hooks/use-is-mobile"
 import { useStoreUserEffect } from "@/hooks/use-store-user-effect"
 import { getDiffStats } from "@/lib/diff-metadata"
 import type { CodexRunLog } from "@/lib/codex-run-log"
@@ -496,7 +497,12 @@ function ChatInner() {
   const [activeFileDiff, setActiveFileDiff] = useState<string | null>(null)
   const [allDiffsOpen, setAllDiffsOpen] = useState(false)
   const [diffStyle, setDiffStyle] = useState<"unified" | "split">("unified")
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    typeof window === "undefined"
+      ? true
+      : !window.matchMedia(MOBILE_MEDIA_QUERY).matches
+  )
+  const isMobile = useIsMobile()
   const [view, setView] = useState<"chat" | "settings">("chat")
   const [runningRunKeys, setRunningRunKeys] = useState<Record<string, true>>({})
   const [liveRunStates, setLiveRunStates] = useState<
@@ -1340,6 +1346,7 @@ function ChatInner() {
     setFilesOpen(false)
     setTerminalOpen(false)
     setView("chat")
+    if (isMobile) setSidebarOpen(false)
     requestAnimationFrame(() => textareaRef.current?.focus())
   }
 
@@ -1356,6 +1363,7 @@ function ChatInner() {
     setFilesOpen(false)
     setTerminalOpen(false)
     setView("chat")
+    if (isMobile) setSidebarOpen(false)
   }
 
   function showSettings() {
@@ -1363,6 +1371,7 @@ function ChatInner() {
     setActiveFilePath(null)
     setFilesOpen(false)
     setTerminalOpen(false)
+    if (isMobile) setSidebarOpen(false)
   }
 
   function deleteChat(id: Id<"threads">) {
@@ -1940,6 +1949,7 @@ function ChatInner() {
           onDelete={deleteChat}
           onRename={renameChat}
           onShowSettings={showSettings}
+          onClose={() => setSidebarOpen(false)}
           brandClassName={GeistPixelSquare.className}
         />
       ) : null}
@@ -2049,7 +2059,7 @@ function ChatInner() {
                 className="min-h-0 flex-1 overflow-y-auto [contain:paint]"
                 style={{ scrollPaddingBottom: threadBottomInset }}
               >
-                <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col px-6 pt-16">
+                <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col px-4 pt-16 md:px-6">
                   {empty ? (
                     <div className="flex flex-col items-center pt-[22vh]">
                       <h1 className="text-center text-3xl font-medium tracking-tight text-foreground/90">
@@ -2124,6 +2134,7 @@ function ChatInner() {
           setActiveFileMode(mode)
           setActiveFileDiff(null)
           setAllDiffsOpen(false)
+          if (isMobile) setFilesOpen(false)
         }}
         onOpenAllDiffs={openAllDiffs}
         diffStyle={diffStyle}
@@ -2143,6 +2154,7 @@ function ChatInner() {
           setActiveFileMode(mode)
           setActiveFileDiff(null)
           setAllDiffsOpen(false)
+          if (isMobile) setGithubOpen(false)
         }}
       />
     </div>
@@ -2280,7 +2292,7 @@ function TopBar({
       <span
         title={displayTitle === fullTitle ? undefined : fullTitle}
         aria-label={fullTitle}
-        className="max-w-[42ch] min-w-0 truncate text-sm font-medium text-foreground/85"
+        className="max-w-[45vw] min-w-0 truncate text-sm font-medium text-foreground/85 md:max-w-[42ch]"
       >
         {displayTitle}
       </span>
