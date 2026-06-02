@@ -14,11 +14,12 @@ import {
 
 const DAYTONA_DESKTOP_PORT = 6080
 const DESKTOP_PREVIEW_TTL_SECONDS = 60 * 60
-const DESKTOP_TOOL_VERSION = "5"
+const DESKTOP_TOOL_VERSION = "6"
 const DESKTOP_DEPENDENCY_TIMEOUT_MS = 10 * 60 * 1000
 const DESKTOP_BROWSER_URL = "about:blank"
 const DESKTOP_BROWSER_COMMAND = "/usr/local/bin/cloudcode-browser"
 const DESKTOP_AGENT_RECORDING_STATE_FILE = "active-recording.json"
+const DESKTOP_AGENT_COMPLETED_RECORDING_STATE_FILE = "completed-recording.json"
 const DESKTOP_BROWSER_LAUNCHER = `#!/usr/bin/env bash
 set -euo pipefail
 
@@ -134,6 +135,10 @@ function desktopAgentRecordingStatePath(paths: DaytonaSandboxPaths) {
   return `${paths.codexHome}/desktop/state/${DESKTOP_AGENT_RECORDING_STATE_FILE}`
 }
 
+function desktopAgentCompletedRecordingStatePath(paths: DaytonaSandboxPaths) {
+  return `${paths.codexHome}/desktop/state/${DESKTOP_AGENT_COMPLETED_RECORDING_STATE_FILE}`
+}
+
 function recordingArtifact(
   value: unknown,
   sandboxId: string,
@@ -162,14 +167,35 @@ function recordingArtifact(
 
 async function clearDesktopAgentRecordingState(
   sandbox: Sandbox,
-  paths: DaytonaSandboxPaths,
+  statePath: string,
   signal?: AbortSignal
 ) {
-  await runDaytonaCommand(
+  await runDaytonaCommand(sandbox, `rm -f ${shellQuote(statePath)}`, {
+    signal,
+    timeoutMs: 10_000,
+  }).catch(() => undefined)
+}
+
+async function readDesktopAgentRecordingState(
+  sandbox: Sandbox,
+  statePath: string,
+  signal?: AbortSignal
+) {
+  const result = await runDaytonaCommand(
     sandbox,
-    `rm -f ${shellQuote(desktopAgentRecordingStatePath(paths))}`,
+    `[ -s ${shellQuote(statePath)} ] && cat ${shellQuote(statePath)} || true`,
     { signal, timeoutMs: 10_000 }
-  ).catch(() => undefined)
+  )
+
+  if (result.exitCode !== 0 || !result.stdout.trim()) {
+    return undefined
+  }
+
+  try {
+    return recordingArtifact(JSON.parse(result.stdout), sandbox.id)
+  } catch {
+    return undefined
+  }
 }
 
 export async function stopDaytonaDesktopAgentRecording(
@@ -177,32 +203,28 @@ export async function stopDaytonaDesktopAgentRecording(
   paths: DaytonaSandboxPaths,
   signal?: AbortSignal
 ) {
-  const statePath = desktopAgentRecordingStatePath(paths)
-  const activeResult = await runDaytonaCommand(
+  const activeStatePath = desktopAgentRecordingStatePath(paths)
+  const completedStatePath = desktopAgentCompletedRecordingStatePath(paths)
+  const active = await readDesktopAgentRecordingState(
     sandbox,
-    `[ -s ${shellQuote(statePath)} ] && cat ${shellQuote(statePath)} || true`,
-    { signal, timeoutMs: 10_000 }
+    activeStatePath,
+    signal
   )
 
-  if (activeResult.exitCode !== 0 || !activeResult.stdout.trim()) {
-    return undefined
-  }
-
-  let active: DaytonaDesktopRecordingArtifact | undefined
-  try {
-    active = recordingArtifact(JSON.parse(activeResult.stdout), sandbox.id)
-  } catch {
-    await clearDesktopAgentRecordingState(sandbox, paths, signal)
-    return undefined
-  }
-
   if (!active?.id) {
-    await clearDesktopAgentRecordingState(sandbox, paths, signal)
-    return undefined
+    const completed = await readDesktopAgentRecordingState(
+      sandbox,
+      completedStatePath,
+      signal
+    )
+    await clearDesktopAgentRecordingState(sandbox, activeStatePath, signal)
+    await clearDesktopAgentRecordingState(sandbox, completedStatePath, signal)
+    return completed
   }
 
   const stopped = await sandbox.computerUse.recording.stop(active.id)
-  await clearDesktopAgentRecordingState(sandbox, paths, signal)
+  await clearDesktopAgentRecordingState(sandbox, activeStatePath, signal)
+  await clearDesktopAgentRecordingState(sandbox, completedStatePath, signal)
   return (
     recordingArtifact(stopped, sandbox.id, active.id) ?? {
       ...active,
@@ -526,6 +548,7 @@ const repoPath = process.env.CLOUDCODE_REPO_PATH || process.cwd();
 const stateDir = process.env.CLOUDCODE_DESKTOP_STATE_DIR || join(homedir(), ".cache", "cloudcode-desktop");
 const cloudcodeBrowserCommand = process.env.CLOUDCODE_BROWSER_COMMAND || ${JSON.stringify(DESKTOP_BROWSER_COMMAND)};
 const activeRecordingPath = join(stateDir, ${JSON.stringify(DESKTOP_AGENT_RECORDING_STATE_FILE)});
+const completedRecordingPath = join(stateDir, ${JSON.stringify(DESKTOP_AGENT_COMPLETED_RECORDING_STATE_FILE)});
 const autoRecordedToolNames = new Set([
   "desktop_start",
   "desktop_open_browser",
@@ -746,6 +769,13 @@ function rememberActiveRecording(recording) {
   return active;
 }
 
+function rememberCompletedRecording(recording) {
+  const completed = recordingWithSandbox(recording);
+  if (!completed) return undefined;
+  writeFileSync(completedRecordingPath, JSON.stringify(completed));
+  return completed;
+}
+
 function clearActiveRecording(id) {
   const active = readActiveRecording();
   if (id && active?.id && active.id !== id) return;
@@ -764,17 +794,6 @@ async function ensureAutomaticRecording(toolName) {
   return recording;
 }
 
-function withRecording(result, recording) {
-  if (!recording?.id) return result;
-  return {
-    ...result,
-    structuredContent: {
-      ...(result.structuredContent ?? {}),
-      recording,
-    },
-  };
-}
-
 async function startRecording(args) {
   await ensureDesktop();
   const label = safeRecordingName(stringArg(args, "label"));
@@ -788,7 +807,7 @@ async function stopRecording(args) {
   if (!id) throw new Error("recording id required");
   const recording = await daytonaRecordingRequest("/computeruse/recordings/stop", { id });
   clearActiveRecording(id);
-  return { ...recording, sandboxId: process.env.CLOUDCODE_DAYTONA_SANDBOX_ID };
+  return rememberCompletedRecording({ id, ...recording, sandboxId: process.env.CLOUDCODE_DAYTONA_SANDBOX_ID });
 }
 
 async function openBrowser(args) {
@@ -822,10 +841,10 @@ async function openBrowser(args) {
 }
 
 async function callTool(name, args = {}) {
-  const automaticRecording = autoRecordedToolNames.has(name)
-    ? await ensureAutomaticRecording(name)
-    : undefined;
-  const recorded = (result) => withRecording(result, automaticRecording);
+  if (autoRecordedToolNames.has(name)) {
+    await ensureAutomaticRecording(name);
+  }
+  const recorded = (result) => result;
 
   switch (name) {
     case "desktop_start": {
@@ -896,13 +915,11 @@ async function callTool(name, args = {}) {
       const recording =
         readActiveRecording() ?? rememberActiveRecording(await startRecording(args));
       if (!recording?.id) throw new Error("Unable to start Daytona desktop recording.");
-      const location = recording.filePath || recording.fileName || recording.id;
-      return text("Daytona recording " + recording.id + " active at " + location + ".", recording);
+      return text("Daytona recording active.", { id: recording.id });
     }
     case "desktop_record_stop": {
       const recording = await stopRecording(args);
-      const location = recording.filePath || recording.fileName || recording.id;
-      return text("Daytona recording " + recording.id + " stopped at " + location + ".", recording);
+      return text("Daytona recording stopped.", { id: recording?.id });
     }
     default:
       throw new Error("Unknown desktop tool: " + name);
@@ -1155,6 +1172,8 @@ function desktopAgentInstructions() {
     "Do not open `chromium`, `chromium-browser`, `google-chrome`, `google-chrome-stable`, `firefox`, `x-www-browser`, or `xdg-open` directly. For browser work, use `desktop_open_browser`; if a shell fallback is unavoidable, run `/usr/local/bin/cloudcode-browser` directly.",
     "",
     "For visual work, use this loop: start the desktop, take a screenshot, act, take another screenshot, and repeat until the UI state is verified.",
+    "After making UI-facing changes, decide whether visual verification is needed. Use the Daytona desktop when the change affects layout, styling, visible components, browser behavior, forms, navigation, or user interactions. Skip desktop verification only when the change is clearly non-visual or cannot affect rendered UI.",
+    "When UI verification is needed, assume the dev server is already running, open the relevant local URL with `desktop_open_browser`, inspect with screenshots, interact with the changed workflow when useful, and verify the final state before reporting back.",
     "",
     "A shell fallback is also available as `cloudcode-computer`, but prefer the MCP tools because screenshots are returned as inspectable images.",
   ].join("\n")
@@ -1164,6 +1183,8 @@ export function daytonaDesktopAgentContext() {
   return [
     "Cloudcode may provide a Daytona desktop for GUI/browser work.",
     "When a task needs visual interaction, use the `cloudcode_desktop` MCP tools: start with `desktop_start`, open Cloudcode Browser with `desktop_open_browser` when needed, inspect with `desktop_screenshot`, act with click/type/key/scroll tools, then take another screenshot to verify the state.",
+    "After UI-facing code changes, decide whether browser verification is needed. Use the Daytona desktop for layout, styling, visible component, browser behavior, form, navigation, and interaction changes; skip it only when the edit is clearly non-visual or cannot affect rendered UI.",
+    "When UI verification is needed, assume the dev server is already running, open the relevant local URL with `desktop_open_browser`, interact with the changed workflow when useful, and verify with screenshots before reporting back.",
     "Do not launch `chromium`, `chromium-browser`, `google-chrome`, `google-chrome-stable`, `firefox`, `x-www-browser`, or `xdg-open` directly; `desktop_open_browser` uses `/usr/local/bin/cloudcode-browser`.",
     "Daytona Computer Use recording starts automatically before desktop actions and Cloudcode stops it after the run; use `desktop_record_stop` only when an intermediate video artifact is needed before the run ends.",
   ].join("\n")

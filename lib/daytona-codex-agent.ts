@@ -12,6 +12,7 @@ import {
   daytonaDesktopAgentContext,
   installDaytonaDesktopTools,
   stopDaytonaDesktopAgentRecording,
+  type DaytonaDesktopRecordingArtifact,
 } from "./daytona-desktop"
 import {
   createDaytonaSandbox,
@@ -126,6 +127,7 @@ export type RunCodexInSandboxInput = {
 export type RunCodexInSandboxResult = {
   branchName: string
   codexThreadId?: string
+  desktopRecording?: DaytonaDesktopRecordingArtifact
   diff: string
   exitCode: number
   lastMessage: string
@@ -2143,6 +2145,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
   let stopDaytonaActivityHeartbeat: (() => void) | undefined
   let checkedDesktopAgentRecording = false
   let emittedDesktopRecordingStopError = false
+  let desktopRecording: DaytonaDesktopRecordingArtifact | undefined
 
   async function stopDesktopAgentRecording() {
     if (checkedDesktopAgentRecording) return
@@ -2155,17 +2158,11 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       )
       checkedDesktopAgentRecording = true
       if (!recording) return
+      desktopRecording = recording
 
       await emitLog(input, {
-        detail: logDetail({
-          kind: "tool_call",
-          name: "desktop_record_stop",
-          recording,
-          status: "completed",
-          text: `Daytona desktop recording stopped: ${recording.filePath || recording.fileName || recording.id}`,
-        }),
-        kind: "command",
-        message: "Daytona desktop recording stopped",
+        kind: "setup",
+        message: "Daytona desktop recording ready",
       })
     } catch (error) {
       if (emittedDesktopRecordingStopError) return
@@ -2581,6 +2578,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     return {
       branchName,
       codexThreadId,
+      desktopRecording,
       diff,
       exitCode: result.exitCode,
       lastMessage,
