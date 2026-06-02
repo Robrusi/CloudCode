@@ -1,7 +1,7 @@
 import { Daytona } from "@daytona/sdk"
 
 const daytona = new Daytona({
-  target: "experimental",
+  target: process.env.DAYTONA_TARGET,
 })
 
 const sandbox = await daytona.create({

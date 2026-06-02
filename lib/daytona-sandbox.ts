@@ -14,8 +14,7 @@ const DEFAULT_SANDBOX_CPU = 2
 const DEFAULT_SANDBOX_DISK = 10
 const DEFAULT_SANDBOX_MEMORY = 4
 const DEFAULT_DAYTONA_SNAPSHOT = "cloudcode-batteries-included"
-const DEFAULT_DAYTONA_IMAGE =
-  "mcr.microsoft.com/devcontainers/universal:2-linux"
+const DEFAULT_DAYTONA_IMAGE = "daytonaio/sandbox:0.8.0"
 const DEFAULT_COMMAND_STATUS_POLL_MS = 2_000
 const DEFAULT_COMMAND_STATUS_MAX_POLL_MS = 5_000
 const DAYTONA_ACTIVITY_HEARTBEAT_MAX_MS = 60_000

@@ -10,6 +10,7 @@ import {
   FolderOpen,
   GitBranch,
   Loader2,
+  Monitor,
   PanelLeft,
   PanelRight,
   Plus,
@@ -93,6 +94,14 @@ const FileBrowser = dynamic(
 
 const GithubPanel = dynamic(
   () => import("@/components/github-panel").then((mod) => mod.GithubPanel),
+  { ssr: false }
+)
+
+const SandboxDesktopPanel = dynamic(
+  () =>
+    import("@/components/sandbox-desktop").then(
+      (mod) => mod.SandboxDesktopPanel
+    ),
   { ssr: false }
 )
 
@@ -484,6 +493,7 @@ function ChatInner() {
   const [thinkingOpen, setThinkingOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
   const [githubOpen, setGithubOpen] = useState(false)
+  const [desktopOpen, setDesktopOpen] = useState(false)
   const [terminalOpen, setTerminalOpen] = useState(() =>
     typeof window === "undefined"
       ? false
@@ -1365,6 +1375,8 @@ function ChatInner() {
     setEditingRepo(false)
     setActiveFilePath(null)
     setFilesOpen(false)
+    setGithubOpen(false)
+    setDesktopOpen(false)
     setTerminalOpen(false)
     setView("chat")
     if (isMobile) setSidebarOpen(false)
@@ -1382,6 +1394,8 @@ function ChatInner() {
     setEditingRepo(false)
     setActiveFilePath(null)
     setFilesOpen(false)
+    setGithubOpen(false)
+    setDesktopOpen(false)
     setTerminalOpen(false)
     setView("chat")
     if (isMobile) setSidebarOpen(false)
@@ -1392,6 +1406,8 @@ function ChatInner() {
     setView("settings")
     setActiveFilePath(null)
     setFilesOpen(false)
+    setGithubOpen(false)
+    setDesktopOpen(false)
     setTerminalOpen(false)
     if (isMobile) setSidebarOpen(false)
   }
@@ -1432,6 +1448,8 @@ function ChatInner() {
           setActiveId(null)
           setActiveFilePath(null)
           setFilesOpen(false)
+          setGithubOpen(false)
+          setDesktopOpen(false)
           setTerminalOpen(false)
         }
       } catch (error) {
@@ -1731,6 +1749,7 @@ function ChatInner() {
   }
 
   function pauseActiveSandbox() {
+    setDesktopOpen(false)
     void runSandboxAction("pause", "/api/sandbox/pause", "stopped")
   }
 
@@ -1754,6 +1773,7 @@ function ChatInner() {
     clearRunKey(threadId as string)
     closeBrowserTerminalSession(sandboxId)
     setTerminalOpen(false)
+    setDesktopOpen(false)
 
     void (async () => {
       try {
@@ -1768,6 +1788,7 @@ function ChatInner() {
         removeThreadRunState(threadId)
         setActiveFilePath(null)
         setFilesOpen(false)
+        setGithubOpen(false)
       } catch (error) {
         console.warn("Failed to delete sandbox.", error)
       } finally {
@@ -1811,6 +1832,7 @@ function ChatInner() {
       sandboxId,
       sandboxState: "deleted",
     })
+    setDesktopOpen(false)
 
     if (activeRunPending) return
 
@@ -2042,7 +2064,10 @@ function ChatInner() {
           canOpenFiles={view !== "settings" && Boolean(activeFileCacheScope)}
           onToggleFiles={() =>
             setFilesOpen((v) => {
-              if (!v) setGithubOpen(false)
+              if (!v) {
+                setGithubOpen(false)
+                setDesktopOpen(false)
+              }
               return !v
             })
           }
@@ -2050,7 +2075,21 @@ function ChatInner() {
           canOpenGithub={view !== "settings" && Boolean(activeSandboxId)}
           onToggleGithub={() =>
             setGithubOpen((v) => {
-              if (!v) setFilesOpen(false)
+              if (!v) {
+                setFilesOpen(false)
+                setDesktopOpen(false)
+              }
+              return !v
+            })
+          }
+          desktopOpen={desktopOpen}
+          canOpenDesktop={view !== "settings" && Boolean(activeSandboxId)}
+          onToggleDesktop={() =>
+            setDesktopOpen((v) => {
+              if (!v) {
+                setFilesOpen(false)
+                setGithubOpen(false)
+              }
               return !v
             })
           }
@@ -2128,6 +2167,7 @@ function ChatInner() {
                           key={m.id}
                           message={m}
                           repoName={activeRepoName}
+                          sandboxId={activeSandboxId}
                           onOpenFile={openFile}
                           onOpenFileDiff={openFileDiff}
                         />
@@ -2216,6 +2256,11 @@ function ChatInner() {
           setAllDiffsOpen(false)
           if (isMobile) setGithubOpen(false)
         }}
+      />
+      <SandboxDesktopPanel
+        open={desktopOpen && Boolean(activeSandboxId)}
+        sandboxId={activeSandboxId}
+        onClose={() => setDesktopOpen(false)}
       />
     </div>
   )
@@ -2322,6 +2367,9 @@ function TopBar({
   githubOpen,
   canOpenGithub,
   onToggleGithub,
+  desktopOpen,
+  canOpenDesktop,
+  onToggleDesktop,
   onSandboxStateChange,
   onSandboxMissing,
   sandboxAction,
@@ -2346,6 +2394,9 @@ function TopBar({
   githubOpen: boolean
   canOpenGithub: boolean
   onToggleGithub: () => void
+  desktopOpen: boolean
+  canOpenDesktop: boolean
+  onToggleDesktop: () => void
   onSandboxStateChange: (state: SandboxState, sandboxId: string) => void
   onSandboxMissing: (sandboxId: string) => void
   sandboxAction: SandboxAction | null
@@ -2448,6 +2499,16 @@ function TopBar({
                 )}
               </TopBarIconButton>
               <TopBarIconButton
+                onClick={onToggleDesktop}
+                active={desktopOpen}
+                disabled={!canOpenDesktop}
+                label={
+                  desktopOpen ? "Hide sandbox desktop" : "Show sandbox desktop"
+                }
+              >
+                <Monitor className="size-3.5" />
+              </TopBarIconButton>
+              <TopBarIconButton
                 onClick={onToggleGithub}
                 active={githubOpen}
                 disabled={!canOpenGithub}
@@ -2468,6 +2529,9 @@ function TopBar({
               githubOpen={githubOpen}
               canOpenGithub={canOpenGithub}
               onToggleGithub={onToggleGithub}
+              desktopOpen={desktopOpen}
+              canOpenDesktop={canOpenDesktop}
+              onToggleDesktop={onToggleDesktop}
             />
           </>
         ) : null}
@@ -2488,6 +2552,9 @@ function TopBarToolsMenu({
   githubOpen,
   canOpenGithub,
   onToggleGithub,
+  desktopOpen,
+  canOpenDesktop,
+  onToggleDesktop,
 }: {
   className?: string
   sandboxId: string | null
@@ -2500,6 +2567,9 @@ function TopBarToolsMenu({
   githubOpen: boolean
   canOpenGithub: boolean
   onToggleGithub: () => void
+  desktopOpen: boolean
+  canOpenDesktop: boolean
+  onToggleDesktop: () => void
 }) {
   const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(
     null
@@ -2525,7 +2595,7 @@ function TopBarToolsMenu({
     })
   }
 
-  const anyOpen = terminalOpen || filesOpen || githubOpen
+  const anyOpen = terminalOpen || filesOpen || githubOpen || desktopOpen
   const items = [
     {
       key: "terminal",
@@ -2546,6 +2616,14 @@ function TopBarToolsMenu({
       active: filesOpen,
       disabled: !canOpenFiles,
       onSelect: onToggleFiles,
+    },
+    {
+      key: "desktop",
+      label: desktopOpen ? "Hide desktop" : "Desktop",
+      icon: <Monitor className="size-4" />,
+      active: desktopOpen,
+      disabled: !canOpenDesktop,
+      onSelect: onToggleDesktop,
     },
     {
       key: "github",

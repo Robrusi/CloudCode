@@ -34,6 +34,13 @@ type ToolMarkerDetail = {
   kind?: string
   name?: string
   output?: string
+  recording?: {
+    fileName?: string
+    filePath?: string
+    id?: string
+    sandboxId?: string
+    status?: string
+  }
   status?: string
   text?: string
 }
@@ -92,9 +99,34 @@ function compactToolDetail(value: ToolMarkerDetail): ToolMarkerDetail | null {
     const isPatch =
       typeof value.text === "string" &&
       /\*\*\* Begin Patch|\*\*\* (Add|Update|Delete) File:/.test(value.text)
+    const recording =
+      value.recording &&
+      typeof value.recording === "object" &&
+      typeof value.recording.id === "string"
+        ? {
+            fileName: truncateMarkerText(
+              value.recording.fileName,
+              MAX_MARKER_TEXT_LENGTH
+            ),
+            filePath: truncateMarkerText(
+              value.recording.filePath,
+              MAX_MARKER_TEXT_LENGTH
+            ),
+            id: truncateMarkerText(value.recording.id, MAX_MARKER_TEXT_LENGTH),
+            sandboxId: truncateMarkerText(
+              value.recording.sandboxId,
+              MAX_MARKER_TEXT_LENGTH
+            ),
+            status: truncateMarkerText(
+              value.recording.status,
+              MAX_MARKER_TEXT_LENGTH
+            ),
+          }
+        : undefined
     return {
       kind: value.kind,
       name: truncateMarkerText(value.name, MAX_MARKER_TEXT_LENGTH),
+      recording,
       status: truncateMarkerText(value.status, MAX_MARKER_TEXT_LENGTH),
       text: truncateMarkerText(
         value.text,

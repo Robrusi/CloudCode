@@ -5,8 +5,83 @@ import process from "node:process"
 
 import { Daytona, Image } from "@daytona/sdk"
 
-const DEFAULT_SNAPSHOT_NAME = "cloudcode-batteries-included-experimental"
-const DEFAULT_BASE_IMAGE = "mcr.microsoft.com/devcontainers/universal:2-linux"
+const DEFAULT_SNAPSHOT_NAME = "cloudcode-batteries-included"
+const DEFAULT_BASE_IMAGE = "daytonaio/sandbox:0.8.0"
+const DESKTOP_BROWSER_SETUP_VERSION = "cloudcode-browser-v2"
+const DESKTOP_BROWSER_LAUNCHER = `#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -eq 0 ]; then
+  set -- about:blank
+fi
+
+browser=""
+for candidate in chromium chromium-browser google-chrome google-chrome-stable; do
+  if command -v "$candidate" >/dev/null 2>&1; then
+    browser="$(command -v "$candidate")"
+    break
+  fi
+done
+
+if [ -z "$browser" ]; then
+  echo "Cloudcode Browser requires a Chromium-family browser." >&2
+  exit 1
+fi
+
+profile="\${CLOUDCODE_BROWSER_PROFILE:-\${HOME:-/tmp}/.cache/cloudcode-chromium}"
+mkdir -p "$profile"
+exec "$browser" \\
+  --no-sandbox \\
+  --test-type \\
+  --disable-dev-shm-usage \\
+  --no-first-run \\
+  --no-default-browser-check \\
+  --password-store=basic \\
+  --user-data-dir="$profile" \\
+  "$@"
+`
+const DESKTOP_BROWSER_DESKTOP_ENTRY = `[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Cloudcode Browser
+GenericName=Web Browser
+Comment=Open the Daytona desktop browser
+Exec=/usr/local/bin/cloudcode-browser %U
+Terminal=false
+Icon=chromium
+Categories=Network;WebBrowser;
+MimeType=x-scheme-handler/http;x-scheme-handler/https;text/html;
+StartupNotify=true
+`
+const DESKTOP_BROWSER_XFCE_HELPER = `[Desktop Entry]
+NoDisplay=true
+Version=1.0
+Type=X-XFCE-Helper
+Name=Cloudcode Browser
+X-XFCE-Category=WebBrowser
+X-XFCE-Commands=/usr/local/bin/cloudcode-browser
+X-XFCE-CommandsWithParameter=/usr/local/bin/cloudcode-browser "%s"
+`
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`
+}
+
+function dockerWriteFileCommand(path, mode, content) {
+  const encoded = Buffer.from(content, "utf8").toString("base64")
+  const dir = path.slice(0, path.lastIndexOf("/")) || "."
+  return [
+    "RUN mkdir -p",
+    shellQuote(dir),
+    "&& printf '%s'",
+    shellQuote(encoded),
+    "| base64 -d >",
+    shellQuote(path),
+    "&& chmod",
+    mode,
+    shellQuote(path),
+  ].join(" ")
+}
 
 function loadEnvFile(path) {
   if (!fs.existsSync(path)) return
@@ -56,6 +131,22 @@ async function waitForSnapshotGone(daytona, name) {
   throw new Error(`Timed out waiting for snapshot ${name} to be deleted.`)
 }
 
+function snapshotHasCurrentDesktopSetup(snapshot) {
+  const dockerfile = snapshot?.buildInfo?.dockerfileContent
+  if (typeof dockerfile !== "string" || !dockerfile) return true
+
+  return (
+    dockerfile.includes("chromium") &&
+    dockerfile.includes("cloudcode-browser") &&
+    dockerfile.includes(DESKTOP_BROWSER_SETUP_VERSION) &&
+    dockerfile.includes("net-tools") &&
+    dockerfile.includes("websockify") &&
+    dockerfile.includes("novnc_proxy") &&
+    dockerfile.includes("/usr/share/novnc/utils/novnc_proxy") &&
+    !dockerfile.includes("mcr.microsoft.com/devcontainers/universal:2-linux")
+  )
+}
+
 function cloudcodeImage(baseImage) {
   return Image.base(baseImage).dockerfileCommands([
     "USER root",
@@ -76,6 +167,7 @@ function cloudcodeImage(baseImage) {
       "bat",
       "build-essential",
       "ca-certificates",
+      "chromium",
       "clang",
       "cmake",
       "curl",
@@ -83,6 +175,7 @@ function cloudcodeImage(baseImage) {
       "default-mysql-client",
       "dnsutils",
       "fd-find",
+      "ffmpeg",
       "file",
       "git",
       "git-lfs",
@@ -96,19 +189,24 @@ function cloudcodeImage(baseImage) {
       "libicu-dev",
       "libx11-6",
       "libxext6",
+      "libxfixes3",
       "libxi6",
       "liblzma-dev",
       "libncurses-dev",
       "libxrandr2",
       "libxrender1",
+      "libxss1",
       "libxtst6",
       "libxml2-dev",
       "libz3-dev",
+      "imagemagick",
       "make",
       "nano",
+      "net-tools",
       "ninja-build",
       "novnc",
       "openssh-client",
+      "default-jdk",
       "pkg-config",
       "postgresql-client",
       "python3",
@@ -127,14 +225,54 @@ function cloudcodeImage(baseImage) {
       "unzip",
       "vim",
       "wget",
+      "websockify",
+      "wmctrl",
+      "x11-utils",
       "x11vnc",
+      "xdg-utils",
       "xfce4",
       "xfce4-terminal",
+      "xdotool",
       "xvfb",
       "xz-utils",
       "zlib1g-dev",
       "zip",
       "&& rm -rf /var/lib/apt/lists/*",
+    ].join(" "),
+    [
+      "RUN for novnc_proxy_source in /usr/share/novnc/utils/novnc_proxy /usr/share/novnc/utils/launch.sh; do",
+      '[ -f "$novnc_proxy_source" ] || continue;',
+      'chmod +x "$novnc_proxy_source";',
+      'ln -sf "$novnc_proxy_source" /usr/local/bin/novnc_proxy;',
+      "break;",
+      "done",
+    ].join(" "),
+    dockerWriteFileCommand(
+      "/usr/local/bin/cloudcode-browser",
+      "755",
+      DESKTOP_BROWSER_LAUNCHER
+    ),
+    [
+      "RUN mkdir -p /usr/local/share/cloudcode",
+      "&& printf '%s\\n'",
+      shellQuote(DESKTOP_BROWSER_SETUP_VERSION),
+      "> /usr/local/share/cloudcode/browser-version",
+    ].join(" "),
+    dockerWriteFileCommand(
+      "/usr/local/share/applications/cloudcode-browser.desktop",
+      "644",
+      DESKTOP_BROWSER_DESKTOP_ENTRY
+    ),
+    dockerWriteFileCommand(
+      "/root/.local/share/xfce4/helpers/cloudcode-browser.desktop",
+      "644",
+      DESKTOP_BROWSER_XFCE_HELPER
+    ),
+    [
+      "RUN mkdir -p /root/.config/xfce4",
+      "&& (grep -v '^WebBrowser=' /root/.config/xfce4/helpers.rc 2>/dev/null || true; echo WebBrowser=cloudcode-browser) > /root/.config/xfce4/helpers.rc",
+      "&& update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/local/bin/cloudcode-browser 200 >/dev/null 2>&1 || true",
+      "&& update-alternatives --install /usr/bin/gnome-www-browser gnome-www-browser /usr/local/bin/cloudcode-browser 200 >/dev/null 2>&1 || true",
     ].join(" "),
     "RUN if [ -x /bin/bash ] && command -v usermod >/dev/null 2>&1; then usermod -s /bin/bash root || true; fi",
     "RUN [ -f /etc/profile.d/rvm.sh ] && mv /etc/profile.d/rvm.sh /etc/profile.d/rvm.sh.cloudcode-disabled || true",
@@ -213,11 +351,15 @@ function cloudcodeImage(baseImage) {
       "&& kotlinc -version",
     ].join(" "),
     [
-      'RUN curl -O "https://download.swift.org/swiftly/linux/swiftly-$(uname -m).tar.gz"',
-      '&& tar zxf "swiftly-$(uname -m).tar.gz"',
+      "RUN set -e;",
+      'SWIFTLY_ARCH="$(uname -m)";',
+      'SWIFTLY_TARBALL="swiftly-${SWIFTLY_ARCH}.tar.gz";',
+      '( curl -fsSLO "https://download.swift.org/swiftly/linux/${SWIFTLY_TARBALL}"',
+      '&& tar zxf "${SWIFTLY_TARBALL}"',
       "&& ./swiftly init --quiet-shell-followup --no-modify-profile",
-      "&& swift --version",
-      '&& rm -f "swiftly-$(uname -m).tar.gz" swiftly',
+      "&& swift --version )",
+      "|| echo 'Swift install failed; continuing without Swift.' >&2;",
+      'rm -f "${SWIFTLY_TARBALL}" swiftly core core.*',
     ].join(" "),
     "WORKDIR /workspace",
   ])
@@ -264,6 +406,12 @@ if (existingSnapshot) {
     )
     await daytona.snapshot.delete(existingSnapshot)
     await waitForSnapshotGone(daytona, existingSnapshot.name)
+  } else if (!snapshotHasCurrentDesktopSetup(existingSnapshot)) {
+    console.error(
+      `Snapshot ${existingSnapshot.name} exists, but it was built before the current Daytona desktop/VNC setup or uses an incompatible glibc base.`
+    )
+    console.error("Run with --rebuild to replace it.")
+    process.exit(1)
   } else {
     console.log(
       `Snapshot already exists: ${existingSnapshot.name} (${existingSnapshot.state})`

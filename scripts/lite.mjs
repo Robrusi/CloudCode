@@ -3,12 +3,11 @@ import { Daytona, Image } from "@daytona/sdk"
 const daytona = new Daytona({
   apiKey: process.env.DAYTONA_API_KEY,
   apiUrl: process.env.DAYTONA_API_URL,
-  target: "experimental",
+  target: process.env.DAYTONA_TARGET,
 })
 
 const image = Image.base(
-  process.env.DAYTONA_DEFAULT_IMAGE ||
-    "mcr.microsoft.com/devcontainers/universal:2-linux"
+  process.env.DAYTONA_DEFAULT_IMAGE || "daytonaio/sandbox:0.8.0"
 ).dockerfileCommands(["USER root", "WORKDIR /workspace"])
 
 const snapshot = await daytona.snapshot.create(

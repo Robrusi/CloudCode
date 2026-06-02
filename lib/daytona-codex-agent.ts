@@ -9,6 +9,11 @@ import {
   shuffledCityBranchNames,
 } from "./codex-branch-names"
 import {
+  daytonaDesktopAgentContext,
+  installDaytonaDesktopTools,
+  stopDaytonaDesktopAgentRecording,
+} from "./daytona-desktop"
+import {
   createDaytonaSandbox,
   daytonaCodexPath,
   daytonaTerminalPath,
@@ -138,6 +143,14 @@ type CodexCliCapabilities = {
   resumeHelp: string
 }
 
+type RecordingArtifact = {
+  fileName?: string
+  filePath?: string
+  id: string
+  sandboxId?: string
+  status?: string
+}
+
 function parseModel(model?: string) {
   const normalized = model?.trim()
 
@@ -237,6 +250,62 @@ function stringValue(value: unknown) {
 
 function numberValue(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined
+}
+
+function recordingArtifactFromRecord(
+  record: Record<string, unknown>
+): RecordingArtifact | undefined {
+  const id = stringValue(record.id)
+  if (!id || !/^[0-9a-fA-F-]{36}$/.test(id)) return undefined
+
+  const filePath = stringValue(record.filePath)
+  const fileName = stringValue(record.fileName)
+  if (
+    !filePath?.includes("/.daytona/recordings/") &&
+    !fileName?.endsWith(".mp4")
+  ) {
+    return undefined
+  }
+
+  return {
+    ...(fileName ? { fileName } : {}),
+    ...(filePath ? { filePath } : {}),
+    id,
+    ...(stringValue(record.sandboxId)
+      ? { sandboxId: stringValue(record.sandboxId) }
+      : {}),
+    ...(stringValue(record.status)
+      ? { status: stringValue(record.status) }
+      : {}),
+  }
+}
+
+function findRecordingArtifact(
+  value: unknown,
+  depth = 0
+): RecordingArtifact | undefined {
+  if (depth > 6) return undefined
+
+  if (Array.isArray(value)) {
+    for (const nested of value) {
+      const recording = findRecordingArtifact(nested, depth + 1)
+      if (recording) return recording
+    }
+    return undefined
+  }
+
+  const record = objectRecord(value)
+  if (!record) return undefined
+
+  const current = recordingArtifactFromRecord(record)
+  if (current) return current
+
+  for (const nested of Object.values(record)) {
+    const recording = findRecordingArtifact(nested, depth + 1)
+    if (recording) return recording
+  }
+
+  return undefined
 }
 
 function collectStringValues(
@@ -610,6 +679,7 @@ function summarizeCodexEvent(event: unknown): RunCodexLog | undefined {
     "content",
     "delta",
   ])
+  const recording = findRecordingArtifact(record)
 
   if (
     fileChanges.length > 0 &&
@@ -676,6 +746,7 @@ function summarizeCodexEvent(event: unknown): RunCodexLog | undefined {
       detail: logDetail({
         kind: "tool_call",
         name,
+        ...(recording ? { recording } : {}),
         status: nestedStatus ?? status,
         text: text ? readableCodexText(text) : undefined,
       }),
@@ -2070,6 +2141,44 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
   const paths = await resolveDaytonaPaths(sandbox)
   let gitAuth: SandboxGitHubAuth | null = null
   let stopDaytonaActivityHeartbeat: (() => void) | undefined
+  let checkedDesktopAgentRecording = false
+  let emittedDesktopRecordingStopError = false
+
+  async function stopDesktopAgentRecording() {
+    if (checkedDesktopAgentRecording) return
+
+    try {
+      const recording = await stopDaytonaDesktopAgentRecording(
+        sandbox,
+        paths,
+        input.signal
+      )
+      checkedDesktopAgentRecording = true
+      if (!recording) return
+
+      await emitLog(input, {
+        detail: logDetail({
+          kind: "tool_call",
+          name: "desktop_record_stop",
+          recording,
+          status: "completed",
+          text: `Daytona desktop recording stopped: ${recording.filePath || recording.fileName || recording.id}`,
+        }),
+        kind: "command",
+        message: "Daytona desktop recording stopped",
+      })
+    } catch (error) {
+      if (emittedDesktopRecordingStopError) return
+      emittedDesktopRecordingStopError = true
+      await emitLog(input, {
+        kind: "stderr",
+        message:
+          error instanceof Error
+            ? compactLine(error.message)
+            : "Unable to stop Daytona desktop recording.",
+      })
+    }
+  }
 
   try {
     stopDaytonaActivityHeartbeat = startDaytonaActivityHeartbeat(sandbox)
@@ -2102,11 +2211,12 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       shouldRestoreConversation && input.resumeContext?.trim()
         ? restoredConversationPrompt(input.resumeContext, input.prompt)
         : input.prompt
-    const environmentContext = cloudcodeYamlAgentContext(
-      input.sandboxPreset?.cloudcodeYaml
-    )
-    const prompt = environmentContext
-      ? [environmentContext, "Current user request:", taskPrompt].join("\n\n")
+    const contextBlocks = [
+      cloudcodeYamlAgentContext(input.sandboxPreset?.cloudcodeYaml),
+      daytonaDesktopAgentContext(),
+    ].filter((value): value is string => Boolean(value))
+    const prompt = contextBlocks.length
+      ? [...contextBlocks, "Current user request:", taskPrompt].join("\n\n")
       : taskPrompt
     const needsCodexSetup =
       recoveredSandbox ||
@@ -2225,6 +2335,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       input,
       paths
     )
+      .then(() => installDaytonaDesktopTools(sandbox, paths, input.signal))
       .then(() => runPathInstallScript(sandbox, input, paths, gitAuth))
       .then(() => runPresetInstallScript(sandbox, input, paths, gitAuth))
       .then(() =>
@@ -2282,7 +2393,6 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       helpIncludes(help, "--skip-git-repo-check")
         ? "--skip-git-repo-check"
         : "",
-      helpIncludes(help, "--ignore-user-config") ? "--ignore-user-config" : "",
       helpIncludes(help, "--ignore-rules") ? "--ignore-rules" : "",
       helpIncludes(help, "--json") ? "--json" : "",
     ]
@@ -2295,9 +2405,6 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       helpIncludes(resumeHelp, "--full-auto") ? "--full-auto" : "",
       helpIncludes(resumeHelp, "--skip-git-repo-check")
         ? "--skip-git-repo-check"
-        : "",
-      helpIncludes(resumeHelp, "--ignore-user-config")
-        ? "--ignore-user-config"
         : "",
       helpIncludes(resumeHelp, "--ignore-rules") ? "--ignore-rules" : "",
       helpIncludes(resumeHelp, "--json") ? "--json" : "",
@@ -2391,6 +2498,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       paths
     )
     stdoutLogger.flush()
+    await stopDesktopAgentRecording()
 
     const [, runArtifacts] = await Promise.all([
       Promise.all([
@@ -2486,6 +2594,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     } satisfies RunCodexInSandboxResult
   } finally {
     stopDaytonaActivityHeartbeat?.()
+    await stopDesktopAgentRecording()
     await Promise.all([
       cleanupRunFiles(sandbox, paths, input.signal),
       gitAuth?.cleanup() ?? Promise.resolve(),

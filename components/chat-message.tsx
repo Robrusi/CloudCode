@@ -43,11 +43,13 @@ export const MessageBlock = memo(function MessageBlock({
   onOpenFile,
   onOpenFileDiff,
   repoName,
+  sandboxId,
 }: {
   message: ChatMessage
   onOpenFile: (path: string) => void
   onOpenFileDiff: (path: string, diff: string) => void
   repoName: string | null
+  sandboxId?: string | null
 }) {
   const logs = useMemo(
     () =>
@@ -89,6 +91,7 @@ export const MessageBlock = memo(function MessageBlock({
           pending={Boolean(message.pending)}
           logs={logs}
           runDiff={message.meta?.diff}
+          sandboxId={sandboxId}
         />
       ) : null}
       {!message.pending && message.meta?.diff ? (
@@ -113,6 +116,8 @@ type AssistantSegment =
   | { detail: ParsedLogDetail; key: string; kind: "tool" }
 
 const EMPTY_TOOL_DETAILS: ParsedLogDetail[] = []
+const DAYTONA_RECORDING_PATH_REGEX =
+  /\/(?:root|home\/[^/\s]+)\/\.daytona\/recordings\/([0-9a-fA-F-]{36})(?:_[^\s<)]*)?\.mp4/g
 
 function splitContentByToolMarkers(text: string): AssistantSegment[] {
   const segments: AssistantSegment[] = []
@@ -130,7 +135,12 @@ function splitContentByToolMarkers(text: string): AssistantSegment[] {
     try {
       const decoded = decodeURIComponent(m[1])
       const detail = JSON.parse(decoded) as ParsedLogDetail
-      segments.push({ detail, key: `tool-${m.index}`, kind: "tool" })
+      const key = `tool-${m.index}`
+      segments.push({
+        detail: withToolDetailRenderKey(detail, key),
+        key,
+        kind: "tool",
+      })
     } catch {
       // ignore malformed marker
     }
@@ -146,6 +156,135 @@ function splitContentByToolMarkers(text: string): AssistantSegment[] {
   return segments
 }
 
+type RecordingArtifact = {
+  fileName?: string
+  filePath?: string
+  id: string
+  sandboxId?: string
+  status?: string
+}
+
+function recordingUrl(recording: RecordingArtifact) {
+  const sandboxId = recording.sandboxId?.trim()
+  if (!sandboxId || !recording.id) return null
+
+  return `/api/sandbox/desktop/recordings?${new URLSearchParams({
+    download: "1",
+    inline: "1",
+    recordingId: recording.id,
+    sandboxId,
+  })}`
+}
+
+function recordingLabel(recording: RecordingArtifact) {
+  return (
+    recording.fileName || recording.filePath?.split("/").pop() || recording.id
+  )
+}
+
+type RecordingTextPart =
+  | { key: string; kind: "recording"; recording: RecordingArtifact }
+  | { key: string; kind: "text"; text: string }
+
+function cleanRecordingText(text: string): string {
+  return text
+    .replace(/\n\s*\.\s*$/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+}
+
+// Split assistant text into ordered parts so each recording renders inline at
+// the position its path appears, instead of being collected at the bottom.
+function splitTextWithRecordings(
+  text: string,
+  sandboxId?: string | null
+): RecordingTextPart[] {
+  if (!sandboxId) {
+    const cleaned = text.trim()
+    return cleaned ? [{ key: "text-0", kind: "text", text: cleaned }] : []
+  }
+
+  const parts: RecordingTextPart[] = []
+  const seen = new Set<string>()
+  let last = 0
+  let m: RegExpExecArray | null
+  DAYTONA_RECORDING_PATH_REGEX.lastIndex = 0
+  while ((m = DAYTONA_RECORDING_PATH_REGEX.exec(text)) !== null) {
+    const before = cleanRecordingText(text.slice(last, m.index))
+    if (before) {
+      parts.push({ key: `text-${last}-${m.index}`, kind: "text", text: before })
+    }
+    const id = m[1]
+    if (!seen.has(id)) {
+      seen.add(id)
+      parts.push({
+        key: `recording-${id}`,
+        kind: "recording",
+        recording: { filePath: m[0], id, sandboxId },
+      })
+    }
+    last = m.index + m[0].length
+  }
+  const tail = cleanRecordingText(text.slice(last))
+  if (tail) parts.push({ key: `text-${last}`, kind: "text", text: tail })
+  return parts
+}
+
+function RecordingVideo({ recording }: { recording: RecordingArtifact }) {
+  const src = recordingUrl(recording)
+  if (!src) return null
+  const label = recordingLabel(recording)
+
+  return (
+    <video
+      aria-label={`Recording video: ${label}`}
+      controls
+      preload="metadata"
+      src={src}
+      className="aspect-video w-full rounded-md bg-black"
+    >
+      <track kind="captions" label="No captions" />
+    </video>
+  )
+}
+
+function MarkdownWithRecordingVideos({
+  className,
+  onOpenFile,
+  repoName,
+  sandboxId,
+  text,
+}: {
+  className?: string
+  onOpenFile: (path: string) => void
+  repoName: string | null
+  sandboxId?: string | null
+  text: string
+}) {
+  const parts = useMemo(
+    () => splitTextWithRecordings(text, sandboxId),
+    [sandboxId, text]
+  )
+
+  return (
+    <div className="space-y-3">
+      {parts.map((part) =>
+        part.kind === "recording" ? (
+          <RecordingVideo key={part.key} recording={part.recording} />
+        ) : (
+          <Markdown
+            key={part.key}
+            text={part.text}
+            className={className}
+            repoName={repoName}
+            onOpenFile={onOpenFile}
+          />
+        )
+      )}
+    </div>
+  )
+}
+
 const AssistantBody = memo(function AssistantBody({
   text,
   repoName,
@@ -154,6 +293,7 @@ const AssistantBody = memo(function AssistantBody({
   pending,
   logs,
   runDiff,
+  sandboxId,
 }: {
   text: string
   repoName: string | null
@@ -162,6 +302,7 @@ const AssistantBody = memo(function AssistantBody({
   pending: boolean
   logs: ChatRunLog[]
   runDiff?: string
+  sandboxId?: string | null
 }) {
   if (pending) {
     return (
@@ -172,6 +313,7 @@ const AssistantBody = memo(function AssistantBody({
         onOpenFile={onOpenFile}
         logs={logs}
         runDiff={runDiff}
+        sandboxId={sandboxId}
       />
     )
   }
@@ -244,11 +386,16 @@ const AssistantBody = memo(function AssistantBody({
     }
     if (seg.kind === "tools") {
       rendered.push(
-        <ToolGroup key={seg.key} details={seg.details} runDiff={runDiff} />
+        <ToolGroup
+          key={seg.key}
+          details={seg.details}
+          runDiff={runDiff}
+          sandboxId={sandboxId}
+        />
       )
     } else if (seg.text.trim()) {
       rendered.push(
-        <Markdown
+        <MarkdownWithRecordingVideos
           key={seg.key}
           text={seg.text}
           className={cn(
@@ -257,6 +404,7 @@ const AssistantBody = memo(function AssistantBody({
           )}
           repoName={repoName}
           onOpenFile={onOpenFile}
+          sandboxId={sandboxId}
         />
       )
     }
@@ -272,6 +420,7 @@ const PendingAssistantBody = memo(function PendingAssistantBody({
   onOpenFile,
   logs,
   runDiff,
+  sandboxId,
 }: {
   text: string
   error: boolean
@@ -279,6 +428,7 @@ const PendingAssistantBody = memo(function PendingAssistantBody({
   onOpenFile: (path: string) => void
   logs: ChatRunLog[]
   runDiff?: string
+  sandboxId?: string | null
 }) {
   const segments = splitContentByToolMarkers(text)
   const hasMarkers = segments.some((segment) => segment.kind === "tool")
@@ -317,9 +467,14 @@ const PendingAssistantBody = memo(function PendingAssistantBody({
     <div className="space-y-3">
       {grouped.map((seg) =>
         seg.kind === "tools" ? (
-          <ToolGroup key={seg.key} details={seg.details} runDiff={runDiff} />
+          <ToolGroup
+            key={seg.key}
+            details={seg.details}
+            runDiff={runDiff}
+            sandboxId={sandboxId}
+          />
         ) : (
-          <Markdown
+          <MarkdownWithRecordingVideos
             key={seg.key}
             text={seg.text}
             className={cn(
@@ -328,11 +483,16 @@ const PendingAssistantBody = memo(function PendingAssistantBody({
             )}
             repoName={repoName}
             onOpenFile={onOpenFile}
+            sandboxId={sandboxId}
           />
         )
       )}
       {fallbackTools.length > 0 ? (
-        <ToolGroup details={fallbackTools} runDiff={runDiff} />
+        <ToolGroup
+          details={fallbackTools}
+          runDiff={runDiff}
+          sandboxId={sandboxId}
+        />
       ) : null}
     </div>
   )
@@ -445,6 +605,8 @@ type ParsedLogDetail = {
   kind?: string
   name?: string
   output?: string
+  recording?: RecordingArtifact
+  renderKey?: string
   status?: string
   text?: string
 }
@@ -463,13 +625,23 @@ function parseLogDetail(detail?: string): ParsedLogDetail | null {
 
 function toolDetailsFromLogs(logs: ChatRunLog[]) {
   return logs
-    .map((log) => (log.kind === "command" ? parseLogDetail(log.detail) : null))
+    .map((log) => {
+      const detail = log.kind === "command" ? parseLogDetail(log.detail) : null
+      return detail ? withToolDetailRenderKey(detail, log.id) : null
+    })
     .filter(
       (detail): detail is ParsedLogDetail =>
         detail?.kind === "command_execution" ||
         detail?.kind === "file_change" ||
         detail?.kind === "tool_call"
     )
+}
+
+function withToolDetailRenderKey(
+  detail: ParsedLogDetail,
+  renderKey: string
+): ParsedLogDetail {
+  return { ...detail, renderKey }
 }
 
 function toolDetailKey(detail: ParsedLogDetail) {
@@ -482,11 +654,18 @@ function toolDetailKey(detail: ParsedLogDetail) {
     detail.changes
       ?.map((change) => `${change.kind ?? ""}:${change.path ?? ""}`)
       .join(","),
+    detail.recording
+      ? `${detail.recording.sandboxId ?? ""}:${detail.recording.id}`
+      : undefined,
     detail.text,
     detail.output,
   ]
     .filter((part) => part !== undefined && part !== "")
     .join(":")
+}
+
+function toolDetailRenderKey(detail: ParsedLogDetail, fallback: string) {
+  return detail.renderKey || fallback
 }
 
 function normalizeCommandKey(detail: ParsedLogDetail): string | null {
@@ -582,6 +761,7 @@ function mergeCommandDetails(
     exitCode: primary.exitCode ?? fallback.exitCode,
     kind: "command_execution",
     output: primary.output ?? fallback.output,
+    renderKey: primary.renderKey ?? fallback.renderKey,
     status: primary.status ?? fallback.status,
   }
 }
@@ -1080,6 +1260,13 @@ function summarizeBundle(
 }
 
 function describeItem(detail: ParsedLogDetail): string {
+  if (detail.recording) {
+    const status = detail.recording.status?.toLowerCase()
+    return status === "completed" || status === "stopped"
+      ? `Recorded ${recordingLabel(detail.recording)}`
+      : `Recording ${recordingLabel(detail.recording)}`
+  }
+
   const kind = classifyDetail(detail)
   const text = detail.text?.trim() ?? ""
   if (kind === "edit" || kind === "create") {
@@ -1139,9 +1326,11 @@ function basename(path: string): string {
 const ToolGroup = memo(function ToolGroup({
   details,
   runDiff,
+  sandboxId,
 }: {
   details: ParsedLogDetail[]
   runDiff?: string
+  sandboxId?: string | null
 }) {
   const visibleDetails = useMemo(() => coalesceToolDetails(details), [details])
   if (visibleDetails.length === 0) return null
@@ -1154,6 +1343,7 @@ const ToolGroup = memo(function ToolGroup({
           umbrella={bundle.umbrella}
           items={bundle.items}
           runDiff={runDiff}
+          sandboxId={sandboxId}
         />
       ))}
     </div>
@@ -1164,10 +1354,12 @@ const ToolSummary = memo(function ToolSummary({
   umbrella,
   items,
   runDiff,
+  sandboxId,
 }: {
   umbrella: ToolUmbrella
   items: ParsedLogDetail[]
   runDiff?: string
+  sandboxId?: string | null
 }) {
   const [open, setOpen] = useState(false)
   const allSearches =
@@ -1219,38 +1411,49 @@ const ToolSummary = memo(function ToolSummary({
       </button>
       {open && showFileRows ? (
         <div className="mt-0.5 ml-6 space-y-0.5">
-          {items.flatMap((detail) => {
+          {items.flatMap((detail, detailIndex) => {
             const ops = extractFileOps(detail)
+            const detailKey = toolDetailRenderKey(
+              detail,
+              `${detailIndex}:${toolDetailKey(detail)}`
+            )
             if (ops.length === 0) {
               return [
                 <ExpandableItemRow
-                  key={toolDetailKey(detail)}
+                  key={detailKey}
                   detail={detail}
                   runDiff={runDiff}
+                  sandboxId={sandboxId}
                 />,
               ]
             }
-            return ops.map((fileOp) => (
+            return ops.map((fileOp, fileOpIndex) => (
               <ExpandableFileRow
-                key={`${toolDetailKey(detail)}:${fileOp.op}:${fileOp.path}`}
+                key={`${detailKey}:${fileOpIndex}:${fileOp.op}:${fileOp.path}`}
                 detail={detail}
                 fileOp={fileOp}
                 runDiff={runDiff}
+                sandboxId={sandboxId}
               />
             ))
           })}
         </div>
       ) : open && isSingleItem ? (
         <div className="mt-2 ml-6">
-          <DetailView detail={items[0]} runDiff={runDiff} />
+          <DetailView
+            detail={items[0]}
+            runDiff={runDiff}
+            sandboxId={sandboxId}
+          />
         </div>
       ) : open ? (
         <div className="mt-0.5 ml-6 space-y-0.5">
-          {items.map((d) => (
+          {items.map((d, index) => (
             <ExpandableItemRow
-              key={toolDetailKey(d)}
+              key={toolDetailRenderKey(d, `${index}:${toolDetailKey(d)}`)}
               detail={d}
               runDiff={runDiff}
+              sandboxId={sandboxId}
             />
           ))}
         </div>
@@ -1262,9 +1465,11 @@ const ToolSummary = memo(function ToolSummary({
 const ExpandableItemRow = memo(function ExpandableItemRow({
   detail,
   runDiff,
+  sandboxId,
 }: {
   detail: ParsedLogDetail
   runDiff?: string
+  sandboxId?: string | null
 }) {
   const [open, setOpen] = useState(false)
   const failed = typeof detail.exitCode === "number" && detail.exitCode !== 0
@@ -1272,6 +1477,7 @@ const ExpandableItemRow = memo(function ExpandableItemRow({
     detail.command?.trim() ||
     detail.text?.trim() ||
     detail.output?.trim() ||
+    detail.recording ||
     extractFileOps(detail).length > 0
   )
   return (
@@ -1297,7 +1503,7 @@ const ExpandableItemRow = memo(function ExpandableItemRow({
       </button>
       {open && hasDetail ? (
         <div className="mt-2 mb-1">
-          <DetailView detail={detail} runDiff={runDiff} />
+          <DetailView detail={detail} runDiff={runDiff} sandboxId={sandboxId} />
         </div>
       ) : null}
     </div>
@@ -1308,10 +1514,12 @@ const ExpandableFileRow = memo(function ExpandableFileRow({
   detail,
   fileOp,
   runDiff,
+  sandboxId,
 }: {
   detail: ParsedLogDetail
   fileOp: FileOp
   runDiff?: string
+  sandboxId?: string | null
 }) {
   const [open, setOpen] = useState(false)
   const failed = typeof detail.exitCode === "number" && detail.exitCode !== 0
@@ -1338,7 +1546,12 @@ const ExpandableFileRow = memo(function ExpandableFileRow({
       </button>
       {open ? (
         <div className="mt-2 mb-1">
-          <DetailView detail={detail} fileOp={fileOp} runDiff={runDiff} />
+          <DetailView
+            detail={detail}
+            fileOp={fileOp}
+            runDiff={runDiff}
+            sandboxId={sandboxId}
+          />
         </div>
       ) : null}
     </div>
@@ -1349,10 +1562,12 @@ const DetailView = memo(function DetailView({
   detail,
   fileOp,
   runDiff,
+  sandboxId,
 }: {
   detail: ParsedLogDetail
   fileOp?: FileOp
   runDiff?: string
+  sandboxId?: string | null
 }) {
   const failed = typeof detail.exitCode === "number" && detail.exitCode !== 0
   const kind = classifyDetail(detail)
@@ -1378,8 +1593,16 @@ const DetailView = memo(function DetailView({
   const text = !isCommand && !hasDiff ? (detail.text?.trim() ?? "") : ""
   const output = detail.output?.trim() ?? ""
   const fileChanges = !hasDiff ? fileOps : []
+  const recording =
+    detail.recording && (detail.recording.sandboxId || sandboxId)
+      ? {
+          ...detail.recording,
+          sandboxId: detail.recording.sandboxId ?? sandboxId ?? undefined,
+        }
+      : null
   return (
     <div className="space-y-2">
+      {recording ? <RecordingVideo recording={recording} /> : null}
       {diffBody ? (
         <div className="rounded-xl border border-border bg-background">
           <DiffList diff={diffBody} />
@@ -1387,9 +1610,9 @@ const DetailView = memo(function DetailView({
       ) : null}
       {fileChanges.length > 0 ? (
         <div className="space-y-1 rounded-md border border-border/70 bg-muted/30 px-3 py-2">
-          {fileChanges.map((change) => (
+          {fileChanges.map((change, index) => (
             <div
-              key={`${change.op}:${change.path}`}
+              key={`${index}:${change.op}:${change.path}`}
               className="flex min-w-0 items-center gap-2 font-mono text-[11px] leading-5 text-muted-foreground"
             >
               <span className="shrink-0 uppercase">{change.op}</span>
