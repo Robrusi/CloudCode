@@ -276,20 +276,32 @@ export function workerRunFinalContent(
 ) {
   const streamed = streamedContent.trim()
   const lastMessage = result.lastMessage.trim()
+  const videoPath =
+    result.desktopRecording?.filePath ||
+    (result.desktopRecording?.id
+      ? `/root/.daytona/recordings/${result.desktopRecording.id}.mp4`
+      : "")
+
+  const withVideo = (content: string) => {
+    const trimmed = content.trim()
+    if (!videoPath) return trimmed
+    if (trimmed.includes(videoPath)) return trimmed
+    return `${trimmed || "(no output)"}\n\nVideo:\n${videoPath}`
+  }
 
   if (streamed && stripInlineToolMarkers(streamed)) {
-    return streamed
+    return withVideo(streamed)
   }
 
   if (streamed && lastMessage) {
-    return `${streamed}\n\n${lastMessage}`
+    return withVideo(`${streamed}\n\n${lastMessage}`)
   }
 
-  return (
+  return withVideo(
     streamed ||
-    lastMessage ||
-    result.stdout.trim() ||
-    result.stderr.trim() ||
-    "(no output)"
+      lastMessage ||
+      result.stdout.trim() ||
+      result.stderr.trim() ||
+      "(no output)"
   )
 }
