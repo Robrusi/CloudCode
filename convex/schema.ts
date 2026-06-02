@@ -40,12 +40,6 @@ const environmentStatus = v.union(
   v.literal("failed"),
   v.literal("stale")
 )
-const sandboxSnapshotStatus = v.union(
-  v.literal("creating"),
-  v.literal("ready"),
-  v.literal("failed"),
-  v.literal("stale")
-)
 const codexRunStatus = v.union(
   v.literal("queued"),
   v.literal("running"),
@@ -73,7 +67,6 @@ const messageMeta = v.object({
   branch: v.optional(v.string()),
   diff: v.optional(v.string()),
   logs: v.optional(v.array(runLog)),
-  sandboxSnapshotId: v.optional(v.string()),
   status: v.optional(v.string()),
 })
 
@@ -196,7 +189,6 @@ export default defineSchema({
     mode: v.optional(sandboxPresetMode),
     name: v.string(),
     pathInstallScript: v.optional(v.string()),
-    snapshotId: v.optional(v.id("sandboxSnapshots")),
     toolVersions: v.optional(
       v.array(
         v.object({
@@ -224,8 +216,6 @@ export default defineSchema({
     presetId: v.id("sandboxPresets"),
     repoUrl: v.string(),
     sandboxId: v.optional(v.string()),
-    snapshotId: v.optional(v.id("sandboxSnapshots")),
-    snapshotName: v.optional(v.string()),
     startedAt: v.number(),
     status: environmentBuildStatus,
     updatedAt: v.number(),
@@ -238,7 +228,6 @@ export default defineSchema({
     activeBuildId: v.optional(v.id("sandboxPresetBuilds")),
     activeSandboxId: v.optional(v.string()),
     activeSnapshot: v.optional(v.string()),
-    activeSnapshotId: v.optional(v.id("sandboxSnapshots")),
     baseBranch: v.optional(v.string()),
     buildNumber: v.number(),
     builtAt: v.optional(v.number()),
@@ -256,23 +245,6 @@ export default defineSchema({
     .index("by_preset_repo", ["userId", "presetId", "repoUrl"])
     .index("by_user_updated", ["userId", "updatedAt"]),
 
-  sandboxSnapshots: defineTable({
-    cloudcodeYaml: v.optional(v.string()),
-    createdAt: v.number(),
-    daytonaSnapshot: v.string(),
-    error: v.optional(v.string()),
-    name: v.string(),
-    repoName: v.string(),
-    repoUrl: v.string(),
-    sourceBuildId: v.optional(v.id("sandboxPresetBuilds")),
-    sourcePresetId: v.optional(v.id("sandboxPresets")),
-    status: sandboxSnapshotStatus,
-    updatedAt: v.number(),
-    userId: v.id("users"),
-  })
-    .index("by_user_updated", ["userId", "updatedAt"])
-    .index("by_user_repo_updated", ["userId", "repoUrl", "updatedAt"]),
-
   threads: defineTable({
     baseBranch: v.optional(v.string()),
     branchMode: v.optional(branchMode),
@@ -283,8 +255,6 @@ export default defineSchema({
     model,
     repoUrl: v.string(),
     sandboxPresetId: v.optional(v.id("sandboxPresets")),
-    sandboxSnapshotId: v.optional(v.string()),
-    sandboxSnapshotIdsToDelete: v.optional(v.array(v.string())),
     sandboxId: v.optional(v.string()),
     sandboxState: v.optional(sandboxState),
     title: v.string(),

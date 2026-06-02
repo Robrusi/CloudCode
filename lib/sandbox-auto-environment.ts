@@ -591,6 +591,8 @@ function scannerPrompt(repoPath: string) {
     "",
     "Use commands that are realistic for this repo. Prefer frozen lockfile installs when a lockfile exists. Do not include secret values. Do not use package-manager-specific OS dependency flags such as Playwright --with-deps unless you verified that the base snapshot supports the needed package manager; prefer installing only the browser runtime in repo setup and leave OS package repair as an explicit command only when verified. Do not include lint, format, typecheck, test, browser-test, smoke-test, or build commands unless they are directly needed to validate the environment. If a command is unsafe, destructive, overly expensive, or requires credentials not present, omit it.",
     "",
+    "Cloudcode builder sandboxes have 4 GB of RAM by default. Keep that limit in mind when choosing install commands, but do not add low-memory flags by default. Add package-manager concurrency limits only when the repo's install is likely to be memory-heavy, such as Bun projects with native dependencies, large monorepos, many lifecycle scripts, or docs/CI/devcontainer evidence of memory pressure. For Bun dependency installs, prefer bun install --frozen-lockfile normally, and use flags such as --concurrent-scripts 1 only when those memory-heavy conditions apply.",
+    "",
     "When finished, make sure cloudcode.yaml parses as YAML and contains concrete run commands.",
   ].join("\n")
 }

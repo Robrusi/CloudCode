@@ -50,7 +50,6 @@ const messageMeta = v.object({
   branch: v.optional(v.string()),
   diff: v.optional(v.string()),
   logs: v.optional(v.array(runLog)),
-  sandboxSnapshotId: v.optional(v.string()),
   status: v.optional(v.string()),
 })
 

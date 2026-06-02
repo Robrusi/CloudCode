@@ -1171,11 +1171,11 @@ async function connectOrCreateSandbox(input: RunCodexInSandboxInput) {
         }
       }
 
-      if (
-        desiredSnapshot &&
-        (sandbox.snapshot !== desiredSnapshot ||
-          sandboxIsUnderResourced(sandbox))
-      ) {
+      const snapshotMismatch =
+        desiredSnapshot && sandbox.snapshot !== desiredSnapshot
+      const resourceMismatch =
+        !desiredSnapshot && sandboxIsUnderResourced(sandbox)
+      if (snapshotMismatch || resourceMismatch) {
         await sandbox
           .delete(120)
           .catch(() => sandbox.stop(120, true).catch(() => undefined))

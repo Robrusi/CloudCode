@@ -188,6 +188,8 @@ type RecordingTextPart =
 
 function cleanRecordingText(text: string): string {
   return text
+    .replace(/`+\s*$/g, "")
+    .replace(/^\s*`+/g, "")
     .replace(/\n\s*\.\s*$/g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim()
@@ -210,9 +212,16 @@ function splitTextWithRecordings(
   let m: RegExpExecArray | null
   DAYTONA_RECORDING_PATH_REGEX.lastIndex = 0
   while ((m = DAYTONA_RECORDING_PATH_REGEX.exec(text)) !== null) {
-    const before = cleanRecordingText(text.slice(last, m.index))
+    let start = m.index
+    let end = m.index + m[0].length
+    // Swallow surrounding backticks when Codex wraps the path in inline code.
+    if (text[start - 1] === "`" && text[end] === "`") {
+      start -= 1
+      end += 1
+    }
+    const before = cleanRecordingText(text.slice(last, start))
     if (before) {
-      parts.push({ key: `text-${last}-${m.index}`, kind: "text", text: before })
+      parts.push({ key: `text-${last}-${start}`, kind: "text", text: before })
     }
     const id = m[1]
     if (!seen.has(id)) {
@@ -223,7 +232,7 @@ function splitTextWithRecordings(
         recording: { filePath: m[0], id, sandboxId },
       })
     }
-    last = m.index + m[0].length
+    last = end
   }
   const tail = cleanRecordingText(text.slice(last))
   if (tail) parts.push({ key: `text-${last}`, kind: "text", text: tail })

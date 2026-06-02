@@ -384,7 +384,6 @@ export const update = mutation({
           : {}),
         name: cleanName(args.name),
         pathInstallScript: cleanInstallScript(args.pathInstallScript),
-        snapshotId: undefined,
         toolVersions: undefined,
         tools: undefined,
         updatedAt: Date.now(),
@@ -556,7 +555,6 @@ async function beginAutoEnvironmentBuildForUser(
     activeBuildId: buildId,
     activeSandboxId: undefined,
     activeSnapshot: undefined,
-    activeSnapshotId: undefined,
     updatedAt: now,
   })
 
@@ -682,8 +680,6 @@ export const completeAutoEnvironmentBuild = mutation({
       configHash: args.configHash,
       finishedAt: now,
       sandboxId: args.sandboxId,
-      snapshotId: undefined,
-      snapshotName: undefined,
       status: "ready",
       updatedAt: now,
     })
@@ -691,7 +687,6 @@ export const completeAutoEnvironmentBuild = mutation({
       activeBuildId: args.buildId,
       activeSandboxId: args.sandboxId,
       activeSnapshot: undefined,
-      activeSnapshotId: undefined,
       builtAt: now,
       cloudcodeYaml: args.cloudcodeYaml,
       configHash: args.configHash,
@@ -720,8 +715,6 @@ export const completeAutoEnvironmentBuildForWorker = mutation({
       configHash: args.configHash,
       finishedAt: now,
       sandboxId: args.sandboxId,
-      snapshotId: undefined,
-      snapshotName: undefined,
       status: "ready",
       updatedAt: now,
     })
@@ -729,7 +722,6 @@ export const completeAutoEnvironmentBuildForWorker = mutation({
       activeBuildId: args.buildId,
       activeSandboxId: args.sandboxId,
       activeSnapshot: undefined,
-      activeSnapshotId: undefined,
       builtAt: now,
       cloudcodeYaml: args.cloudcodeYaml,
       configHash: args.configHash,
