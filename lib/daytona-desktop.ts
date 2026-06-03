@@ -1,11 +1,20 @@
-import { randomUUID } from "node:crypto"
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { createHash, randomUUID } from "node:crypto"
+import {
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import type { Sandbox } from "@daytona/sdk"
 
 import {
+  getDaytonaSandbox,
   getStartedDaytonaSandbox,
   runDaytonaCommand,
   shellQuote,
@@ -20,6 +29,10 @@ const DESKTOP_BROWSER_URL = "about:blank"
 const DESKTOP_BROWSER_COMMAND = "/usr/local/bin/cloudcode-browser"
 const DESKTOP_AGENT_RECORDING_STATE_FILE = "active-recording.json"
 const DESKTOP_AGENT_COMPLETED_RECORDING_STATE_FILE = "completed-recording.json"
+const DESKTOP_RECORDING_CACHE_DIR = join(tmpdir(), "cloudcode-recordings")
+const DESKTOP_RECORDING_CACHE_TTL_MS = 6 * 60 * 60 * 1000
+const DESKTOP_RECORDING_CACHE_PRUNE_MS = 10 * 60 * 1000
+const DESKTOP_RECORDING_CACHE_MAX_FILES = 64
 const DESKTOP_BROWSER_LAUNCHER = `#!/usr/bin/env bash
 set -euo pipefail
 
@@ -88,6 +101,7 @@ const DAYTONA_DESKTOP_PACKAGES = [
   "net-tools",
   "novnc",
   "websockify",
+  "x11-utils",
   "x11vnc",
   "xdg-utils",
   "xfce4",
@@ -99,6 +113,7 @@ const DAYTONA_DESKTOP_COMMANDS = [
   "cloudcode-browser",
   "startxfce4",
   "websockify",
+  "xdpyinfo",
   "x11vnc",
   "xdg-open",
   "novnc_proxy",
@@ -124,6 +139,22 @@ export type DaytonaDesktopRecordingArtifact = {
   sandboxId?: string
   status?: string
 }
+
+export type DaytonaDesktopRecordingFile = {
+  fileName: string
+  filePath: string
+  sizeBytes: number
+}
+
+type DesktopRecordingCacheMetadata = {
+  fileName?: string
+}
+
+const desktopRecordingDownloads = new Map<
+  string,
+  Promise<DaytonaDesktopRecordingFile>
+>()
+let lastDesktopRecordingCachePrune = 0
 
 function cleanRecordingLabel(value?: string) {
   const normalized = value?.trim()
@@ -163,6 +194,126 @@ function recordingArtifact(
       typeof record.sandboxId === "string" ? record.sandboxId : sandboxId,
     status: typeof record.status === "string" ? record.status : undefined,
   }
+}
+
+function desktopRecordingCacheKey(sandboxId: string, recordingId: string) {
+  const sandboxHash = createHash("sha256")
+    .update(sandboxId)
+    .digest("hex")
+    .slice(0, 16)
+  const safeRecordingId =
+    recordingId.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120) ||
+    createHash("sha256").update(recordingId).digest("hex")
+  return `${sandboxHash}-${safeRecordingId}`
+}
+
+function desktopRecordingCachePath(sandboxId: string, recordingId: string) {
+  return join(
+    DESKTOP_RECORDING_CACHE_DIR,
+    `${desktopRecordingCacheKey(sandboxId, recordingId)}.mp4`
+  )
+}
+
+function desktopRecordingCacheMetadataPath(filePath: string) {
+  return `${filePath}.json`
+}
+
+async function readDesktopRecordingCacheMetadata(
+  filePath: string
+): Promise<DesktopRecordingCacheMetadata> {
+  try {
+    const raw = await readFile(
+      desktopRecordingCacheMetadataPath(filePath),
+      "utf8"
+    )
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {}
+    }
+    const fileName = (parsed as DesktopRecordingCacheMetadata).fileName
+    return typeof fileName === "string" && fileName.trim()
+      ? { fileName: fileName.trim() }
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+async function writeDesktopRecordingCacheMetadata(
+  filePath: string,
+  metadata: DesktopRecordingCacheMetadata
+) {
+  await writeFile(
+    desktopRecordingCacheMetadataPath(filePath),
+    JSON.stringify(metadata),
+    "utf8"
+  ).catch(() => undefined)
+}
+
+async function cachedDesktopRecordingFile(
+  filePath: string,
+  fallbackFileName: string
+): Promise<DaytonaDesktopRecordingFile | undefined> {
+  try {
+    const fileStat = await stat(filePath)
+    if (!fileStat.isFile() || fileStat.size < 1) return undefined
+    const metadata = await readDesktopRecordingCacheMetadata(filePath)
+    return {
+      fileName: metadata.fileName || fallbackFileName,
+      filePath,
+      sizeBytes: fileStat.size,
+    }
+  } catch {
+    return undefined
+  }
+}
+
+async function removeCachedDesktopRecording(filePath: string) {
+  await Promise.all([
+    rm(filePath, { force: true }).catch(() => undefined),
+    rm(desktopRecordingCacheMetadataPath(filePath), { force: true }).catch(
+      () => undefined
+    ),
+  ])
+}
+
+async function pruneDesktopRecordingCache() {
+  const now = Date.now()
+  if (now - lastDesktopRecordingCachePrune < DESKTOP_RECORDING_CACHE_PRUNE_MS) {
+    return
+  }
+  lastDesktopRecordingCachePrune = now
+
+  const entries = await readdir(DESKTOP_RECORDING_CACHE_DIR, {
+    withFileTypes: true,
+  }).catch(() => [])
+  const files = (
+    await Promise.all(
+      entries.flatMap((entry) => {
+        if (!entry.isFile() || !entry.name.endsWith(".mp4")) return []
+        const filePath = join(DESKTOP_RECORDING_CACHE_DIR, entry.name)
+        return stat(filePath)
+          .then((fileStat) => ({
+            filePath,
+            mtimeMs: fileStat.mtimeMs,
+          }))
+          .catch(() => null)
+      })
+    )
+  ).filter((file): file is { filePath: string; mtimeMs: number } =>
+    Boolean(file)
+  )
+
+  const expired = files.filter(
+    (file) => now - file.mtimeMs > DESKTOP_RECORDING_CACHE_TTL_MS
+  )
+  const newestFirst = [...files].sort((a, b) => b.mtimeMs - a.mtimeMs)
+  const overflow = newestFirst.slice(DESKTOP_RECORDING_CACHE_MAX_FILES)
+  const removals = new Set(
+    [...expired, ...overflow].map((file) => file.filePath)
+  )
+
+  await Promise.all([...removals].map(removeCachedDesktopRecording))
 }
 
 async function clearDesktopAgentRecordingState(
@@ -234,13 +385,30 @@ export async function stopDaytonaDesktopAgentRecording(
   )
 }
 
+// The Daytona preview proxy serves the noVNC web client at the desktop port.
+// Pointing an iframe at the bare URL only shows the noVNC "Connect" landing
+// page, so target the client directly and auto-connect to the x11vnc session.
+function buildDesktopPreviewUrl(previewUrl: string) {
+  try {
+    const url = new URL(previewUrl)
+    url.pathname = "/vnc.html"
+    url.searchParams.set("autoconnect", "true")
+    url.searchParams.set("reconnect", "true")
+    url.searchParams.set("resize", "scale")
+    url.searchParams.set("path", "websockify")
+    return url.toString()
+  } catch {
+    return previewUrl
+  }
+}
+
 async function safeDesktopPreviewUrl(sandbox: Sandbox) {
   try {
     const signed = await sandbox.getSignedPreviewUrl(
       DAYTONA_DESKTOP_PORT,
       DESKTOP_PREVIEW_TTL_SECONDS
     )
-    return signed.url
+    return buildDesktopPreviewUrl(signed.url)
   } catch {
     return null
   }
@@ -253,6 +421,18 @@ async function readComputerUseStatus(sandbox: Sandbox) {
   } catch (error) {
     return error instanceof Error ? error.message : "unknown"
   }
+}
+
+function computerUseStatusLooksActive(status: string) {
+  const value = status.toLowerCase().trim()
+  if (!value || value === "unknown") return false
+  if (value.includes("inactive") || value.includes("stop")) return false
+  return (
+    value.includes("active") ||
+    value.includes("running") ||
+    value.includes("start") ||
+    value.includes("up")
+  )
 }
 
 function desktopDependencyCommand() {
@@ -397,11 +577,20 @@ export async function ensureDaytonaDesktopDependencies(
 export async function readDaytonaDesktopStatus(
   sandboxId: string
 ): Promise<DaytonaDesktopStatus> {
-  const sandbox = await getStartedDaytonaSandbox(sandboxId)
-  const [previewUrl, status] = await Promise.all([
-    safeDesktopPreviewUrl(sandbox),
-    readComputerUseStatus(sandbox),
-  ])
+  const sandbox = await getDaytonaSandbox(sandboxId)
+  await sandbox.refreshData().catch(() => undefined)
+
+  if (sandbox.state !== "started") {
+    return {
+      previewUrl: null,
+      status: sandbox.state || "unknown",
+    }
+  }
+
+  const status = await readComputerUseStatus(sandbox)
+  const previewUrl = computerUseStatusLooksActive(status)
+    ? await safeDesktopPreviewUrl(sandbox)
+    : null
 
   return { previewUrl, status }
 }
@@ -459,14 +648,14 @@ export async function openDaytonaDesktopBrowser(
     )
   }
 
-  const [previewUrl, status] = await Promise.all([
+  const [preview, status] = await Promise.all([
     safeDesktopPreviewUrl(sandbox),
     readComputerUseStatus(sandbox),
   ])
 
   return {
     message: "Browser opened.",
-    previewUrl,
+    previewUrl: preview,
     status,
   }
 }
@@ -487,7 +676,9 @@ export async function takeDaytonaDesktopScreenshot(sandboxId: string) {
 }
 
 export async function listDaytonaDesktopRecordings(sandboxId: string) {
-  const sandbox = await getStartedDaytonaSandbox(sandboxId)
+  const sandbox = await getDaytonaSandbox(sandboxId)
+  await sandbox.refreshData().catch(() => undefined)
+  if (sandbox.state !== "started") return { recordings: [] }
   return await sandbox.computerUse.recording.list()
 }
 
@@ -511,24 +702,61 @@ export async function stopDaytonaDesktopRecording(
   return await sandbox.computerUse.recording.stop(input.recordingId)
 }
 
-export async function downloadDaytonaDesktopRecording(
+async function downloadDaytonaDesktopRecordingToCache(
+  sandboxId: string,
+  recordingId: string
+): Promise<DaytonaDesktopRecordingFile> {
+  await mkdir(DESKTOP_RECORDING_CACHE_DIR, { recursive: true })
+  await pruneDesktopRecordingCache()
+
+  const cachePath = desktopRecordingCachePath(sandboxId, recordingId)
+  const fallbackFileName = `${recordingId}.mp4`
+  const cached = await cachedDesktopRecordingFile(cachePath, fallbackFileName)
+  if (cached) return cached
+
+  const sandbox = await getStartedDaytonaSandbox(sandboxId)
+  const recording = await sandbox.computerUse.recording.get(recordingId)
+  const fileName = recording.fileName || fallbackFileName
+  const tmpPath = join(
+    DESKTOP_RECORDING_CACHE_DIR,
+    `${desktopRecordingCacheKey(sandboxId, recordingId)}.${randomUUID()}.tmp`
+  )
+
+  try {
+    await sandbox.computerUse.recording.download(recordingId, tmpPath)
+    const fileStat = await stat(tmpPath)
+    if (!fileStat.isFile() || fileStat.size < 1) {
+      throw new Error("Daytona desktop recording download was empty.")
+    }
+    await rename(tmpPath, cachePath)
+    await writeDesktopRecordingCacheMetadata(cachePath, { fileName })
+    return {
+      fileName,
+      filePath: cachePath,
+      sizeBytes: fileStat.size,
+    }
+  } catch (error) {
+    await rm(tmpPath, { force: true }).catch(() => undefined)
+    throw error
+  }
+}
+
+export async function getDaytonaDesktopRecordingFile(
   sandboxId: string,
   recordingId: string
 ) {
-  const sandbox = await getStartedDaytonaSandbox(sandboxId)
-  const dir = await mkdtemp(join(tmpdir(), "cloudcode-recording-"))
-  const filePath = join(dir, `${randomUUID()}.mp4`)
+  const cacheKey = desktopRecordingCacheKey(sandboxId, recordingId)
+  const pending = desktopRecordingDownloads.get(cacheKey)
+  if (pending) return await pending
 
-  try {
-    const recording = await sandbox.computerUse.recording.get(recordingId)
-    await sandbox.computerUse.recording.download(recordingId, filePath)
-    return {
-      bytes: await readFile(filePath),
-      fileName: recording.fileName || `${recordingId}.mp4`,
-    }
-  } finally {
-    await rm(dir, { force: true, recursive: true }).catch(() => undefined)
-  }
+  const download = downloadDaytonaDesktopRecordingToCache(
+    sandboxId,
+    recordingId
+  ).finally(() => {
+    desktopRecordingDownloads.delete(cacheKey)
+  })
+  desktopRecordingDownloads.set(cacheKey, download)
+  return await download
 }
 
 function base64FileCommand(path: string, content: string) {

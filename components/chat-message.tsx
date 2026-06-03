@@ -15,6 +15,11 @@ import { memo, useMemo, useState } from "react"
 import { ChangedFiles, DiffList } from "@/components/changed-files"
 import { Markdown } from "@/components/chat-markdown"
 import { CodeBlock } from "@/components/code-block"
+import {
+  RecordingVideo,
+  recordingLabel,
+  type RecordingVideoArtifact,
+} from "@/components/recording-video"
 import { cn } from "@/lib/utils"
 
 export type ChatMessage = {
@@ -156,31 +161,7 @@ function splitContentByToolMarkers(text: string): AssistantSegment[] {
   return segments
 }
 
-type RecordingArtifact = {
-  fileName?: string
-  filePath?: string
-  id: string
-  sandboxId?: string
-  status?: string
-}
-
-function recordingUrl(recording: RecordingArtifact) {
-  const sandboxId = recording.sandboxId?.trim()
-  if (!sandboxId || !recording.id) return null
-
-  return `/api/sandbox/desktop/recordings?${new URLSearchParams({
-    download: "1",
-    inline: "1",
-    recordingId: recording.id,
-    sandboxId,
-  })}`
-}
-
-function recordingLabel(recording: RecordingArtifact) {
-  return (
-    recording.fileName || recording.filePath?.split("/").pop() || recording.id
-  )
-}
+type RecordingArtifact = RecordingVideoArtifact
 
 type RecordingTextPart =
   | { key: string; kind: "recording"; recording: RecordingArtifact }
@@ -237,24 +218,6 @@ function splitTextWithRecordings(
   const tail = cleanRecordingText(text.slice(last))
   if (tail) parts.push({ key: `text-${last}`, kind: "text", text: tail })
   return parts
-}
-
-function RecordingVideo({ recording }: { recording: RecordingArtifact }) {
-  const src = recordingUrl(recording)
-  if (!src) return null
-  const label = recordingLabel(recording)
-
-  return (
-    <video
-      aria-label={`Recording video: ${label}`}
-      controls
-      preload="metadata"
-      src={src}
-      className="aspect-video w-full rounded-md bg-black"
-    >
-      <track kind="captions" label="No captions" />
-    </video>
-  )
 }
 
 function MarkdownWithRecordingVideos({
