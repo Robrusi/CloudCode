@@ -21,6 +21,9 @@ import {
 } from "react"
 
 import { ContextMenu } from "@/components/context-menu"
+import { IconButton } from "@/components/ui/icon-button"
+import { Input } from "@/components/ui/input"
+import { SegmentedControl } from "@/components/ui/segmented-control"
 import {
   killBrowserTerminalSession,
   registerTerminalCloser,
@@ -684,19 +687,27 @@ export function SandboxTerminalPanel({
               }}
             />
           ))}
-          <button
-            type="button"
+          <IconButton
             onClick={addTerminalWindow}
             disabled={!connectedSandboxId}
             aria-label="New terminal"
             title="New terminal"
-            className="ml-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/30 disabled:pointer-events-none disabled:opacity-40"
+            className="ml-0.5"
           >
             <Plus className="size-3.5" />
-          </button>
+          </IconButton>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <TerminalInputModeToggle value={inputMode} onChange={setInputMode} />
+          <SegmentedControl<TerminalInputMode>
+            value={inputMode}
+            onChange={setInputMode}
+            label="Terminal input mode"
+            className="mr-1"
+            options={[
+              { value: "direct", label: "Direct" },
+              { value: "compose", label: "Compose" },
+            ]}
+          />
           <span
             aria-live="polite"
             className={cn(
@@ -708,7 +719,7 @@ export function SandboxTerminalPanel({
             }
           >
             {statusIsReady ? (
-              <CircleDot className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+              <CircleDot className="size-3.5 shrink-0 text-success" />
             ) : statusIsError ? (
               <OctagonX className="size-3.5 shrink-0" />
             ) : (
@@ -716,25 +727,21 @@ export function SandboxTerminalPanel({
             )}
             <span className="truncate">{statusLabel}</span>
           </span>
-          <button
-            type="button"
+          <IconButton
             onClick={reconnectActiveTerminal}
             disabled={!activeSession}
             aria-label="Reconnect terminal"
             title="Reconnect terminal"
-            className="inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/30 disabled:pointer-events-none disabled:opacity-40"
           >
             <RefreshCw className="size-3.5" />
-          </button>
-          <button
-            type="button"
+          </IconButton>
+          <IconButton
             onClick={onClose}
             aria-label="Hide terminal dock"
             title="Hide terminal dock"
-            className="inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/30"
           >
-            <X className="size-4" />
-          </button>
+            <X />
+          </IconButton>
         </div>
       </div>
       <div
@@ -785,34 +792,6 @@ export function SandboxTerminalPanel({
   )
 }
 
-function TerminalInputModeToggle({
-  value,
-  onChange,
-}: {
-  value: TerminalInputMode
-  onChange: (value: TerminalInputMode) => void
-}) {
-  return (
-    <fieldset className="mr-1 grid h-7 grid-cols-2 overflow-hidden rounded-md border border-border/70 bg-muted/40 p-0.5 text-[11px] font-medium">
-      <legend className="sr-only">Terminal input mode</legend>
-      {(["direct", "compose"] as const).map((mode) => (
-        <button
-          key={mode}
-          type="button"
-          aria-pressed={value === mode}
-          onClick={() => onChange(mode)}
-          className={cn(
-            "h-5 min-w-14 rounded-[5px] px-2 leading-none text-muted-foreground transition-colors focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:outline-none",
-            value === mode && "bg-background text-foreground shadow-xs"
-          )}
-        >
-          {mode === "direct" ? "Direct" : "Compose"}
-        </button>
-      ))}
-    </fieldset>
-  )
-}
-
 function TerminalTab({
   active,
   editing,
@@ -856,8 +835,9 @@ function TerminalTab({
     return (
       <div onContextMenu={onContextMenu} className={containerClass}>
         <SquareTerminal className="size-3.5 shrink-0" />
-        <input
+        <Input
           ref={inputRef}
+          variant="bare"
           aria-label={`Rename ${session.label}`}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -873,7 +853,7 @@ function TerminalTab({
               onCancelRename()
             }
           }}
-          className="w-28 min-w-0 bg-transparent p-0 text-xs text-foreground outline-none"
+          className="w-28 text-xs text-foreground"
         />
       </div>
     )

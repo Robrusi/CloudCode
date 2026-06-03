@@ -18,6 +18,11 @@ import {
   useState,
 } from "react"
 
+import { Button } from "@/components/ui/button"
+import { IconButton } from "@/components/ui/icon-button"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
+import { cardSurfaceClass } from "@/components/ui/surface"
 import {
   dedupeEnvVars,
   ENV_NAME_PATTERN,
@@ -435,57 +440,47 @@ export function EnvironmentPanel({ sandboxId }: { sandboxId: string | null }) {
           </div>
           <div className="flex shrink-0 items-center gap-1">
             {showRevealAll ? (
-              <button
+              <IconButton
                 aria-label={allRevealed ? "Hide values" : "Reveal values"}
                 aria-pressed={allRevealed}
                 title={allRevealed ? "Hide values" : "Reveal values"}
-                className={cn(
-                  "grid size-7 place-items-center rounded-md transition-colors hover:bg-muted hover:text-foreground",
-                  allRevealed
-                    ? "bg-muted text-foreground"
-                    : "text-muted-foreground"
-                )}
                 onClick={toggleRevealAll}
-                type="button"
               >
                 {allRevealed ? (
                   <EyeOff className="size-3.5" />
                 ) : (
                   <Eye className="size-3.5" />
                 )}
-              </button>
+              </IconButton>
             ) : null}
-            <button
+            <IconButton
               aria-label="Paste .env file"
               aria-pressed={pasting}
               title="Paste .env file"
-              className={cn(
-                "grid size-7 place-items-center rounded-md transition-colors hover:bg-muted hover:text-foreground",
-                pasting ? "bg-muted text-foreground" : "text-muted-foreground"
-              )}
               onClick={pasting ? cancelPasting : startPasting}
-              type="button"
             >
               <ClipboardPaste className="size-3.5" />
-            </button>
-            <button
-              aria-label="Add variable"
-              className="flex h-7 items-center gap-1.5 rounded-md border border-border/60 bg-background px-2.5 text-xs text-foreground/80 transition-colors hover:bg-muted"
-              onClick={startAdding}
+            </IconButton>
+            <Button
               type="button"
+              variant="outline"
+              size="sm"
+              aria-label="Add variable"
+              onClick={startAdding}
             >
-              <Plus className="size-3.5" />
+              <Plus />
               Add
-            </button>
+            </Button>
           </div>
         </div>
 
         {pasting ? (
-          <div className="mb-3 overflow-hidden rounded-xl border border-border/60 bg-background">
-            <textarea
+          <div className={cn("mb-3 overflow-hidden", cardSurfaceClass)}>
+            <Textarea
               ref={pasteRef}
+              variant="bare"
               aria-label="Paste .env file contents"
-              className="block max-h-72 min-h-32 w-full resize-y bg-transparent px-4 py-3 text-[13px] leading-5 text-foreground outline-none placeholder:text-muted-foreground/40"
+              className="block max-h-72 min-h-32 resize-y px-4 py-3 text-[13px] leading-5 text-foreground"
               onChange={(event) => setPasteText(event.target.value)}
               placeholder={
                 "# Paste your .env file\nAPI_KEY=sk-...\nDATABASE_URL=postgres://..."
@@ -510,34 +505,35 @@ export function EnvironmentPanel({ sandboxId }: { sandboxId: string | null }) {
                     : ""}
               </span>
               <div className="flex shrink-0 items-center gap-1">
-                <button
-                  className="inline-flex h-7 items-center rounded-md px-2.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  onClick={cancelPasting}
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={cancelPasting}
                 >
                   Cancel
-                </button>
-                <button
-                  className="inline-flex h-7 items-center gap-1.5 rounded-md bg-foreground px-3 text-xs font-medium text-background transition-opacity hover:opacity-85 disabled:opacity-40"
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
                   disabled={pasteVars.length === 0}
                   onClick={importPasted}
-                  type="button"
                 >
                   {pasteVars.length > 0 ? `Add ${pasteVars.length}` : "Add"}
-                </button>
+                </Button>
               </div>
             </div>
           </div>
         ) : null}
 
         {isLoadingInitial ? (
-          <div className="grid h-32 place-items-center rounded-xl border border-border/60 bg-background">
+          <div className={cn("grid h-32 place-items-center", cardSurfaceClass)}>
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
           </div>
         ) : isEmpty ? (
           <EmptyState onAdd={startAdding} />
         ) : rows.length > 0 || adding ? (
-          <div className="overflow-hidden rounded-xl border border-border/60 bg-background">
+          <div className={cn("overflow-hidden", cardSurfaceClass)}>
             <ul>
               {rows.map((row) => (
                 <EnvRow
@@ -575,17 +571,17 @@ export function EnvironmentPanel({ sandboxId }: { sandboxId: string | null }) {
                 <span className="text-[11px] text-muted-foreground">
                   Unsaved changes
                 </span>
-                <button
-                  className="inline-flex h-7 items-center gap-1.5 rounded-md bg-foreground px-3 text-xs font-medium text-background transition-opacity hover:opacity-85 disabled:opacity-40"
+                <Button
+                  type="button"
+                  size="sm"
                   disabled={saving}
                   onClick={save}
-                  type="button"
                 >
                   {saving ? (
                     <Loader2 className="size-3.5 animate-spin" />
                   ) : null}
                   Save
-                </button>
+                </Button>
               </div>
             ) : null}
           </div>
@@ -646,7 +642,8 @@ function EnvRow({
   return (
     <li className="group flex items-center gap-3 border-b border-border/50 px-4 py-3 transition-colors last:border-b-0 focus-within:bg-muted/30 hover:bg-muted/30">
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <input
+        <Input
+          variant="bare"
           aria-label="Variable name"
           autoCapitalize="off"
           autoComplete="off"
@@ -656,7 +653,8 @@ function EnvRow({
           spellCheck={false}
           value={row.name}
         />
-        <input
+        <Input
+          variant="bare"
           aria-label={`${row.name || "Variable"} value`}
           autoCapitalize="off"
           autoComplete="off"
@@ -715,8 +713,9 @@ function DraftRow({
   return (
     <li className="flex items-center gap-3 border-b border-border/50 bg-muted/30 px-4 py-3 last:border-b-0">
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <input
+        <Input
           ref={nameRef}
+          variant="bare"
           aria-label="Variable name"
           autoCapitalize="off"
           autoComplete="off"
@@ -728,7 +727,8 @@ function DraftRow({
           spellCheck={false}
           value={name}
         />
-        <input
+        <Input
+          variant="bare"
           aria-label="Variable value"
           autoCapitalize="off"
           autoComplete="off"
@@ -763,36 +763,35 @@ function RowIconButton({
   onClick: () => void
 }) {
   return (
-    <button
+    <IconButton
       aria-label={label}
-      className="grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
       disabled={disabled}
       onClick={onClick}
       title={label}
-      type="button"
     >
       {children}
-    </button>
+    </IconButton>
   )
 }
 
 function EmptyState({ onAdd }: { onAdd: () => void }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-border/60 bg-background px-6 py-10 text-center">
+    <div
+      className={cn(
+        "flex flex-col items-center justify-center gap-3 px-6 py-10 text-center",
+        cardSurfaceClass
+      )}
+    >
       <div className="flex flex-col gap-0.5">
         <p className="text-xs font-medium text-foreground/80">No secrets yet</p>
         <p className="text-[11px] text-muted-foreground">
           Add a variable to the sandbox&apos;s .env.local.
         </p>
       </div>
-      <button
-        className="inline-flex h-7 items-center gap-1 rounded-md border border-border/60 px-2.5 text-[11px] font-medium text-foreground/80 transition-colors hover:bg-muted"
-        onClick={onAdd}
-        type="button"
-      >
-        <Plus className="size-3" />
+      <Button type="button" variant="outline" size="sm" onClick={onAdd}>
+        <Plus />
         Add variable
-      </button>
+      </Button>
     </div>
   )
 }

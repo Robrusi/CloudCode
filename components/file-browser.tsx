@@ -9,7 +9,6 @@ import { Columns2, Loader2, Rows2, X } from "lucide-react"
 import { useTheme } from "next-themes"
 import {
   type CSSProperties,
-  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -23,13 +22,15 @@ import {
   getDiffStats,
   type DiffFileStat,
 } from "@/lib/diff-metadata"
-import { cn } from "@/lib/utils"
 import {
   readCachedFileList,
   writeCachedFileList,
 } from "@/lib/sandbox-file-cache"
 import { EnvironmentPanel } from "@/components/environment-panel"
 import { ResizeHandle } from "@/components/resize-handle"
+import { Button } from "@/components/ui/button"
+import { IconButton } from "@/components/ui/icon-button"
+import { SegmentedControl } from "@/components/ui/segmented-control"
 import { useIsMobile } from "@/hooks/use-is-mobile"
 import { useResizablePanel } from "@/hooks/use-resizable-panel"
 
@@ -447,29 +448,34 @@ export function FileBrowser({
           <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
         ) : null}
         {view === "diffs" && diffStyle && onDiffStyleChange ? (
-          <div className="ml-auto hidden shrink-0 items-center gap-0.5 md:flex">
-            <DiffStyleButton
-              active={diffStyle === "unified"}
-              label="Unified"
-              icon={<Rows2 className="size-3.5" strokeWidth={2} />}
-              onClick={() => onDiffStyleChange("unified")}
-            />
-            <DiffStyleButton
-              active={diffStyle === "split"}
-              label="Split"
-              icon={<Columns2 className="size-3.5" strokeWidth={2} />}
-              onClick={() => onDiffStyleChange("split")}
-            />
-          </div>
+          <SegmentedControl<"unified" | "split">
+            value={diffStyle}
+            onChange={onDiffStyleChange}
+            label="Diff style"
+            className="ml-auto hidden md:inline-flex"
+            options={[
+              {
+                value: "unified",
+                ariaLabel: "Unified",
+                title: "Unified",
+                icon: <Rows2 className="size-3.5" strokeWidth={2} />,
+              },
+              {
+                value: "split",
+                ariaLabel: "Split",
+                title: "Split",
+                icon: <Columns2 className="size-3.5" strokeWidth={2} />,
+              },
+            ]}
+          />
         ) : null}
-        <button
-          type="button"
+        <IconButton
           onClick={onClose}
           aria-label="Close file browser"
-          className="ml-auto inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+          className="ml-auto"
         >
-          <X className="size-4" />
-        </button>
+          <X />
+        </IconButton>
       </header>
 
       <div className="flex h-[3.25rem] shrink-0 items-stretch border-b border-border/60">
@@ -593,36 +599,6 @@ function ViewButton({
   )
 }
 
-function DiffStyleButton({
-  active,
-  label,
-  icon,
-  onClick,
-}: {
-  active: boolean
-  label: string
-  icon: ReactNode
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      aria-label={label}
-      title={label}
-      className={cn(
-        "inline-flex size-7 items-center justify-center rounded-md transition-colors",
-        active
-          ? "text-foreground"
-          : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
-      )}
-    >
-      {icon}
-    </button>
-  )
-}
-
 function EmptyState({
   message,
   actionLabel,
@@ -636,13 +612,9 @@ function EmptyState({
     <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
       <p className="text-xs text-muted-foreground">{message}</p>
       {actionLabel && onAction ? (
-        <button
-          type="button"
-          onClick={onAction}
-          className="inline-flex h-7 items-center rounded-md border border-border/70 px-2.5 text-[11px] font-medium text-foreground/80 transition-colors hover:bg-sidebar-accent"
-        >
+        <Button type="button" variant="outline" size="xs" onClick={onAction}>
           {actionLabel}
-        </button>
+        </Button>
       ) : null}
     </div>
   )

@@ -61,6 +61,9 @@ import {
 import { DiffList } from "@/components/changed-files"
 import { MessageBlock } from "@/components/chat-message"
 import { Button } from "@/components/ui/button"
+import { IconButton as UiIconButton } from "@/components/ui/icon-button"
+import { MenuItem, menuPanelClass } from "@/components/ui/menu"
+import { popoverSurfaceClass } from "@/components/ui/surface"
 import type { FileBrowserOpenMode } from "@/components/file-browser"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -1929,7 +1932,7 @@ function ChatInner() {
                   disabled={!canStopActiveRun}
                   aria-label="Stop"
                   title={canStopActiveRun ? "Stop" : "Run finishing elsewhere"}
-                  className="size-9 md:size-8"
+                  className="size-9 rounded-full md:size-8"
                 >
                   <Square className="size-3.5 fill-current" />
                 </Button>
@@ -1939,7 +1942,7 @@ function ChatInner() {
                   size="icon-sm"
                   disabled={!input.trim()}
                   aria-label="Send"
-                  className="size-9 md:size-8"
+                  className="size-9 rounded-full md:size-8"
                 >
                   <ArrowUp className="size-4" strokeWidth={2.4} />
                 </Button>
@@ -2306,14 +2309,13 @@ function AllDiffsPanel({
     <section className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
       <header className="flex h-[3.25rem] shrink-0 items-center gap-2.5 border-b border-border/60 bg-background/80 px-4 backdrop-blur-xl">
         <span className="flex-1 text-[13px] text-muted-foreground">Diffs</span>
-        <button
-          type="button"
+        <UiIconButton
           onClick={onClose}
           aria-label="Close diffs"
-          className="-mr-[7px] inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="-mr-[7px]"
         >
-          <X className="size-4" />
-        </button>
+          <X />
+        </UiIconButton>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {diff ? (
@@ -2340,12 +2342,9 @@ function SignedOutScreen() {
             Sign in to keep threads and Codex auth attached to your profile.
           </p>
           <SignInButton mode="modal">
-            <button
-              type="button"
-              className="mt-6 inline-flex h-10 items-center justify-center rounded-full bg-foreground px-5 text-sm font-medium text-background transition-opacity hover:opacity-85"
-            >
+            <Button type="button" size="lg" className="mt-6">
               Sign in
-            </button>
+            </Button>
           </SignInButton>
         </div>
       </div>
@@ -2418,15 +2417,14 @@ function TopBar({
 
   return (
     <header className="flex h-[calc(3.25rem+env(safe-area-inset-top))] shrink-0 items-center gap-2.5 border-b border-border/60 bg-background/80 pt-[env(safe-area-inset-top)] pr-3 pl-2 backdrop-blur-xl">
-      <button
-        type="button"
+      <UiIconButton
         onClick={onToggleSidebar}
         aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
         title={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
-        className="inline-flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:size-7"
+        className="size-9 md:size-7"
       >
         <PanelLeft className="size-3.5" />
-      </button>
+      </UiIconButton>
       <span
         title={displayTitle === fullTitle ? undefined : fullTitle}
         aria-label={fullTitle}
@@ -2637,9 +2635,8 @@ function TopBarToolsMenu({
 
   return (
     <div className={cn("relative", className)}>
-      <button
+      <UiIconButton
         ref={triggerRef}
-        type="button"
         onClick={() => {
           if (open) {
             setMenuPos(null)
@@ -2651,13 +2648,11 @@ function TopBarToolsMenu({
         aria-label="Sandbox tools"
         aria-haspopup="menu"
         aria-expanded={open}
-        className={cn(
-          "inline-flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-          (open || anyOpen) && "bg-accent text-foreground"
-        )}
+        aria-pressed={open || anyOpen}
+        size="lg"
       >
         <PanelRight className="size-[18px]" />
-      </button>
+      </UiIconButton>
       {open && menuPos && typeof document !== "undefined"
         ? createPortal(
             <>
@@ -2671,19 +2666,17 @@ function TopBarToolsMenu({
                 role="menu"
                 tabIndex={-1}
                 style={{ top: menuPos.top, right: menuPos.right }}
-                className="fixed z-[61] min-w-44 overflow-hidden rounded-2xl border border-black/[0.06] bg-popover p-1.5 text-popover-foreground shadow-[0_10px_30px_-12px_rgba(0,0,0,0.18)] dark:border-white/10"
+                className={cn("fixed z-[61] min-w-44", menuPanelClass)}
               >
                 {items.map((item) => (
-                  <button
+                  <MenuItem
                     key={item.key}
-                    type="button"
                     role="menuitem"
                     disabled={item.disabled}
                     onClick={() => {
                       item.onSelect()
                       setMenuPos(null)
                     }}
-                    className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-40"
                   >
                     <span className="shrink-0 text-muted-foreground">
                       {item.icon}
@@ -2694,7 +2687,7 @@ function TopBarToolsMenu({
                     {item.active ? (
                       <Check className="size-4 shrink-0" strokeWidth={2.25} />
                     ) : null}
-                  </button>
+                  </MenuItem>
                 ))}
               </div>
             </>,
@@ -2727,9 +2720,8 @@ function TopBarIconButton({
   ref?: React.Ref<HTMLButtonElement>
 }) {
   return (
-    <button
+    <UiIconButton
       ref={ref}
-      type="button"
       onClick={onClick}
       onFocus={onFocus}
       onPointerDown={onPointerDown}
@@ -2738,13 +2730,10 @@ function TopBarIconButton({
       title={label}
       aria-pressed={active}
       disabled={disabled}
-      className={cn(
-        "inline-flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40 md:size-7",
-        active && "bg-accent text-foreground"
-      )}
+      className="size-9 md:size-7"
     >
       {children}
-    </button>
+    </UiIconButton>
   )
 }
 
@@ -2906,28 +2895,25 @@ function SandboxMenu({
                 role="menu"
                 tabIndex={-1}
                 style={{ top: menuPos.top, right: menuPos.right }}
-                className="fixed z-[61] min-w-44 overflow-hidden rounded-2xl border border-black/[0.06] bg-popover p-1.5 text-popover-foreground shadow-[0_10px_30px_-12px_rgba(0,0,0,0.18)] dark:border-white/10"
+                className={cn("fixed z-[61] min-w-44", menuPanelClass)}
               >
-                <button
-                  type="button"
+                <MenuItem
                   role="menuitem"
                   disabled={busy}
                   onClick={() =>
                     handle(stopped ? onResumeSandbox : onPauseSandbox)
                   }
-                  className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-muted disabled:opacity-50"
                 >
                   {stopped ? "Resume sandbox" : "Pause sandbox"}
-                </button>
-                <button
-                  type="button"
+                </MenuItem>
+                <MenuItem
                   role="menuitem"
+                  destructive
                   disabled={busy}
                   onClick={() => handle(onDeleteSandbox)}
-                  className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-left text-sm text-destructive transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
                 >
                   Delete sandbox
-                </button>
+                </MenuItem>
               </div>
             </>,
             document.body
@@ -2982,7 +2968,12 @@ function ConfirmDialog({
         className="absolute inset-0 cursor-default border-0 bg-transparent p-0"
         onClick={onCancel}
       />
-      <div className="relative z-10 w-full max-w-sm overflow-hidden rounded-2xl border border-black/[0.06] bg-popover p-5 text-popover-foreground shadow-[0_10px_30px_-12px_rgba(0,0,0,0.18)] dark:border-white/10">
+      <div
+        className={cn(
+          "relative z-10 w-full max-w-sm overflow-hidden p-5",
+          popoverSurfaceClass
+        )}
+      >
         <div className="text-base font-medium text-foreground">{title}</div>
         {description ? (
           <p className="mt-1.5 text-sm text-muted-foreground">{description}</p>
@@ -2991,7 +2982,7 @@ function ConfirmDialog({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-xl border border-border/70 px-3 py-2 text-sm text-foreground/80 transition-colors hover:bg-muted"
+            className="rounded-lg border border-border px-3 py-2 text-sm text-foreground/80 transition-colors hover:bg-muted"
           >
             {cancelLabel}
           </button>
@@ -2999,7 +2990,7 @@ function ConfirmDialog({
             type="button"
             onClick={onConfirm}
             className={cn(
-              "rounded-xl px-3 py-2 text-sm transition-colors",
+              "rounded-lg px-3 py-2 text-sm transition-colors",
               destructive
                 ? "text-destructive-foreground bg-destructive hover:bg-destructive/90"
                 : "bg-foreground text-background hover:bg-foreground/90"

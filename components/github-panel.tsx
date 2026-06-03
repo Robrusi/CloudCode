@@ -2,7 +2,6 @@
 
 import {
   ArrowUp,
-  Check,
   CheckCircle2,
   CircleDot,
   ExternalLink,
@@ -28,6 +27,13 @@ import {
 } from "react"
 
 import type { FileBrowserOpenMode } from "@/components/file-browser"
+import { Button } from "@/components/ui/button"
+import { Checkbox as UiCheckbox } from "@/components/ui/checkbox"
+import { IconButton } from "@/components/ui/icon-button"
+import { Input } from "@/components/ui/input"
+import { Switch as UiSwitch } from "@/components/ui/switch"
+import { Textarea } from "@/components/ui/textarea"
+import { cardSurfaceClass } from "@/components/ui/surface"
 import { getDiffStats, type DiffFileStat } from "@/lib/diff-metadata"
 import type {
   ChecksSummary,
@@ -330,24 +336,18 @@ export function GithubPanel({
         {loading || busy ? (
           <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
         ) : null}
-        <button
-          type="button"
+        <IconButton
           onClick={() => void refresh()}
           aria-label="Refresh"
           title="Refresh"
           disabled={!sandboxId || loading || busy !== null}
-          className="ml-auto grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+          className="ml-auto"
         >
           <RefreshCw className="size-3.5" />
-        </button>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close GitHub panel"
-          className="grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-        >
-          <X className="size-4" />
-        </button>
+        </IconButton>
+        <IconButton onClick={onClose} aria-label="Close GitHub panel">
+          <X />
+        </IconButton>
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -518,7 +518,7 @@ function ChangesSection({
       >
         Changes
       </SectionHeading>
-      <div className="overflow-hidden rounded-xl border border-border/60 bg-background">
+      <div className={cn("overflow-hidden", cardSurfaceClass)}>
         {files.length === 0 ? (
           <p className="px-3 py-3 text-xs text-muted-foreground">No changes.</p>
         ) : (
@@ -540,7 +540,7 @@ function ChangesSection({
 
 function statusCodeColor(code: string) {
   if (code === "A" || code === "U") {
-    return "text-emerald-600 dark:text-emerald-400"
+    return "text-success"
   }
   if (code === "D") return "text-destructive"
   return "text-muted-foreground"
@@ -581,9 +581,7 @@ function FileRow({
         </span>
         {stat ? (
           <span className="shrink-0 font-mono text-[11px] tabular-nums">
-            <span className="text-emerald-600 dark:text-emerald-400">
-              +{stat.additions}
-            </span>{" "}
+            <span className="text-success">+{stat.additions}</span>{" "}
             <span className="text-destructive">−{stat.deletions}</span>
           </span>
         ) : null}
@@ -612,15 +610,21 @@ function CommitSection({
   return (
     <div className="mt-4">
       <SectionHeading>Commit</SectionHeading>
-      <div className="overflow-hidden rounded-xl border border-border/60 bg-background transition-[border-color,box-shadow] focus-within:border-border focus-within:ring-2 focus-within:ring-ring/15">
-        <textarea
+      <div
+        className={cn(
+          "overflow-hidden transition-[border-color,box-shadow] focus-within:border-border focus-within:ring-2 focus-within:ring-ring/15",
+          cardSurfaceClass
+        )}
+      >
+        <Textarea
+          variant="bare"
           aria-label="Commit message"
           value={value}
           onChange={(event) => onChange(event.target.value)}
           placeholder="Message"
           rows={3}
           spellCheck={false}
-          className="block w-full resize-none bg-transparent px-3 py-2.5 text-[13px] leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/40"
+          className="block px-3 py-2.5 text-[13px] text-foreground"
         />
         <div className="flex items-center justify-end gap-2 border-t border-border/60 bg-muted/30 px-2.5 py-2">
           <SecondaryButton
@@ -710,7 +714,7 @@ function PullRequestSection({
       </SectionHeading>
 
       {!connected ? (
-        <div className="rounded-xl border border-border/60 bg-background px-3 py-3">
+        <div className={cn("px-3 py-3", cardSurfaceClass)}>
           <p className="text-xs text-muted-foreground">
             Connect GitHub in Settings to push and open pull requests.
           </p>
@@ -790,28 +794,35 @@ function CreatePrForm({
   title: string
 }) {
   return (
-    <div className="overflow-hidden rounded-xl border border-border/60 bg-background transition-[border-color,box-shadow] focus-within:border-border focus-within:ring-2 focus-within:ring-ring/15">
+    <div
+      className={cn(
+        "overflow-hidden transition-[border-color,box-shadow] focus-within:border-border focus-within:ring-2 focus-within:ring-ring/15",
+        cardSurfaceClass
+      )}
+    >
       <div className="flex items-center gap-1.5 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
         <span className="truncate text-foreground">{head ?? "HEAD"}</span>
         <span className="text-muted-foreground/50">→</span>
         <span className="truncate">{base || "default"}</span>
       </div>
-      <input
+      <Input
+        variant="bare"
         aria-label="Pull request title"
         value={title}
         onChange={(event) => onChangeTitle(event.target.value)}
         placeholder="Title"
         spellCheck={false}
-        className="block w-full border-b border-border/60 bg-transparent px-3 py-2 text-[13px] font-medium text-foreground outline-none placeholder:font-medium placeholder:text-muted-foreground/40"
+        className="block border-b border-border/60 px-3 py-2 text-[13px] font-medium text-foreground placeholder:font-medium"
       />
-      <textarea
+      <Textarea
+        variant="bare"
         aria-label="Pull request description"
         value={body}
         onChange={(event) => onChangeBody(event.target.value)}
         placeholder="Description (optional)"
         rows={3}
         spellCheck={false}
-        className="block w-full resize-none bg-transparent px-3 py-2 text-[13px] text-foreground outline-none placeholder:text-muted-foreground/40"
+        className="block px-3 py-2 text-[13px] text-foreground"
       />
 
       {compareUrl ? (
@@ -873,7 +884,7 @@ function PullRequestCard({
     pr.state === "open" && !pr.merged && busy === null && pr.mergeable !== false
 
   return (
-    <div className="overflow-hidden rounded-xl border border-border/60 bg-background">
+    <div className={cn("overflow-hidden", cardSurfaceClass)}>
       <a
         href={pr.htmlUrl}
         target="_blank"
@@ -936,7 +947,7 @@ function PullRequestCard({
 function PrStateBadge({ pr }: { pr: PullRequestSummary }) {
   const { className, label } = pr.merged
     ? {
-        className: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+        className: "bg-success/10 text-success",
         label: "Merged",
       }
     : pr.state === "closed"
@@ -944,8 +955,7 @@ function PrStateBadge({ pr }: { pr: PullRequestSummary }) {
       : pr.draft
         ? { className: "bg-muted text-muted-foreground", label: "Draft" }
         : {
-            className:
-              "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+            className: "bg-success/10 text-success",
             label: "Open",
           }
 
@@ -995,9 +1005,7 @@ function CheckIcon({ check }: { check: NormalizedCheck }) {
     )
   }
   if (check.conclusion === "success") {
-    return (
-      <CheckCircle2 className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
-    )
+    return <CheckCircle2 className="size-3.5 shrink-0 text-success" />
   }
   if (
     check.conclusion === "neutral" ||
@@ -1070,23 +1078,11 @@ function CheckboxToggle({
 }) {
   return (
     <label className="flex cursor-pointer items-center gap-2 text-[11px] text-muted-foreground transition-colors hover:text-foreground">
-      <input
+      <UiCheckbox
         aria-label={label}
-        type="checkbox"
         checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-        className="peer sr-only"
+        onCheckedChange={onChange}
       />
-      <span
-        className={cn(
-          "grid size-3.5 shrink-0 place-items-center rounded border transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-ring/40",
-          checked
-            ? "border-foreground bg-foreground text-background"
-            : "border-border/70"
-        )}
-      >
-        {checked ? <Check className="size-2.5" strokeWidth={3} /> : null}
-      </span>
       {label}
     </label>
   )
@@ -1103,27 +1099,11 @@ function Switch({
 }) {
   return (
     <label className="flex cursor-pointer items-center gap-2 text-xs text-foreground/80 transition-colors hover:text-foreground">
-      <span className="relative inline-flex shrink-0 items-center">
-        <input
-          aria-label={label}
-          type="checkbox"
-          checked={checked}
-          onChange={(event) => onChange(event.target.checked)}
-          className="peer sr-only"
-        />
-        <span
-          className={cn(
-            "h-4 w-7 rounded-full transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-ring/40",
-            checked ? "bg-foreground" : "bg-muted-foreground/30"
-          )}
-        />
-        <span
-          className={cn(
-            "absolute top-0.5 left-0.5 size-3 rounded-full bg-background shadow-sm transition-transform",
-            checked ? "translate-x-3" : "translate-x-0"
-          )}
-        />
-      </span>
+      <UiSwitch
+        aria-label={label}
+        checked={checked}
+        onCheckedChange={onChange}
+      />
       {label}
     </label>
   )
@@ -1152,18 +1132,16 @@ function PrimaryButton({
   onClick: () => void
 }) {
   return (
-    <button
+    <Button
       type="button"
+      size="sm"
       onClick={onClick}
       disabled={disabled}
-      className={cn(
-        "inline-flex h-7 items-center justify-center gap-1.5 rounded-md bg-foreground px-3 text-xs font-medium text-background transition-[opacity,background-color] duration-150 hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40",
-        className
-      )}
+      className={className}
     >
       {loading ? <Loader2 className="size-3.5 animate-spin" /> : null}
       {children}
-    </button>
+    </Button>
   )
 }
 
@@ -1181,18 +1159,17 @@ function SecondaryButton({
   onClick: () => void
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="outline"
+      size="sm"
       onClick={onClick}
       disabled={disabled}
-      className={cn(
-        "inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-border/60 bg-background px-3 text-xs font-medium text-foreground/80 transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40",
-        className
-      )}
+      className={className}
     >
       {loading ? <Loader2 className="size-3.5 animate-spin" /> : null}
       {children}
-    </button>
+    </Button>
   )
 }
 

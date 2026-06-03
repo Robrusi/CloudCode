@@ -14,12 +14,14 @@ import {
 } from "lucide-react"
 import { useMemo, useState } from "react"
 
+import { Switch } from "@/components/ui/switch"
+import { cardSurfaceClass } from "@/components/ui/surface"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { dedupeEnvVars, parseDotenv } from "@/lib/dotenv-parse"
 import { cn } from "@/lib/utils"
 
-const card = "overflow-hidden rounded-xl border border-border/60 bg-background"
+const card = cn("overflow-hidden", cardSurfaceClass)
 
 const cardRow = "flex items-center gap-3 px-3.5 py-3"
 
@@ -38,13 +40,13 @@ const navDestructive =
   "inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-sm text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:pointer-events-none disabled:opacity-50"
 
 const iconBtn =
-  "inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+  "inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
 
 const inputClass =
-  "h-9 w-full rounded-xl border border-border/70 bg-background px-3 text-sm transition-colors outline-none placeholder:text-muted-foreground/50 focus:border-ring focus:ring-3 focus:ring-ring/20 disabled:opacity-60"
+  "h-9 w-full rounded-lg border border-border bg-background px-3 text-sm transition-colors outline-none placeholder:text-muted-foreground/50 focus:border-ring focus:ring-3 focus:ring-ring/20 disabled:opacity-60"
 
 const textareaClass =
-  "w-full resize-y rounded-xl border border-border/70 bg-background px-3 py-2 font-[family-name:var(--font-mono)] text-xs leading-5 transition-colors outline-none placeholder:text-muted-foreground/50 focus:border-ring focus:ring-3 focus:ring-ring/20"
+  "w-full resize-y rounded-lg border border-border bg-background px-3 py-2 font-[family-name:var(--font-mono)] text-xs leading-5 transition-colors outline-none placeholder:text-muted-foreground/50 focus:border-ring focus:ring-3 focus:ring-ring/20"
 
 const fieldLabel = "grid gap-1.5 text-xs font-medium text-foreground/80"
 
@@ -56,7 +58,7 @@ const metaPill =
 const statusBadge =
   "inline-flex shrink-0 items-center gap-1.5 text-xs font-medium"
 
-const statusOk = "text-emerald-600 dark:text-emerald-400"
+const statusOk = "text-success"
 
 const statusIdle = "text-muted-foreground"
 
@@ -822,7 +824,12 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
               </div>
             ) : (
               <>
-                <div className="flex items-start justify-between gap-3 rounded-xl border border-border/70 bg-background px-3 py-2.5">
+                <div
+                  className={cn(
+                    "flex items-start justify-between gap-3 px-3 py-2.5",
+                    cardSurfaceClass
+                  )}
+                >
                   <div className="min-w-0">
                     <div className="text-xs font-medium text-foreground/80">
                       Auto environment
@@ -834,24 +841,12 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                       ready.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={autoEnvironment}
+                  <Switch
                     aria-label="Auto environment"
-                    onClick={() => setAutoEnvironment((value) => !value)}
-                    className={cn(
-                      "relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus-visible:ring-3 focus-visible:ring-ring/30 focus-visible:outline-none",
-                      autoEnvironment ? "bg-foreground" : "bg-border"
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "inline-block size-4 rounded-full bg-background transition-transform",
-                        autoEnvironment ? "translate-x-4" : "translate-x-0.5"
-                      )}
-                    />
-                  </button>
+                    className="mt-0.5"
+                    checked={autoEnvironment}
+                    onCheckedChange={setAutoEnvironment}
+                  />
                 </div>
 
                 {autoEnvironment && selected?.environments?.length ? (

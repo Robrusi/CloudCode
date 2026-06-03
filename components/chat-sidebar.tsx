@@ -78,9 +78,7 @@ function SandboxDot({
       aria-label={running ? "Sandbox running" : "Sandbox paused"}
       className={cn(
         "size-4 shrink-0",
-        running
-          ? "text-emerald-600 dark:text-emerald-400"
-          : "text-muted-foreground/70"
+        running ? "text-success" : "text-muted-foreground/70"
       )}
     />
   )

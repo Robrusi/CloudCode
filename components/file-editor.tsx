@@ -25,6 +25,11 @@ import {
 } from "react"
 
 import { Markdown } from "@/components/chat-markdown"
+import { IconButton } from "@/components/ui/icon-button"
+import {
+  SegmentedControl,
+  type SegmentedOption,
+} from "@/components/ui/segmented-control"
 import { findDiffForPath } from "@/lib/diff-metadata"
 import {
   diffCacheKey,
@@ -311,45 +316,37 @@ export function FileEditorPanel({
             path={activePath}
           />
         ) : null}
-        <div className="flex shrink-0 items-center rounded-md border border-border/70 bg-background p-0.5">
-          <ModeButton
-            active={mode === "file"}
-            label="File"
-            onClick={() => onModeChange?.("file")}
-          />
-          <ModeButton
-            active={mode === "diff"}
-            label="Diff"
-            onClick={() => onModeChange?.("diff")}
-          />
-          {markdownPreview ? (
-            <ModeButton
-              active={mode === "preview"}
-              label="Preview"
-              onClick={() => onModeChange?.("preview")}
-            />
-          ) : null}
-        </div>
+        <SegmentedControl<FileViewMode>
+          value={mode}
+          onChange={(next) => onModeChange?.(next)}
+          label="File view mode"
+          options={
+            [
+              { value: "file", label: "File" },
+              { value: "diff", label: "Diff" },
+              ...(markdownPreview
+                ? [{ value: "preview", label: "Preview" }]
+                : []),
+            ] as SegmentedOption<FileViewMode>[]
+          }
+        />
         {diffStat ? (
           <span
             className="shrink-0 font-mono text-[11px] tabular-nums"
             title={`${diffStat.additions} additions, ${diffStat.deletions} deletions`}
           >
-            <span className="text-emerald-600 dark:text-emerald-400">
-              +{diffStat.additions}
-            </span>
+            <span className="text-success">+{diffStat.additions}</span>
             <span className="text-muted-foreground/60"> / </span>
             <span className="text-destructive">-{diffStat.deletions}</span>
           </span>
         ) : null}
-        <button
-          type="button"
+        <IconButton
           onClick={onClose}
           aria-label="Close file"
-          className="-mr-[7px] inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="-mr-[7px]"
         >
-          <X className="size-4" />
-        </button>
+          <X />
+        </IconButton>
       </header>
 
       <div className="min-h-0 flex-1">
@@ -367,32 +364,6 @@ export function FileEditorPanel({
         />
       </div>
     </section>
-  )
-}
-
-function ModeButton({
-  active,
-  label,
-  onClick,
-}: {
-  active: boolean
-  label: string
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={cn(
-        "inline-flex h-6 min-w-11 items-center justify-center rounded px-2 text-[11px] font-medium transition-colors",
-        active
-          ? "bg-accent text-foreground"
-          : "text-muted-foreground hover:text-foreground"
-      )}
-    >
-      {label}
-    </button>
   )
 }
 

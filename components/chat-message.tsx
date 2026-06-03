@@ -20,6 +20,7 @@ import {
   recordingLabel,
   type RecordingVideoArtifact,
 } from "@/components/recording-video"
+import { cardSurfaceClass } from "@/components/ui/surface"
 import { cn } from "@/lib/utils"
 
 export type ChatMessage = {
@@ -68,7 +69,7 @@ export const MessageBlock = memo(function MessageBlock({
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-3xl bg-muted px-4 py-2.5 text-[14px] leading-6 break-words whitespace-pre-wrap md:text-[15px]">
+        <div className="max-w-[85%] rounded-2xl bg-muted px-4 py-2.5 text-[14px] leading-6 break-words whitespace-pre-wrap md:text-[15px]">
           {message.content}
         </div>
       </div>
@@ -1576,7 +1577,7 @@ const DetailView = memo(function DetailView({
     <div className="space-y-2">
       {recording ? <RecordingVideo recording={recording} /> : null}
       {diffBody ? (
-        <div className="rounded-xl border border-border bg-background">
+        <div className={cn("overflow-hidden", cardSurfaceClass)}>
           <DiffList diff={diffBody} />
         </div>
       ) : null}

@@ -9,6 +9,8 @@ import {
 import { useTheme } from "next-themes"
 import { memo, type CSSProperties, useMemo } from "react"
 
+import { cardSurfaceClass } from "@/components/ui/surface"
+
 const CODE_LANGUAGE_LABELS: Record<string, string> = {
   bash: "Bash",
   css: "CSS",
@@ -88,7 +90,7 @@ export const CodeBlock = memo(function CodeBlock({
   )
 
   return (
-    <div className="overflow-hidden rounded-xl border border-border bg-background">
+    <div className={`overflow-hidden ${cardSurfaceClass}`}>
       <div className="flex h-8 items-center border-b border-border bg-muted/70 px-3 font-mono text-[11px] font-medium text-muted-foreground uppercase">
         {formatCodeLanguage(language)}
       </div>

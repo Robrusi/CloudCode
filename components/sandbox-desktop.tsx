@@ -27,6 +27,11 @@ import {
   recordingRequestUrl,
 } from "@/components/recording-video"
 import { ResizeHandle } from "@/components/resize-handle"
+import {
+  IconButton as UiIconButton,
+  iconButtonVariants,
+} from "@/components/ui/icon-button"
+import { cardSurfaceClass } from "@/components/ui/surface"
 import { useIsMobile } from "@/hooks/use-is-mobile"
 import { useResizablePanel } from "@/hooks/use-resizable-panel"
 import { cn } from "@/lib/utils"
@@ -413,7 +418,7 @@ function DesktopView({
             className={cn(
               "size-1.5 rounded-full",
               desktopActive || hasPreview
-                ? "bg-emerald-500"
+                ? "bg-success"
                 : "bg-muted-foreground/40"
             )}
           />
@@ -650,7 +655,9 @@ function RecordingRow({
   })
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border/60 bg-background/40">
+    <div
+      className={cn("overflow-hidden", cardSurfaceClass, "bg-background/40")}
+    >
       <button
         type="button"
         onClick={() => !live && setOpen((value) => !value)}
@@ -665,12 +672,12 @@ function RecordingRow({
           className={cn(
             "grid size-8 shrink-0 place-items-center rounded-md",
             live
-              ? "bg-red-500/10 text-red-500"
+              ? "bg-destructive/10 text-destructive"
               : "bg-sidebar-accent/60 text-muted-foreground"
           )}
         >
           {live ? (
-            <span className="size-2 animate-pulse rounded-full bg-red-500" />
+            <span className="size-2 animate-pulse rounded-full bg-destructive" />
           ) : (
             <Play className="size-3.5" />
           )}
@@ -756,16 +763,14 @@ function IconButton({
   onClick: () => void
 }) {
   return (
-    <button
-      type="button"
+    <UiIconButton
       onClick={onClick}
       aria-label={label}
       title={label}
       disabled={disabled}
-      className="grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
     >
       {children}
-    </button>
+    </UiIconButton>
   )
 }
 
@@ -782,10 +787,7 @@ function IconLink({
     <a
       aria-label={label}
       title={label}
-      className={cn(
-        "grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground",
-        className
-      )}
+      className={cn(iconButtonVariants(), className)}
       {...props}
     >
       {children}
@@ -812,10 +814,10 @@ function PanelButton({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        "relative inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-medium transition-colors disabled:pointer-events-none disabled:opacity-40",
+        "relative inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors disabled:pointer-events-none disabled:opacity-40",
         primary
-          ? "border-transparent bg-primary text-primary-foreground hover:bg-primary/85"
-          : "border-border/70 text-foreground/80 hover:bg-sidebar-accent hover:text-foreground"
+          ? "border-transparent bg-foreground text-background hover:bg-foreground/90"
+          : "border-border text-foreground/80 hover:bg-muted hover:text-foreground"
       )}
     >
       <span

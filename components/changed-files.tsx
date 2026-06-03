@@ -8,6 +8,7 @@ import { type CSSProperties, useMemo, useState } from "react"
 
 import { TreeFileIcon } from "@/components/tree-file-icon"
 import { Button } from "@/components/ui/button"
+import { cardSurfaceClass } from "@/components/ui/surface"
 import { useIsMobile } from "@/hooks/use-is-mobile"
 import {
   getDiffStats,
@@ -131,9 +132,7 @@ function DiffStatBadge({
     <span
       className={cn("shrink-0 font-mono text-[11px] tabular-nums", className)}
     >
-      <span className="text-emerald-600 dark:text-emerald-400">
-        +{additions}
-      </span>
+      <span className="text-success">+{additions}</span>
       <span className="text-muted-foreground/60"> / </span>
       <span className="text-destructive">−{deletions}</span>
     </span>
@@ -260,7 +259,7 @@ export function ChangedFiles({
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-border bg-background">
+    <div className={cn("overflow-hidden", cardSurfaceClass)}>
       <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
         <div className="flex items-center gap-2 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
           <span>Changed files ({stats.files.length})</span>
@@ -272,13 +271,7 @@ export function ChangedFiles({
           />
         </div>
         {allDirPaths.length > 0 ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="xs"
-            onClick={toggleAll}
-            className="rounded-xl"
-          >
+          <Button type="button" variant="outline" size="xs" onClick={toggleAll}>
             {allCollapsed ? "Expand all" : "Collapse all"}
           </Button>
         ) : null}

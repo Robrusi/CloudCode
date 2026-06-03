@@ -1,5 +1,6 @@
 "use client"
 
+import { MenuItem, menuPanelClass } from "@/components/ui/menu"
 import { cn } from "@/lib/utils"
 
 export type ContextMenuItem = {
@@ -36,25 +37,20 @@ export function ContextMenu({
         role="menu"
         tabIndex={-1}
         style={{ top: y, left: x }}
-        className="fixed z-50 min-w-44 overflow-hidden rounded-2xl border border-black/[0.06] bg-popover p-1.5 text-popover-foreground shadow-[0_10px_30px_-12px_rgba(0,0,0,0.18)] dark:border-white/10"
+        className={cn("fixed z-50 min-w-44", menuPanelClass)}
       >
         {items.map((item) => (
-          <button
+          <MenuItem
             key={item.label}
-            type="button"
             disabled={item.disabled}
+            destructive={item.destructive}
             onClick={() => {
               item.onSelect()
               onClose()
             }}
-            className={cn(
-              "flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-40",
-              item.destructive &&
-                "text-destructive hover:bg-destructive/10 hover:text-destructive"
-            )}
           >
             {item.label}
-          </button>
+          </MenuItem>
         ))}
       </div>
     </>

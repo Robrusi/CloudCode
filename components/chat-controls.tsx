@@ -16,6 +16,8 @@ import {
   useState,
 } from "react"
 
+import { Input } from "@/components/ui/input"
+import { menuPanelClass } from "@/components/ui/menu"
 import type { Id } from "@/convex/_generated/dataModel"
 import {
   BRANCH_MODE_LABEL,
@@ -28,8 +30,10 @@ import { cn } from "@/lib/utils"
 const chipTrigger =
   "flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/30 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50"
 
-const popoverPanel =
-  "absolute z-10 max-w-[calc(100vw-1.5rem)] min-w-44 overflow-hidden rounded-2xl border border-black/[0.08] bg-popover p-1.5 text-popover-foreground dark:border-white/10"
+const popoverPanel = cn(
+  "absolute z-10 max-w-[calc(100vw-1.5rem)] min-w-44",
+  menuPanelClass
+)
 
 const popoverItem =
   "flex w-full items-center justify-between gap-6 rounded-xl px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-muted"
@@ -165,8 +169,9 @@ export function RepoChip({
       <div className="relative min-w-0">
         <div className="flex h-8 min-w-0 items-center gap-1.5 rounded-lg border border-border bg-background pr-1 pl-2.5 text-xs focus-within:ring-3 focus-within:ring-ring/30">
           <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
-          <input
+          <Input
             ref={setFocusedInputRef}
+            variant="bare"
             aria-label="Repository"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -182,7 +187,7 @@ export function RepoChip({
               }
             }}
             placeholder="owner/repo"
-            className="w-36 min-w-0 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60 sm:w-40"
+            className="w-36 text-xs sm:w-40"
             spellCheck={false}
           />
           {reposLoading ? (
@@ -341,8 +346,9 @@ export function BranchChip({
       <div className="relative">
         <div className="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background pr-1 pl-2.5 text-xs focus-within:ring-3 focus-within:ring-ring/30">
           <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
-          <input
+          <Input
             ref={setFocusedInputRef}
+            variant="bare"
             aria-label="Branch name"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -358,7 +364,7 @@ export function BranchChip({
               }
             }}
             placeholder={defaultBranch ?? "default branch"}
-            className="w-32 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60"
+            className="w-32 text-xs"
             spellCheck={false}
           />
           {branchesLoading ? (
