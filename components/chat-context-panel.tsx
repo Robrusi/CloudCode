@@ -1,18 +1,10 @@
 "use client"
 
 import { FileDiff, FolderGit2, GitBranch, X } from "lucide-react"
-import {
-  type CSSProperties,
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react"
+import { type CSSProperties, type ReactNode } from "react"
 
+import { NotesEditor } from "@/components/notes-editor"
 import { IconButton } from "@/components/ui/icon-button"
-import { Textarea } from "@/components/ui/textarea"
-import { cardSurfaceClass } from "@/components/ui/surface"
 import { ResizeHandle } from "@/components/resize-handle"
 import { useIsMobile } from "@/hooks/use-is-mobile"
 import { useResizablePanel } from "@/hooks/use-resizable-panel"
@@ -26,8 +18,6 @@ type ChatEnvironment = {
   deletions: number
   repoName: string | null
 }
-
-const NOTES_SAVE_DELAY_MS = 600
 
 export function ChatContextPanel({
   open,
@@ -56,57 +46,6 @@ export function ChatContextPanel({
     enabled: !isMobile,
   })
 
-  const [draftNotes, setDraftNotes] = useState(notes)
-  const savedNotesRef = useRef(notes)
-  const prevThreadRef = useRef(notesThreadId)
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  // Adopt the server value when switching threads (always), or when a reactive
-  // update arrives and the local draft has no unsaved edits — never clobber
-  // in-progress typing.
-  useEffect(() => {
-    const threadChanged = prevThreadRef.current !== notesThreadId
-    prevThreadRef.current = notesThreadId
-    setDraftNotes((current) => {
-      if (threadChanged || current === savedNotesRef.current) {
-        savedNotesRef.current = notes
-        return notes
-      }
-      return current
-    })
-  }, [notes, notesThreadId])
-
-  const flushNotes = useCallback(
-    (value: string) => {
-      if (saveTimerRef.current) {
-        clearTimeout(saveTimerRef.current)
-        saveTimerRef.current = null
-      }
-      if (value === savedNotesRef.current) return
-      savedNotesRef.current = value
-      onSaveNotes(value)
-    },
-    [onSaveNotes]
-  )
-
-  const handleNotesChange = useCallback(
-    (value: string) => {
-      setDraftNotes(value)
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-      saveTimerRef.current = setTimeout(() => {
-        saveTimerRef.current = null
-        flushNotes(value)
-      }, NOTES_SAVE_DELAY_MS)
-    },
-    [flushNotes]
-  )
-
-  useEffect(() => {
-    return () => {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    }
-  }, [])
-
   if (!open) return null
 
   return (
@@ -133,64 +72,51 @@ export function ChatContextPanel({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-4 pb-5">
-        <Section title="Environment">
-          <div className="space-y-2.5 px-1">
-            <EnvRow
-              icon={<FolderGit2 className="size-3.5" />}
-              label="Repository"
-              value={environment.repoName ?? "Not set"}
-            />
-            <EnvRow
-              icon={<GitBranch className="size-3.5" />}
-              label="Branch"
-              value={
-                environment.branch ?? (environment.baseBranch || "Default")
-              }
-            />
-            <EnvRow
-              icon={<FileDiff className="size-3.5" />}
-              label="Changes"
-              value={
-                environment.changedFileCount > 0 ? (
-                  <button
-                    type="button"
-                    onClick={onOpenChanges}
-                    className="rounded-sm text-foreground underline-offset-2 transition-colors hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-                  >
-                    {environment.changedFileCount}{" "}
-                    {environment.changedFileCount === 1 ? "file" : "files"}
-                    <span aria-hidden className="text-muted-foreground/50">
-                      {" · "}
-                    </span>
-                    <span className="text-success">
-                      +{environment.additions}
-                    </span>{" "}
-                    <span className="text-destructive">
-                      −{environment.deletions}
-                    </span>
-                  </button>
-                ) : (
-                  "No changes yet"
-                )
-              }
-              muted={environment.changedFileCount === 0}
-            />
-          </div>
-        </Section>
+        <div className="mb-6 space-y-2.5 px-1">
+          <EnvRow
+            icon={<FolderGit2 className="size-3.5" />}
+            label="Repository"
+            value={environment.repoName ?? "Not set"}
+          />
+          <EnvRow
+            icon={<GitBranch className="size-3.5" />}
+            label="Branch"
+            value={environment.branch ?? (environment.baseBranch || "Default")}
+          />
+          <EnvRow
+            icon={<FileDiff className="size-3.5" />}
+            label="Changes"
+            value={
+              environment.changedFileCount > 0 ? (
+                <button
+                  type="button"
+                  onClick={onOpenChanges}
+                  className="rounded-sm text-foreground underline-offset-2 transition-colors hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                >
+                  {environment.changedFileCount}{" "}
+                  {environment.changedFileCount === 1 ? "file" : "files"}
+                  <span aria-hidden className="text-muted-foreground/50">
+                    {" · "}
+                  </span>
+                  <span className="text-success">+{environment.additions}</span>{" "}
+                  <span className="text-destructive">
+                    −{environment.deletions}
+                  </span>
+                </button>
+              ) : (
+                "No changes yet"
+              )
+            }
+            muted={environment.changedFileCount === 0}
+          />
+        </div>
 
         <Section title="Notes" last>
-          <div className={cn("overflow-hidden", cardSurfaceClass)}>
-            <Textarea
-              variant="bare"
-              aria-label="Thread notes"
-              className="block max-h-[40vh] min-h-32 resize-y px-3.5 py-3 text-[13px] leading-5 text-foreground"
-              placeholder="Type here…"
-              spellCheck={false}
-              value={draftNotes}
-              onBlur={() => flushNotes(draftNotes)}
-              onChange={(event) => handleNotesChange(event.target.value)}
-            />
-          </div>
+          <NotesEditor
+            notes={notes}
+            notesThreadId={notesThreadId}
+            onSave={onSaveNotes}
+          />
         </Section>
       </div>
     </aside>

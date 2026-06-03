@@ -8,7 +8,6 @@ import {
   Play,
   RefreshCw,
   Square,
-  Video,
   X,
 } from "lucide-react"
 import {
@@ -27,6 +26,7 @@ import {
   recordingRequestUrl,
 } from "@/components/recording-video"
 import { ResizeHandle } from "@/components/resize-handle"
+import { Button } from "@/components/ui/button"
 import {
   IconButton as UiIconButton,
   iconButtonVariants,
@@ -114,7 +114,16 @@ function isActiveRecording(recording: DesktopRecording) {
 function isDesktopActive(status: string) {
   const value = status.toLowerCase().trim()
   if (!value || value === "unknown") return false
-  if (value.includes("inactive") || value.includes("stop")) return false
+  if (
+    value.includes("error") ||
+    value.includes("fail") ||
+    value.includes("inactive") ||
+    value.includes("not started") ||
+    value.includes("stop") ||
+    value.includes("unable")
+  ) {
+    return false
+  }
   return (
     value.includes("active") ||
     value.includes("running") ||
@@ -252,6 +261,12 @@ export function SandboxDesktopPanel({
   }, [open, sandboxId])
 
   useEffect(() => {
+    if (!status?.previewUrl) {
+      setConnectRequested(false)
+    }
+  }, [status?.previewUrl])
+
+  useEffect(() => {
     if (!open || !sandboxId) return
     const interval = window.setInterval(() => {
       void loadRecordings().catch(() => undefined)
@@ -263,10 +278,21 @@ export function SandboxDesktopPanel({
     () => recordings.find(isActiveRecording) ?? null,
     [recordings]
   )
+  const requestConnect = useCallback(() => {
+    if (!busy) {
+      setConnectRequested(true)
+    }
+  }, [busy])
+  const disconnect = useCallback(() => setConnectRequested(false), [])
+  const handleConnectionLost = useCallback(() => {
+    setConnectRequested(false)
+    void refresh()
+  }, [refresh])
 
   async function startDesktop() {
-    if (!sandboxId) return
+    if (!sandboxId || busy) return
     setBusy("start")
+    setError(null)
     try {
       const next = await postJson<DesktopStatus>("/api/sandbox/desktop", {
         action: "start",
@@ -283,14 +309,16 @@ export function SandboxDesktopPanel({
   }
 
   async function stopDesktop() {
-    if (!sandboxId) return
+    if (!sandboxId || busy) return
     setBusy("stop")
+    setError(null)
+    setConnectRequested(false)
     try {
-      await postJson<unknown>("/api/sandbox/desktop", {
+      const next = await postJson<DesktopStatus>("/api/sandbox/desktop", {
         action: "stop",
         sandboxId,
       })
-      setStatus({ previewUrl: null, status: "stopped" })
+      setStatus(next)
       setConnectRequested(false)
       setError(null)
     } catch (err) {
@@ -306,6 +334,7 @@ export function SandboxDesktopPanel({
   const desktopActive =
     Boolean(previewUrl) && isDesktopActive(status?.status ?? "")
   const hasActiveRecording = Boolean(activeRecording)
+  const connected = Boolean(previewUrl && connectRequested)
 
   return (
     <aside
@@ -369,8 +398,11 @@ export function SandboxDesktopPanel({
             desktopActive={desktopActive}
             hasActiveRecording={hasActiveRecording}
             busy={busy}
+            connected={connected}
             sandboxId={sandboxId}
-            onConnect={() => setConnectRequested(true)}
+            onConnect={requestConnect}
+            onDisconnect={disconnect}
+            onConnectionLost={handleConnectionLost}
             onStart={startDesktop}
             onStop={stopDesktop}
           />
@@ -388,8 +420,11 @@ function DesktopView({
   desktopActive,
   hasActiveRecording,
   busy,
+  connected,
   sandboxId,
   onConnect,
+  onDisconnect,
+  onConnectionLost,
   onStart,
   onStop,
 }: {
@@ -398,12 +433,16 @@ function DesktopView({
   desktopActive: boolean
   hasActiveRecording: boolean
   busy: BusyKind | null
+  connected: boolean
   sandboxId: string | null
   onConnect: () => void
+  onDisconnect: () => void
+  onConnectionLost: () => void
   onStart: () => void
   onStop: () => void
 }) {
   const hasPreview = Boolean(previewUrl)
+  const actionsDisabled = Boolean(busy)
   const webSocketUrl = useMemo(
     () =>
       previewUrl && connectRequested ? desktopWebSocketUrl(previewUrl) : null,
@@ -413,17 +452,7 @@ function DesktopView({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-border/60 px-3">
-        <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span
-            className={cn(
-              "size-1.5 rounded-full",
-              desktopActive || hasPreview
-                ? "bg-success"
-                : "bg-muted-foreground/40"
-            )}
-          />
-          {desktopActive ? "Running" : hasPreview ? "Preview" : "Idle"}
-        </span>
+        <StatusPill active={desktopActive} preview={hasPreview} />
         <div className="flex items-center gap-1.5">
           {hasPreview ? (
             <IconLink
@@ -435,82 +464,108 @@ function DesktopView({
               <Maximize2 className="size-3.5" />
             </IconLink>
           ) : null}
-          {desktopActive ? (
-            <PanelButton
-              onClick={onStop}
-              disabled={!sandboxId || busy === "stop"}
-              loading={busy === "stop"}
-            >
-              <Square className="size-3" />
-              Stop
-            </PanelButton>
+          {connected ? (
+            <>
+              <Button size="sm" variant="outline" onClick={onDisconnect}>
+                <Square className="fill-current" />
+                Disconnect
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={onStop}
+                disabled={!sandboxId || actionsDisabled}
+              >
+                {busy === "stop" ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <Square className="fill-current" />
+                )}
+                Stop
+              </Button>
+            </>
           ) : hasPreview ? (
-            <PanelButton onClick={onConnect}>
-              <Monitor className="size-3" />
-              Connect
-            </PanelButton>
+            <>
+              <Button size="sm" onClick={onConnect} disabled={actionsDisabled}>
+                <Monitor />
+                Connect
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={onStop}
+                disabled={!sandboxId || actionsDisabled}
+              >
+                {busy === "stop" ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <Square className="fill-current" />
+                )}
+                Stop
+              </Button>
+            </>
           ) : (
-            <PanelButton
-              primary
+            <Button
+              size="sm"
               onClick={onStart}
-              disabled={!sandboxId || busy === "start"}
-              loading={busy === "start"}
+              disabled={!sandboxId || actionsDisabled}
             >
-              <Play className="size-3" />
+              {busy === "start" ? (
+                <Loader2 className="animate-spin" />
+              ) : (
+                <Play />
+              )}
               Start desktop
-            </PanelButton>
+            </Button>
           )}
         </div>
       </div>
 
-      <div className="relative min-h-0 flex-1 bg-black">
+      <div
+        className={cn(
+          "relative min-h-0 flex-1",
+          webSocketUrl ? "bg-black" : "bg-sidebar"
+        )}
+      >
         {webSocketUrl ? (
-          <NoVncDesktop webSocketUrl={webSocketUrl} />
+          <NoVncDesktop
+            webSocketUrl={webSocketUrl}
+            onDisconnected={onConnectionLost}
+          />
         ) : hasPreview ? (
-          <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
-            <div className="grid size-12 place-items-center rounded-full border border-white/15 bg-white/10">
-              <Monitor className="size-5 text-white/70" />
-            </div>
-            <div className="space-y-1">
-              <p className="text-sm font-medium text-white/85">
-                Desktop preview is ready
-              </p>
-              <p className="max-w-[15rem] text-xs text-white/60">
-                Connect when you want to view and control the live VNC session.
-              </p>
-            </div>
-            <PanelButton primary onClick={onConnect}>
-              <Monitor className="size-3" />
-              Connect
-            </PanelButton>
-          </div>
+          <DesktopPlaceholder
+            title="Desktop preview is ready"
+            description="Connect when you want to view and control the live VNC session."
+            action={
+              <Button size="sm" onClick={onConnect} disabled={actionsDisabled}>
+                <Monitor />
+                Connect
+              </Button>
+            }
+          />
         ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
-            <div className="grid size-12 place-items-center rounded-full border border-border/60 bg-sidebar-accent/40">
-              <Monitor className="size-5 text-muted-foreground" />
-            </div>
-            <div className="space-y-1">
-              <p className="text-sm font-medium text-foreground/85">
-                Desktop is off
-              </p>
-              <p className="max-w-[15rem] text-xs text-muted-foreground">
-                Start the virtual desktop to watch and control it live over VNC.
-              </p>
-            </div>
-            <PanelButton
-              primary
-              onClick={onStart}
-              disabled={!sandboxId || busy === "start"}
-              loading={busy === "start"}
-            >
-              <Play className="size-3" />
-              Start desktop
-            </PanelButton>
-          </div>
+          <DesktopPlaceholder
+            title="Desktop is off"
+            description="Start the virtual desktop to watch and control it live over VNC."
+            action={
+              <Button
+                size="sm"
+                onClick={onStart}
+                disabled={!sandboxId || actionsDisabled}
+              >
+                {busy === "start" ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <Play />
+                )}
+                Start desktop
+              </Button>
+            }
+          />
         )}
         {hasActiveRecording ? (
-          <span className="pointer-events-none absolute top-2 right-2 inline-flex items-center gap-1.5 rounded-full bg-black/70 px-2 py-1 text-[10px] font-medium tracking-wide text-white uppercase backdrop-blur">
-            <span className="size-1.5 animate-pulse rounded-full bg-red-500" />
+          <span className="pointer-events-none absolute top-2 right-2 inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-background/85 px-2 py-1 text-[10px] font-medium tracking-wide text-destructive uppercase shadow-sm backdrop-blur">
+            <span className="size-1.5 animate-pulse rounded-full bg-destructive" />
             Rec
           </span>
         ) : null}
@@ -519,7 +574,60 @@ function DesktopView({
   )
 }
 
-function NoVncDesktop({ webSocketUrl }: { webSocketUrl: string }) {
+function StatusPill({
+  active,
+  preview,
+}: {
+  active: boolean
+  preview: boolean
+}) {
+  const label = active ? "Running" : preview ? "Preview" : "Idle"
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-background/50 py-0.5 pr-2.5 pl-2 text-[11px] font-medium text-muted-foreground">
+      <span
+        className={cn(
+          "size-1.5 rounded-full",
+          active
+            ? "bg-success"
+            : preview
+              ? "bg-foreground/40"
+              : "bg-muted-foreground/40"
+        )}
+      />
+      {label}
+    </span>
+  )
+}
+
+function DesktopPlaceholder({
+  title,
+  description,
+  action,
+}: {
+  title: string
+  description: string
+  action: ReactNode
+}) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
+      <div className="space-y-1">
+        <p className="text-sm font-medium text-foreground/85">{title}</p>
+        <p className="max-w-[15rem] text-xs text-muted-foreground">
+          {description}
+        </p>
+      </div>
+      {action}
+    </div>
+  )
+}
+
+function NoVncDesktop({
+  webSocketUrl,
+  onDisconnected,
+}: {
+  webSocketUrl: string
+  onDisconnected: () => void
+}) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [message, setMessage] = useState("Connecting desktop...")
 
@@ -563,6 +671,7 @@ function NoVncDesktop({ webSocketUrl }: { webSocketUrl: string }) {
           "clean" in event.detail &&
           event.detail.clean === true
         setMessage(clean ? "Desktop disconnected." : "Desktop connection lost.")
+        onDisconnected()
       })
       rfb.addEventListener("securityfailure", () => {
         if (!disposed) setMessage("Desktop security negotiation failed.")
@@ -588,10 +697,10 @@ function NoVncDesktop({ webSocketUrl }: { webSocketUrl: string }) {
         // terminal disconnected state.
       }
     }
-  }, [webSocketUrl])
+  }, [onDisconnected, webSocketUrl])
 
   return (
-    <div className="relative h-full w-full overflow-hidden">
+    <div className="relative h-full w-full overflow-hidden bg-black">
       <div
         ref={containerRef}
         className="h-full w-full [&_canvas]:outline-none"
@@ -614,10 +723,10 @@ function RecordingsView({
 }) {
   if (!recordings.length || !sandboxId) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
-        <div className="grid size-12 place-items-center rounded-full border border-border/60 bg-sidebar-accent/40">
-          <Video className="size-5 text-muted-foreground" />
-        </div>
+      <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
+        <p className="text-sm font-medium text-foreground/85">
+          No recordings yet
+        </p>
         <p className="max-w-[15rem] text-xs text-muted-foreground">
           Recordings captured of the desktop will show up here.
         </p>
@@ -699,7 +808,7 @@ function RecordingRow({
         ) : null}
       </button>
       {open && !live ? (
-        <div className="border-t border-border/60 bg-black p-2">
+        <div className="border-t border-border/60 bg-muted/30 p-2">
           <RecordingVideo
             aria-label={`Recording: ${title}`}
             recording={recording}
@@ -792,45 +901,5 @@ function IconLink({
     >
       {children}
     </a>
-  )
-}
-
-function PanelButton({
-  children,
-  disabled,
-  loading,
-  primary,
-  onClick,
-}: {
-  children: ReactNode
-  disabled?: boolean
-  loading?: boolean
-  primary?: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={cn(
-        "relative inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors disabled:pointer-events-none disabled:opacity-40",
-        primary
-          ? "border-transparent bg-foreground text-background hover:bg-foreground/90"
-          : "border-border text-foreground/80 hover:bg-muted hover:text-foreground"
-      )}
-    >
-      <span
-        className={cn(
-          "inline-flex items-center gap-1.5",
-          loading && "opacity-0"
-        )}
-      >
-        {children}
-      </span>
-      {loading ? (
-        <Loader2 className="absolute left-1/2 size-3.5 -translate-x-1/2 animate-spin" />
-      ) : null}
-    </button>
   )
 }

@@ -14,6 +14,7 @@ import { join } from "node:path"
 import type { Sandbox } from "@daytona/sdk"
 
 import {
+  daytonaTerminalPath,
   getDaytonaSandbox,
   getStartedDaytonaSandbox,
   runDaytonaCommand,
@@ -23,7 +24,7 @@ import {
 
 const DAYTONA_DESKTOP_PORT = 6080
 const DESKTOP_PREVIEW_TTL_SECONDS = 60 * 60
-const DESKTOP_TOOL_VERSION = "6"
+const DESKTOP_TOOL_VERSION = "7"
 const DESKTOP_DEPENDENCY_TIMEOUT_MS = 10 * 60 * 1000
 const DESKTOP_BROWSER_URL = "about:blank"
 const DESKTOP_BROWSER_COMMAND = "/usr/local/bin/cloudcode-browser"
@@ -33,6 +34,11 @@ const DESKTOP_RECORDING_CACHE_DIR = join(tmpdir(), "cloudcode-recordings")
 const DESKTOP_RECORDING_CACHE_TTL_MS = 6 * 60 * 60 * 1000
 const DESKTOP_RECORDING_CACHE_PRUNE_MS = 10 * 60 * 1000
 const DESKTOP_RECORDING_CACHE_MAX_FILES = 64
+
+type DaytonaDesktopToolExtras = {
+  config?: string
+  instructions?: string
+}
 const DESKTOP_BROWSER_LAUNCHER = `#!/usr/bin/env bash
 set -euo pipefail
 
@@ -101,6 +107,7 @@ const DAYTONA_DESKTOP_PACKAGES = [
   "net-tools",
   "novnc",
   "websockify",
+  "wmctrl",
   "x11-utils",
   "x11vnc",
   "xdg-utils",
@@ -113,6 +120,8 @@ const DAYTONA_DESKTOP_COMMANDS = [
   "cloudcode-browser",
   "startxfce4",
   "websockify",
+  "wmctrl",
+  "xfce4-terminal",
   "xdpyinfo",
   "x11vnc",
   "xdg-open",
@@ -426,13 +435,251 @@ async function readComputerUseStatus(sandbox: Sandbox) {
 function computerUseStatusLooksActive(status: string) {
   const value = status.toLowerCase().trim()
   if (!value || value === "unknown") return false
-  if (value.includes("inactive") || value.includes("stop")) return false
+  if (
+    value.includes("error") ||
+    value.includes("fail") ||
+    value.includes("inactive") ||
+    value.includes("not started") ||
+    value.includes("stop") ||
+    value.includes("unable")
+  ) {
+    return false
+  }
   return (
     value.includes("active") ||
     value.includes("running") ||
     value.includes("start") ||
     value.includes("up")
   )
+}
+
+const LOCAL_DESKTOP_STATUS_MARKER = "__cloudcode_desktop_status__"
+
+type LocalDesktopStatus = {
+  missing: string[]
+  processes: Record<string, string>
+  running: boolean
+}
+
+function desktopServiceStatusCommand() {
+  return [
+    'display="${CLOUDCODE_DESKTOP_DISPLAY:-:0}"',
+    'display_works() { command -v xdpyinfo >/dev/null 2>&1 && xdpyinfo -display "$display" >/dev/null 2>&1; }',
+    "port_listening() {",
+    '  port="$1"',
+    "  if command -v netstat >/dev/null 2>&1; then",
+    "    netstat -ltn 2>/dev/null | awk '{print $4}' | grep -Eq \"[:.]${port}$\"",
+    "    return $?",
+    "  fi",
+    "  if command -v ss >/dev/null 2>&1; then",
+    "    ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq \"[:.]${port}$\"",
+    "    return $?",
+    "  fi",
+    "  return 1",
+    "}",
+    "xfce_running() { pgrep -f '[x]fce4-session|[x]fwm4|[x]fdesktop|[x]fsettingsd|[x]fce4-panel' >/dev/null 2>&1; }",
+    "xvfb=stopped",
+    "xfce4=stopped",
+    "x11vnc=stopped",
+    "novnc=stopped",
+    "display_works && xvfb=running",
+    "xfce_running && xfce4=running",
+    "port_listening 5900 && x11vnc=running",
+    "port_listening 6080 && novnc=running",
+    `printf '${LOCAL_DESKTOP_STATUS_MARKER} xvfb=%s xfce4=%s x11vnc=%s novnc=%s\\n' "$xvfb" "$xfce4" "$x11vnc" "$novnc"`,
+  ].join("\n")
+}
+
+function parseLocalDesktopStatus(output: string): LocalDesktopStatus {
+  const line = output
+    .split(/\r?\n/)
+    .find((candidate) => candidate.startsWith(LOCAL_DESKTOP_STATUS_MARKER))
+  const processes: Record<string, string> = {}
+
+  if (line) {
+    for (const part of line
+      .slice(LOCAL_DESKTOP_STATUS_MARKER.length)
+      .split(/\s+/)) {
+      const [key, value] = part.split("=")
+      if (key && value) processes[key] = value
+    }
+  }
+
+  const required = ["xvfb", "xfce4", "x11vnc", "novnc"]
+  const missing = required.filter((key) => processes[key] !== "running")
+  return {
+    missing,
+    processes,
+    running: missing.length === 0,
+  }
+}
+
+async function readLocalDesktopStatus(sandbox: Sandbox) {
+  const result = await runDaytonaCommand(
+    sandbox,
+    desktopServiceStatusCommand(),
+    {
+      timeoutMs: 10_000,
+    }
+  )
+
+  return parseLocalDesktopStatus(`${result.stdout}\n${result.stderr}`)
+}
+
+function startDesktopServicesCommand() {
+  const statusCommand = desktopServiceStatusCommand()
+
+  return [
+    "set +e",
+    'display="${CLOUDCODE_DESKTOP_DISPLAY:-:0}"',
+    'log_dir="${CLOUDCODE_DESKTOP_LOG_DIR:-${HOME:-/tmp}/.cache/cloudcode-desktop/logs}"',
+    'mkdir -p "$log_dir"',
+    'display_works() { command -v xdpyinfo >/dev/null 2>&1 && xdpyinfo -display "$display" >/dev/null 2>&1; }',
+    "port_listening() {",
+    '  port="$1"',
+    "  if command -v netstat >/dev/null 2>&1; then",
+    "    netstat -ltn 2>/dev/null | awk '{print $4}' | grep -Eq \"[:.]${port}$\"",
+    "    return $?",
+    "  fi",
+    "  if command -v ss >/dev/null 2>&1; then",
+    "    ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq \"[:.]${port}$\"",
+    "    return $?",
+    "  fi",
+    "  return 1",
+    "}",
+    "wait_for_display() {",
+    "  i=0",
+    '  while [ "$i" -lt 40 ]; do',
+    "    display_works && return 0",
+    "    i=$((i + 1))",
+    "    sleep 0.25",
+    "  done",
+    "  return 1",
+    "}",
+    "wait_for_port() {",
+    '  port="$1"',
+    "  i=0",
+    '  while [ "$i" -lt 40 ]; do',
+    '    port_listening "$port" && return 0',
+    "    i=$((i + 1))",
+    "    sleep 0.25",
+    "  done",
+    "  return 1",
+    "}",
+    "if ! display_works; then",
+    '  pkill -f "[X]vfb $display" >/dev/null 2>&1 || true',
+    '  nohup Xvfb "$display" -screen 0 1440x900x24 -ac > "$log_dir/xvfb.log" 2>&1 &',
+    "  wait_for_display || true",
+    "fi",
+    'export DISPLAY="$display"',
+    "if command -v startxfce4 >/dev/null 2>&1 && ! pgrep -f '[x]fce4-session|[x]fwm4|[x]fdesktop|[x]fsettingsd|[x]fce4-panel' >/dev/null 2>&1; then",
+    '  nohup startxfce4 > "$log_dir/xfce4.log" 2>&1 &',
+    "  sleep 2",
+    "fi",
+    "if command -v x11vnc >/dev/null 2>&1 && ! port_listening 5900; then",
+    "  pkill -f '[x]11vnc .*5900' >/dev/null 2>&1 || true",
+    '  nohup x11vnc -display "$display" -forever -shared -nopw -rfbport 5900 -localhost > "$log_dir/x11vnc.log" 2>&1 &',
+    "  wait_for_port 5900 || true",
+    "fi",
+    "if command -v websockify >/dev/null 2>&1 && ! port_listening 6080; then",
+    "  pkill -f '[w]ebsockify.*6080|[n]ovnc_proxy.*6080' >/dev/null 2>&1 || true",
+    '  nohup websockify --web=/usr/share/novnc/ 6080 localhost:5900 > "$log_dir/novnc.log" 2>&1 &',
+    "  wait_for_port 6080 || true",
+    "fi",
+    statusCommand,
+    "missing=''",
+    "for service in xvfb xfce4 x11vnc novnc; do",
+    '  eval "value=\\${$service}"',
+    '  [ "$value" = running ] || missing="$missing $service"',
+    "done",
+    'if [ -n "$missing" ]; then',
+    "  printf 'failed to start:%s\\n' \"$missing\" >&2",
+    '  for log in "$log_dir/xvfb.log" "$log_dir/xfce4.log" "$log_dir/x11vnc.log" "$log_dir/novnc.log"; do',
+    '    [ -s "$log" ] || continue',
+    "    printf '\\n==> %s <==\\n' \"$log\" >&2",
+    '    tail -40 "$log" >&2',
+    "  done",
+    "  exit 1",
+    "fi",
+  ].join("\n")
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+async function startDesktopServicesFallback(
+  sandbox: Sandbox,
+  startError: unknown
+) {
+  const result = await runDaytonaCommand(
+    sandbox,
+    startDesktopServicesCommand(),
+    {
+      timeoutMs: 30_000,
+    }
+  )
+  const localStatus = parseLocalDesktopStatus(
+    `${result.stdout}\n${result.stderr}`
+  )
+
+  if (result.exitCode === 0 && localStatus.running) {
+    return localStatus
+  }
+
+  const fallbackOutput = [result.stderr, result.stdout]
+    .join("\n")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-80)
+    .join("\n")
+  throw new Error(
+    [
+      `Daytona computer use failed: ${errorMessage(startError)}`,
+      fallbackOutput
+        ? `Local desktop fallback also failed:\n${fallbackOutput}`
+        : "Local desktop fallback also failed.",
+    ].join("\n")
+  )
+}
+
+async function stopLocalDesktopServices(sandbox: Sandbox) {
+  const result = await runDaytonaCommand(
+    sandbox,
+    [
+      "set +e",
+      'display="${CLOUDCODE_DESKTOP_DISPLAY:-:0}"',
+      "terminate_exact() {",
+      '  signal="$1"',
+      "  shift",
+      '  for name in "$@"; do',
+      '    pkill "-$signal" -x "$name" >/dev/null 2>&1 || true',
+      "  done",
+      "}",
+      "terminate_pattern() {",
+      '  signal="$1"',
+      '  pattern="$2"',
+      '  pkill "-$signal" -f "$pattern" >/dev/null 2>&1 || true',
+      "}",
+      "stop_desktop_processes() {",
+      '  signal="$1"',
+      '  terminate_exact "$signal" websockify novnc_proxy x11vnc Xvfb startxfce4 xfce4-session xfwm4 xfdesktop xfsettingsd xfce4-panel xfconfd',
+      '  terminate_pattern "$signal" "[w]ebsockify.*6080|[n]ovnc_proxy.*6080"',
+      '  terminate_pattern "$signal" "[x]11vnc .*5900"',
+      '  terminate_pattern "$signal" "[s]tartxfce4|[x]fce4-session|[x]fwm4|[x]fdesktop|[x]fsettingsd|[x]fce4-panel|[x]fconfd"',
+      '  terminate_pattern "$signal" "[X]vfb $display"',
+      "}",
+      "stop_desktop_processes TERM",
+      "sleep 1",
+      "stop_desktop_processes KILL",
+      "sleep 0.5",
+      desktopServiceStatusCommand(),
+    ].join("\n"),
+    { timeoutMs: 10_000 }
+  )
+
+  return parseLocalDesktopStatus(`${result.stdout}\n${result.stderr}`)
 }
 
 function desktopDependencyCommand() {
@@ -588,27 +835,48 @@ export async function readDaytonaDesktopStatus(
   }
 
   const status = await readComputerUseStatus(sandbox)
-  const previewUrl = computerUseStatusLooksActive(status)
-    ? await safeDesktopPreviewUrl(sandbox)
-    : null
+  if (computerUseStatusLooksActive(status)) {
+    return {
+      previewUrl: await safeDesktopPreviewUrl(sandbox),
+      status,
+    }
+  }
 
-  return { previewUrl, status }
+  const localStatus = await readLocalDesktopStatus(sandbox)
+  return {
+    previewUrl: localStatus.running
+      ? await safeDesktopPreviewUrl(sandbox)
+      : null,
+    status: localStatus.running ? "running (fallback)" : status,
+  }
 }
 
 export async function startDaytonaDesktop(sandboxId: string) {
   const sandbox = await getStartedDaytonaSandbox(sandboxId)
   await ensureDaytonaDesktopDependencies(sandbox)
-  const start = await sandbox.computerUse.start()
+  let start: Awaited<ReturnType<typeof sandbox.computerUse.start>> | undefined
+  let fallbackStatus: LocalDesktopStatus | undefined
+
+  try {
+    start = await sandbox.computerUse.start()
+  } catch (error) {
+    fallbackStatus = await startDesktopServicesFallback(sandbox, error)
+  }
+
   const [previewUrl, status] = await Promise.all([
     safeDesktopPreviewUrl(sandbox),
     readComputerUseStatus(sandbox),
   ])
+  const usingFallback =
+    Boolean(fallbackStatus?.running) && !computerUseStatusLooksActive(status)
 
   return {
-    message: start.message ?? "Desktop started.",
+    message: usingFallback
+      ? "Desktop started with local fallback."
+      : (start?.message ?? "Desktop started."),
     previewUrl,
-    processes: start.status ?? {},
-    status,
+    processes: start?.status ?? fallbackStatus?.processes ?? {},
+    status: usingFallback ? "running (fallback)" : status,
   }
 }
 
@@ -618,7 +886,9 @@ export async function openDaytonaDesktopBrowser(
 ) {
   const sandbox = await getStartedDaytonaSandbox(sandboxId)
   await ensureDaytonaDesktopDependencies(sandbox)
-  await sandbox.computerUse.start()
+  await sandbox.computerUse
+    .start()
+    .catch((error) => startDesktopServicesFallback(sandbox, error))
 
   const target = url.trim() || DESKTOP_BROWSER_URL
   const result = await runDaytonaCommand(
@@ -662,13 +932,34 @@ export async function openDaytonaDesktopBrowser(
 
 export async function stopDaytonaDesktop(sandboxId: string) {
   const sandbox = await getStartedDaytonaSandbox(sandboxId)
-  return await sandbox.computerUse.stop()
+  const stopResult = await sandbox.computerUse.stop().catch((error) => ({
+    message: errorMessage(error),
+  }))
+  const localStatus = await stopLocalDesktopServices(sandbox)
+  const stillRunning = Object.entries(localStatus.processes)
+    .filter(([, status]) => status === "running")
+    .map(([service]) => service)
+
+  if (stillRunning.length) {
+    throw new Error(
+      `Desktop stop did not terminate ${stillRunning.join(", ")}.`
+    )
+  }
+
+  return {
+    message: stopResult.message ?? "Desktop stopped.",
+    previewUrl: null,
+    processes: localStatus.processes,
+    status: "stopped",
+  }
 }
 
 export async function takeDaytonaDesktopScreenshot(sandboxId: string) {
   const sandbox = await getStartedDaytonaSandbox(sandboxId)
   await ensureDaytonaDesktopDependencies(sandbox)
-  await sandbox.computerUse.start()
+  await sandbox.computerUse
+    .start()
+    .catch((error) => startDesktopServicesFallback(sandbox, error))
   return await sandbox.computerUse.screenshot.takeCompressed({
     format: "png",
     showCursor: true,
@@ -688,7 +979,9 @@ export async function startDaytonaDesktopRecording(
 ) {
   const sandbox = await getStartedDaytonaSandbox(sandboxId)
   await ensureDaytonaDesktopDependencies(sandbox)
-  await sandbox.computerUse.start()
+  await sandbox.computerUse
+    .start()
+    .catch((error) => startDesktopServicesFallback(sandbox, error))
   return await sandbox.computerUse.recording.start(
     cleanRecordingLabel(input.label)
   )
@@ -775,11 +1068,15 @@ import { createInterface } from "node:readline";
 const repoPath = process.env.CLOUDCODE_REPO_PATH || process.cwd();
 const stateDir = process.env.CLOUDCODE_DESKTOP_STATE_DIR || join(homedir(), ".cache", "cloudcode-desktop");
 const cloudcodeBrowserCommand = process.env.CLOUDCODE_BROWSER_COMMAND || ${JSON.stringify(DESKTOP_BROWSER_COMMAND)};
+const terminalHome = process.env.CLOUDCODE_TERMINAL_HOME || homedir();
+const terminalPath = process.env.CLOUDCODE_TERMINAL_PATH || process.env.PATH || "";
+const codexHome = process.env.CODEX_HOME || join(terminalHome, ".codex");
 const activeRecordingPath = join(stateDir, ${JSON.stringify(DESKTOP_AGENT_RECORDING_STATE_FILE)});
 const completedRecordingPath = join(stateDir, ${JSON.stringify(DESKTOP_AGENT_COMPLETED_RECORDING_STATE_FILE)});
 const autoRecordedToolNames = new Set([
   "desktop_start",
   "desktop_open_browser",
+  "desktop_open_terminal",
   "desktop_screenshot",
   "desktop_click",
   "desktop_move",
@@ -846,6 +1143,10 @@ function run(command, args = [], options = {}) {
 
 function shell(script, options = {}) {
   return run("/bin/bash", ["-lc", script], options);
+}
+
+function shellQuote(value) {
+  return "'" + String(value).replace(/'/g, "'\\''") + "'";
 }
 
 async function displayWorks(display) {
@@ -935,6 +1236,34 @@ function safeRecordingName(label) {
     .replace(/^-+|-+$/g, "")
     .slice(0, 60) || "desktop-recording";
   return base + "-" + Date.now();
+}
+
+function safeTerminalTitle(value) {
+  return (value || "Cloudcode Terminal")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[^\w .:-]+/g, "-")
+    .trim()
+    .slice(0, 80) || "Cloudcode Terminal";
+}
+
+function desktopTerminalCommand() {
+  for (const candidate of ["xfce4-terminal", "x-terminal-emulator"]) {
+    if (commandExists(candidate)) return candidate;
+  }
+  return "";
+}
+
+function desktopTerminalEnv(display) {
+  return {
+    ...process.env,
+    CODEX_HOME: codexHome,
+    DISPLAY: display,
+    HOME: terminalHome,
+    MISE_TRUSTED_CONFIG_PATHS: repoPath,
+    PATH: terminalPath,
+    TAR_OPTIONS: process.env.TAR_OPTIONS || "--no-same-owner --no-same-permissions",
+    TERM: "xterm-256color",
+  };
 }
 
 function daytonaToolboxBaseUrl() {
@@ -1068,6 +1397,76 @@ async function openBrowser(args) {
   throw new Error((log || savedLog).trim() || "Browser did not open.");
 }
 
+async function openTerminal(args) {
+  const display = await ensureDesktop();
+  const terminal = desktopTerminalCommand();
+  if (!terminal) {
+    throw new Error("No desktop terminal is installed. Install xfce4-terminal or x-terminal-emulator.");
+  }
+
+  const cwd = (stringArg(args, "cwd", repoPath).trim() || repoPath);
+  if (!existsSync(cwd)) throw new Error("Terminal working directory does not exist: " + cwd + ".");
+
+  const command = stringArg(args, "command").trim();
+  const title = safeTerminalTitle(stringArg(args, "title", command ? "Cloudcode Dev Server" : "Cloudcode Terminal"));
+  const env = desktopTerminalEnv(display);
+  const launchArgs = ["--working-directory", cwd, "--title", title];
+
+  if (command) {
+    const scriptPath = join(
+      stateDir,
+      "terminal-" + Date.now() + "-" + Math.random().toString(16).slice(2) + ".sh"
+    );
+    const script = [
+      "#!/usr/bin/env bash",
+      "cd " + shellQuote(cwd) + " || exit $?",
+      "export CODEX_HOME=" + shellQuote(env.CODEX_HOME || ""),
+      "export MISE_TRUSTED_CONFIG_PATHS=" + shellQuote(repoPath),
+      "export PATH=" + shellQuote(env.PATH || ""),
+      "export TAR_OPTIONS=" + shellQuote(env.TAR_OPTIONS || "--no-same-owner --no-same-permissions"),
+      "printf '%s\\n' " + shellQuote("$ " + command),
+      "bash -lc " + shellQuote(command),
+      "code=$?",
+      "printf '\\nCommand exited with code %s. Press Ctrl-D or close the window when finished.\\n' \"$code\"",
+      "exec bash -l",
+      "",
+    ].join("\n");
+    writeFileSync(scriptPath, script, { mode: 0o700 });
+    launchArgs.push("--command", "/bin/bash " + shellQuote(scriptPath));
+  }
+
+  const logPath = join(stateDir, "terminal.log");
+  const child = spawn(terminal, launchArgs, {
+    detached: true,
+    env,
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  let log = "";
+  let spawnError = "";
+  child.stderr.on("data", (chunk) => {
+    log += chunk.toString();
+    if (log.length > 20_000) log = log.slice(-20_000);
+    writeFileSync(logPath, log);
+  });
+  child.on("error", (error) => {
+    spawnError = error instanceof Error ? error.message : String(error);
+  });
+  child.unref();
+
+  await new Promise((resolve) => setTimeout(resolve, 1_500));
+  if (spawnError) throw new Error(spawnError);
+
+  const windows = commandExists("wmctrl")
+    ? await run("wmctrl", ["-l", "-G"], { env: desktopEnv(display) }).catch(() => "")
+    : "";
+  if (windows.includes(title) || /terminal/i.test(windows) || child.exitCode === null) {
+    return { command: command || undefined, cwd, display, pid: child.pid, terminal, title, windows };
+  }
+
+  const savedLog = existsSync(logPath) ? readFileSync(logPath, "utf8") : "";
+  throw new Error((log || savedLog).trim() || "Terminal did not open.");
+}
+
 async function callTool(name, args = {}) {
   if (autoRecordedToolNames.has(name)) {
     await ensureAutomaticRecording(name);
@@ -1082,6 +1481,10 @@ async function callTool(name, args = {}) {
     case "desktop_open_browser": {
       const browser = await openBrowser(args);
       return recorded(text("Browser opened on " + browser.display + ".", browser));
+    }
+    case "desktop_open_terminal": {
+      const terminal = await openTerminal(args);
+      return recorded(text("Terminal opened on " + terminal.display + ".", terminal));
     }
     case "desktop_screenshot": {
       const shot = await screenshotPngBase64(boolArg(args, "showCursor", true));
@@ -1166,6 +1569,18 @@ const tools = [
     inputSchema: {
       type: "object",
       properties: { url: { type: "string" } },
+    },
+  },
+  {
+    name: "desktop_open_terminal",
+    description: "Open a visible desktop terminal, optionally running a shell command from the repository. Use this for long-running dev servers during desktop testing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        command: { type: "string" },
+        cwd: { type: "string" },
+        title: { type: "string" },
+      },
     },
   },
   {
@@ -1275,7 +1690,7 @@ async function handle(message) {
           protocolVersion: params?.protocolVersion || "2025-06-18",
           capabilities: { tools: {} },
           serverInfo: { name: "cloudcode-desktop", version: "1.0.0" },
-          instructions: "Use these tools for visual desktop work in the Daytona sandbox. Open URLs only with desktop_open_browser, which launches Cloudcode Browser at /usr/local/bin/cloudcode-browser. Desktop actions automatically start a Daytona recording; Cloudcode stops it after the run. Start with desktop_start, inspect with desktop_screenshot, then act with click/type/key tools. Take another screenshot after each meaningful action.",
+          instructions: "Use these tools for visual desktop work in the Daytona sandbox. Open URLs only with desktop_open_browser, which launches Cloudcode Browser at /usr/local/bin/cloudcode-browser. Use desktop_open_terminal for long-running dev servers, watchers, and other processes needed during desktop testing. Desktop actions automatically start a Daytona recording; Cloudcode stops it after the run. Start with desktop_start, inspect with desktop_screenshot, then act with click/type/key tools. Take another screenshot after each meaningful action.",
         },
       });
       return;
@@ -1318,7 +1733,7 @@ async function handle(message) {
 async function cli() {
   const [, , command, ...rest] = process.argv;
   if (!command) {
-    console.log("Usage: cloudcode-computer <start|open-browser|screenshot|click|type|key|hotkey|scroll|windows|record-start|record-stop>");
+    console.log("Usage: cloudcode-computer <start|open-browser|terminal|screenshot|click|type|key|hotkey|scroll|windows|record-start|record-stop>");
     return;
   }
   const args = {};
@@ -1339,10 +1754,13 @@ async function cli() {
     args.id = rest[0];
   } else if (command === "open-browser") {
     args.url = rest[0] || "about:blank";
+  } else if (command === "terminal") {
+    args.command = rest.join(" ");
   }
   const toolName = {
     start: "desktop_start",
     "open-browser": "desktop_open_browser",
+    terminal: "desktop_open_terminal",
     screenshot: "desktop_screenshot",
     click: "desktop_click",
     type: "desktop_type",
@@ -1392,6 +1810,7 @@ function desktopAgentInstructions() {
     "Use the `cloudcode_desktop` MCP tools for GUI tasks:",
     "- `desktop_start` starts or verifies the desktop.",
     "- `desktop_open_browser` opens Cloudcode Browser at `/usr/local/bin/cloudcode-browser` to a URL.",
+    "- `desktop_open_terminal` opens a visible desktop terminal, optionally running a shell command from the repository.",
     "- `desktop_screenshot` returns an image of the current desktop.",
     "- `desktop_click`, `desktop_type`, `desktop_key`, `desktop_hotkey`, and `desktop_scroll` control the desktop.",
     "- Daytona Computer Use recording starts automatically before desktop actions and Cloudcode stops it after the run.",
@@ -1402,8 +1821,9 @@ function desktopAgentInstructions() {
     "For visual work, use this loop: start the desktop, take a screenshot, act, take another screenshot, and repeat until the UI state is verified.",
     "After making UI-facing changes, decide whether visual verification is needed. Use the Daytona desktop when the change affects layout, styling, visible components, browser behavior, forms, navigation, or user interactions. Skip desktop verification only when the change is clearly non-visual or cannot affect rendered UI.",
     "When UI verification is needed, assume the dev server is already running, open the relevant local URL with `desktop_open_browser`, inspect with screenshots, interact with the changed workflow when useful, and verify the final state before reporting back.",
+    "If desktop verification requires starting a dev server, watcher, or other long-running process, run it with `desktop_open_terminal` so it stays visible in the graphical desktop. Use ordinary shell commands only for finite setup and checks.",
     "",
-    "A shell fallback is also available as `cloudcode-computer`, but prefer the MCP tools because screenshots are returned as inspectable images.",
+    "A shell fallback is also available as `cloudcode-computer`, including `cloudcode-computer terminal '<command>'`, but prefer the MCP tools because screenshots are returned as inspectable images.",
   ].join("\n")
 }
 
@@ -1413,13 +1833,14 @@ export function daytonaDesktopAgentContext() {
     "When a task needs visual interaction, use the `cloudcode_desktop` MCP tools: start with `desktop_start`, open Cloudcode Browser with `desktop_open_browser` when needed, inspect with `desktop_screenshot`, act with click/type/key/scroll tools, then take another screenshot to verify the state.",
     "After UI-facing code changes, decide whether browser verification is needed. Use the Daytona desktop for layout, styling, visible component, browser behavior, form, navigation, and interaction changes; skip it only when the edit is clearly non-visual or cannot affect rendered UI.",
     "When UI verification is needed, assume the dev server is already running, open the relevant local URL with `desktop_open_browser`, interact with the changed workflow when useful, and verify with screenshots before reporting back.",
+    "If desktop verification requires starting a dev server, watcher, or another long-running process, use `desktop_open_terminal` so it runs in the visible desktop terminal. Keep ordinary shell commands for finite setup and checks.",
     "Do not launch `chromium`, `chromium-browser`, `google-chrome`, `google-chrome-stable`, `firefox`, `x-www-browser`, or `xdg-open` directly; `desktop_open_browser` uses `/usr/local/bin/cloudcode-browser`.",
     "Daytona Computer Use recording starts automatically before desktop actions and Cloudcode stops it after the run; use `desktop_record_stop` only when an intermediate video artifact is needed before the run ends.",
   ].join("\n")
 }
 
 function desktopCodexConfig(
-  paths: Pick<DaytonaSandboxPaths, "codexHome" | "repoPath">,
+  paths: Pick<DaytonaSandboxPaths, "codexHome" | "home" | "repoPath">,
   sandbox: Pick<Sandbox, "id" | "toolboxProxyUrl">,
   toolboxAuthKey: string
 ) {
@@ -1429,9 +1850,12 @@ function desktopCodexConfig(
     "startup_timeout_sec = 20",
     "",
     "[mcp_servers.cloudcode_desktop.env]",
+    `CODEX_HOME = ${JSON.stringify(paths.codexHome)}`,
     `CLOUDCODE_REPO_PATH = ${JSON.stringify(paths.repoPath)}`,
     `CLOUDCODE_DESKTOP_STATE_DIR = ${JSON.stringify(`${paths.codexHome}/desktop/state`)}`,
     `CLOUDCODE_BROWSER_COMMAND = ${JSON.stringify(DESKTOP_BROWSER_COMMAND)}`,
+    `CLOUDCODE_TERMINAL_HOME = ${JSON.stringify(paths.home)}`,
+    `CLOUDCODE_TERMINAL_PATH = ${JSON.stringify(daytonaTerminalPath(paths.home))}`,
     `CLOUDCODE_DAYTONA_SANDBOX_ID = ${JSON.stringify(sandbox.id)}`,
     `CLOUDCODE_DAYTONA_TOOLBOX_AUTH_KEY = ${JSON.stringify(toolboxAuthKey)}`,
     `CLOUDCODE_DAYTONA_TOOLBOX_BASE_URL = ${JSON.stringify(sandbox.toolboxProxyUrl)}`,
@@ -1443,14 +1867,22 @@ function desktopCodexConfig(
 export async function installDaytonaDesktopTools(
   sandbox: Sandbox,
   paths: DaytonaSandboxPaths,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  extras: DaytonaDesktopToolExtras = {}
 ) {
   await ensureDaytonaDesktopDependencies(sandbox, signal)
 
   const script = desktopMcpServerScript()
-  const instructions = desktopAgentInstructions()
+  const instructions = [desktopAgentInstructions(), extras.instructions]
+    .filter(Boolean)
+    .join("\n\n")
   const toolboxPreview = await sandbox.getPreviewLink(1)
-  const config = desktopCodexConfig(paths, sandbox, toolboxPreview.token)
+  const config = [
+    desktopCodexConfig(paths, sandbox, toolboxPreview.token),
+    extras.config,
+  ]
+    .filter(Boolean)
+    .join("\n")
   const scriptPath = `${paths.codexHome}/desktop/cloudcode-desktop-mcp.mjs`
   const binPath = `${paths.home}/.local/bin/cloudcode-computer`
   const agentsPath = `${paths.codexHome}/AGENTS.md`

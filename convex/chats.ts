@@ -125,6 +125,106 @@ async function requireOwnedThread(
   return thread
 }
 
+async function requireRunThreadNotesAccess(
+  ctx: QueryCtx | MutationCtx,
+  args: {
+    notesAccessToken: string
+    runId: Id<"codexRuns">
+    threadId: Id<"threads">
+  }
+) {
+  const [run, thread] = await Promise.all([
+    ctx.db.get(args.runId),
+    ctx.db.get(args.threadId),
+  ])
+
+  if (
+    !run ||
+    !thread ||
+    run.threadId !== args.threadId ||
+    thread.userId !== run.userId ||
+    run.status !== "running" ||
+    !run.notesAccessToken ||
+    run.notesAccessToken !== args.notesAccessToken
+  ) {
+    throw new Error("Shared notes are unavailable for this run.")
+  }
+
+  return thread
+}
+
+function notesChecksum(notes: string) {
+  let hash = 2166136261
+  for (let index = 0; index < notes.length; index += 1) {
+    hash ^= notes.charCodeAt(index)
+    hash = Math.imul(hash, 16777619) >>> 0
+  }
+  return hash.toString(36)
+}
+
+function notesRevision(notes: string) {
+  return `v1:${notes.length}:${notesChecksum(notes)}`
+}
+
+function notesResponse(thread: Doc<"threads">) {
+  const notes = thread.notes ?? ""
+  return {
+    maxLength: MAX_NOTES_LENGTH,
+    notes,
+    revision: notesRevision(notes),
+  }
+}
+
+function normalizeNotes(notes: string) {
+  return notes.replace(/\r\n/g, "\n").slice(0, MAX_NOTES_LENGTH)
+}
+
+function patchNotesValue(notes: string) {
+  return notes.length > 0 ? notes : undefined
+}
+
+function appendNotes(current: string, addition: string) {
+  const text = addition.replace(/\r\n/g, "\n").trim()
+  if (!text) return current
+
+  const base = current.replace(/\r\n/g, "\n").trimEnd()
+  return normalizeNotes(base ? `${base}\n\n${text}` : text)
+}
+
+function todoLine(text: string, checked: boolean) {
+  return `- [${checked ? "x" : " "}] ${text.replace(/\s+/g, " ").trim()}`
+}
+
+function setTodoStatus(
+  current: string,
+  text: string,
+  checked: boolean,
+  occurrence: number
+) {
+  const target = text.trim()
+  if (!target) return { notes: current, updated: false }
+
+  const targetOccurrence = Math.max(1, Math.floor(occurrence || 1))
+  let seen = 0
+  let updated = false
+  const lines = current.replace(/\r\n/g, "\n").split("\n")
+  const next = lines.map((line) => {
+    const match = line.match(/^(\s*[-*]\s+\[)( |x|X)(\]\s?)(.*)$/)
+    if (!match || match[4].trim() !== target) return line
+
+    seen += 1
+    if (seen !== targetOccurrence) return line
+
+    updated = true
+    return `${match[1]}${checked ? "x" : " "}${match[3]}${match[4]}`
+  })
+
+  return {
+    notes: updated ? normalizeNotes(next.join("\n")) : current,
+    updated,
+  }
+}
+
 async function requireOwnedPreset(
   ctx: MutationCtx,
   presetId: Id<"sandboxPresets"> | undefined,
@@ -462,6 +562,121 @@ export const setThreadNotes = mutation({
       notes: notes.length > 0 ? notes : undefined,
       updatedAt: Date.now(),
     })
+  },
+})
+
+export const workerGetThreadNotes = query({
+  args: {
+    notesAccessToken: v.string(),
+    runId: v.id("codexRuns"),
+    threadId: v.id("threads"),
+  },
+  handler: async (ctx, args) => {
+    const thread = await requireRunThreadNotesAccess(ctx, args)
+    return notesResponse(thread)
+  },
+})
+
+export const workerReplaceThreadNotes = mutation({
+  args: {
+    expectedRevision: v.optional(v.string()),
+    notes: v.string(),
+    notesAccessToken: v.string(),
+    runId: v.id("codexRuns"),
+    threadId: v.id("threads"),
+  },
+  handler: async (ctx, args) => {
+    const thread = await requireRunThreadNotesAccess(ctx, args)
+    const current = thread.notes ?? ""
+    const currentRevision = notesRevision(current)
+
+    if (args.expectedRevision && args.expectedRevision !== currentRevision) {
+      throw new Error(
+        "Shared notes changed after the last read. Read notes again before replacing them."
+      )
+    }
+
+    const notes = normalizeNotes(args.notes)
+    await ctx.db.patch(args.threadId, {
+      notes: patchNotesValue(notes),
+      updatedAt: Date.now(),
+    })
+
+    return notesResponse({ ...thread, notes })
+  },
+})
+
+export const workerAppendThreadNotes = mutation({
+  args: {
+    notesAccessToken: v.string(),
+    runId: v.id("codexRuns"),
+    text: v.string(),
+    threadId: v.id("threads"),
+  },
+  handler: async (ctx, args) => {
+    const thread = await requireRunThreadNotesAccess(ctx, args)
+    const notes = appendNotes(thread.notes ?? "", args.text)
+
+    await ctx.db.patch(args.threadId, {
+      notes: patchNotesValue(notes),
+      updatedAt: Date.now(),
+    })
+
+    return notesResponse({ ...thread, notes })
+  },
+})
+
+export const workerAddThreadTodo = mutation({
+  args: {
+    checked: v.optional(v.boolean()),
+    notesAccessToken: v.string(),
+    runId: v.id("codexRuns"),
+    text: v.string(),
+    threadId: v.id("threads"),
+  },
+  handler: async (ctx, args) => {
+    const thread = await requireRunThreadNotesAccess(ctx, args)
+    const item = todoLine(args.text, Boolean(args.checked))
+    const notes = appendNotes(thread.notes ?? "", item)
+
+    await ctx.db.patch(args.threadId, {
+      notes: patchNotesValue(notes),
+      updatedAt: Date.now(),
+    })
+
+    return notesResponse({ ...thread, notes })
+  },
+})
+
+export const workerSetThreadTodoStatus = mutation({
+  args: {
+    checked: v.boolean(),
+    notesAccessToken: v.string(),
+    occurrence: v.optional(v.number()),
+    runId: v.id("codexRuns"),
+    text: v.string(),
+    threadId: v.id("threads"),
+  },
+  handler: async (ctx, args) => {
+    const thread = await requireRunThreadNotesAccess(ctx, args)
+    const result = setTodoStatus(
+      thread.notes ?? "",
+      args.text,
+      args.checked,
+      args.occurrence ?? 1
+    )
+
+    if (result.updated) {
+      await ctx.db.patch(args.threadId, {
+        notes: patchNotesValue(result.notes),
+        updatedAt: Date.now(),
+      })
+    }
+
+    return {
+      ...notesResponse({ ...thread, notes: result.notes }),
+      updated: result.updated,
+    }
   },
 })
 

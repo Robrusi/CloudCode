@@ -15,6 +15,12 @@ import {
   type DaytonaDesktopRecordingArtifact,
 } from "./daytona-desktop"
 import {
+  cloudcodeContextAgentContext,
+  cloudcodeContextAgentInstructions,
+  cloudcodeContextCodexConfig,
+  installCloudcodeContextTools,
+} from "./daytona-context"
+import {
   createDaytonaSandbox,
   daytonaCodexPath,
   daytonaTerminalPath,
@@ -102,11 +108,13 @@ export type RunCodexInSandboxInput = {
   branchMode?: "auto" | "custom" | "base"
   branchName?: string
   codexThreadId?: string
+  convexUrl?: string
   githubToken?: string
   githubUserEmail?: string
   githubUserName?: string
   githubUsername?: string
   model?: string
+  notesAccessToken?: string
   onContentDelta?: (delta: string) => void | Promise<void>
   onLog?: (log: RunCodexLog) => void | Promise<void>
   previousDiff?: string
@@ -2208,13 +2216,24 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       shouldRestoreConversation && input.resumeContext?.trim()
         ? restoredConversationPrompt(input.resumeContext, input.prompt)
         : input.prompt
+    const sharedNotesEnabled = Boolean(
+      input.convexUrl && input.notesAccessToken && input.runId && input.threadId
+    )
     const contextBlocks = [
       cloudcodeYamlAgentContext(input.sandboxPreset?.cloudcodeYaml),
+      sharedNotesEnabled ? cloudcodeContextAgentContext() : undefined,
       daytonaDesktopAgentContext(),
     ].filter((value): value is string => Boolean(value))
     const prompt = contextBlocks.length
       ? [...contextBlocks, "Current user request:", taskPrompt].join("\n\n")
       : taskPrompt
+    const contextConfig = cloudcodeContextCodexConfig({
+      convexUrl: input.convexUrl,
+      notesAccessToken: input.notesAccessToken,
+      paths,
+      runId: input.runId,
+      threadId: input.threadId,
+    })
     const needsCodexSetup =
       recoveredSandbox ||
       !(await isCodexLauncherReady(sandbox, paths, input.signal))
@@ -2332,7 +2351,19 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       input,
       paths
     )
-      .then(() => installDaytonaDesktopTools(sandbox, paths, input.signal))
+      .then(() =>
+        contextConfig
+          ? installCloudcodeContextTools(sandbox, paths, input.signal)
+          : undefined
+      )
+      .then(() =>
+        installDaytonaDesktopTools(sandbox, paths, input.signal, {
+          config: contextConfig,
+          instructions: contextConfig
+            ? cloudcodeContextAgentInstructions()
+            : undefined,
+        })
+      )
       .then(() => runPathInstallScript(sandbox, input, paths, gitAuth))
       .then(() => runPresetInstallScript(sandbox, input, paths, gitAuth))
       .then(() =>

@@ -30,6 +30,7 @@ type WorkerRunRecord = {
   githubUserName?: string
   githubUsername?: string
   model: string
+  notesAccessToken?: string
   previousDiff?: string
   profile?: string
   prompt: string
@@ -166,6 +167,8 @@ export async function startAndLoadWorkerRun(
       githubUserName: response.run.githubUserName,
       githubUsername: response.run.githubUsername,
       model: response.run.model,
+      convexUrl: getConvexUrl(),
+      notesAccessToken: response.run.notesAccessToken,
       previousDiff: response.run.previousDiff,
       prompt: response.run.prompt,
       reasoningEffort: response.run.reasoningEffort,

@@ -104,6 +104,7 @@ export default defineSchema({
     logs: v.optional(v.array(runLog)),
     model,
     previousDiff: v.optional(v.string()),
+    notesAccessToken: v.optional(v.string()),
     profile: v.optional(v.string()),
     prompt: v.string(),
     reasoningEffort: thinking,

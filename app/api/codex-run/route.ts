@@ -1,5 +1,6 @@
 import { runs, tasks } from "@trigger.dev/sdk"
 import { ConvexHttpClient } from "convex/browser"
+import { randomUUID } from "node:crypto"
 import { NextResponse } from "next/server"
 
 import { api } from "@/convex/_generated/api"
@@ -178,6 +179,7 @@ export async function POST(request: Request) {
       githubUserName: githubCredential?.gitUserName,
       githubUsername: githubCredential?.username ?? undefined,
       model: model as "gpt-5.5" | "gpt-5.4" | "gpt-5.4-mini",
+      notesAccessToken: randomUUID(),
       previousDiff:
         typeof body.previousDiff === "string" ? body.previousDiff : undefined,
       profile: typeof body.profile === "string" ? body.profile : undefined,

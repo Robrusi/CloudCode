@@ -125,7 +125,7 @@ export function RecordingVideo({
         : "Preparing video..."
 
   return (
-    <div className="relative overflow-hidden rounded-md bg-black">
+    <div className="relative overflow-hidden rounded-lg border border-border/60 bg-muted">
       <video
         {...videoProps}
         aria-label={videoProps["aria-label"] ?? `Recording video: ${label}`}
@@ -133,7 +133,7 @@ export function RecordingVideo({
         playsInline
         preload={videoProps.preload ?? "metadata"}
         src={src}
-        className={cn("aspect-video w-full bg-black", className)}
+        className={cn("aspect-video w-full bg-muted", className)}
         onCanPlay={(event) => {
           markReady()
           videoProps.onCanPlay?.(event)
@@ -154,15 +154,15 @@ export function RecordingVideo({
         <track kind="captions" label="No captions" />
       </video>
       {loadState !== "ready" ? (
-        <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/70 px-4 text-center">
-          <div className="flex flex-col items-center gap-2 text-xs text-white/80">
+        <div className="pointer-events-none absolute inset-0 grid place-items-center bg-muted/60 px-4 text-center backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-2 text-xs text-muted-foreground">
             {loading ? (
               <Loader2 className="size-4 animate-spin" />
             ) : (
               <button
                 type="button"
                 onClick={retryNow}
-                className="pointer-events-auto grid size-7 place-items-center rounded-md border border-white/20 text-white/80 transition-colors hover:bg-white/10 hover:text-white"
+                className="pointer-events-auto grid size-7 place-items-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
                 aria-label="Retry video"
                 title="Retry video"
               >
