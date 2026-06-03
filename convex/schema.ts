@@ -253,6 +253,7 @@ export default defineSchema({
     hasPendingMessage: v.optional(v.boolean()),
     lastUserMessageAt: v.optional(v.number()),
     model,
+    notes: v.optional(v.string()),
     repoUrl: v.string(),
     sandboxPresetId: v.optional(v.id("sandboxPresets")),
     sandboxId: v.optional(v.string()),

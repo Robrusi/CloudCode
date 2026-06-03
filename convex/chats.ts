@@ -54,6 +54,7 @@ const messageMeta = v.object({
 })
 
 const THREAD_LIST_LIMIT = 80
+const MAX_NOTES_LENGTH = 20_000
 const MAX_STORED_RUN_LOGS = 80
 const MAX_STORED_LOG_MESSAGE_LENGTH = 500
 const MAX_STORED_LOG_DETAIL_LENGTH = 1_500
@@ -176,6 +177,7 @@ async function fullThreadRecord(ctx: QueryCtx, thread: Doc<"threads">) {
 
   return {
     ...(await threadSummaryRecord(ctx, thread)),
+    notes: thread.notes,
     messages: messages.map((message) => ({
       content: message.content,
       createdAt: message._creationTime,
@@ -440,6 +442,24 @@ export const updateThread = mutation({
       ...(args.model ? { model: args.model } : {}),
       ...(args.repoUrl ? { repoUrl: args.repoUrl } : {}),
       ...(trimmedTitle ? { title: trimmedTitle } : {}),
+      updatedAt: Date.now(),
+    })
+  },
+})
+
+export const setThreadNotes = mutation({
+  args: {
+    notes: v.string(),
+    threadId: v.id("threads"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await ensureCurrentUser(ctx)
+    await requireOwnedThread(ctx, args.threadId, userId)
+
+    const notes = args.notes.slice(0, MAX_NOTES_LENGTH)
+
+    await ctx.db.patch(args.threadId, {
+      notes: notes.length > 0 ? notes : undefined,
       updatedAt: Date.now(),
     })
   },
