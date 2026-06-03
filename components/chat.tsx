@@ -16,6 +16,7 @@ import {
   Plus,
   SquareTerminal,
   Square,
+  StickyNote,
   X,
 } from "lucide-react"
 import dynamic from "next/dynamic"
@@ -113,6 +114,14 @@ const FileEditorPanel = dynamic(
   { ssr: false }
 )
 
+const ChatContextPanel = dynamic(
+  () =>
+    import("@/components/chat-context-panel").then(
+      (mod) => mod.ChatContextPanel
+    ),
+  { ssr: false }
+)
+
 type Role = "user" | "assistant"
 
 type Message = {
@@ -206,6 +215,7 @@ type ChatRecord = {
   codexThreadId?: string
   id: Id<"threads">
   lastUserMessageAt?: number
+  notes?: string
   repoUrl: string
   sandboxPresetId?: Id<"sandboxPresets">
   sandboxPresetName?: string
@@ -407,6 +417,7 @@ function ChatInner() {
   const clearSandbox = useMutation(api.chats.clearSandbox)
   const deleteThreadMutation = useMutation(api.chats.deleteThread)
   const updateThread = useMutation(api.chats.updateThread)
+  const setThreadNotes = useMutation(api.chats.setThreadNotes)
   const [activeId, setActiveId] = useState<Id<"threads"> | null>(() =>
     typeof window === "undefined"
       ? null
@@ -497,6 +508,7 @@ function ChatInner() {
   const [filesOpen, setFilesOpen] = useState(false)
   const [githubOpen, setGithubOpen] = useState(false)
   const [desktopOpen, setDesktopOpen] = useState(false)
+  const [contextOpen, setContextOpen] = useState(false)
   const [terminalOpen, setTerminalOpen] = useState(() =>
     typeof window === "undefined"
       ? false
@@ -925,6 +937,18 @@ function ChatInner() {
     return paths
   }, [activeDiff])
   const editorDiff = activeFileDiff ?? activeDiff
+  const changeStats = useMemo(
+    () => getDiffStats(activeDiff ?? undefined),
+    [activeDiff]
+  )
+  const activeBranch = useMemo(
+    () =>
+      active
+        ? (active.messages.toReversed().find((m) => m.meta?.branch)?.meta
+            ?.branch ?? null)
+        : null,
+    [active]
+  )
   const activeRepoName = useMemo(() => {
     const label = repoLabel(repoUrl)
     return label.split("/").pop() || null
@@ -968,6 +992,16 @@ function ChatInner() {
     setActiveFileDiff(null)
     setAllDiffsOpen(true)
   }, [captureThreadScrollForPanel])
+
+  const saveThreadNotes = useCallback(
+    (value: string) => {
+      if (!activeId) return
+      void setThreadNotes({ notes: value, threadId: activeId }).catch((error) =>
+        console.warn("Unable to save notes.", error)
+      )
+    },
+    [activeId, setThreadNotes]
+  )
 
   const refreshGitHubAuth = useCallback(async () => {
     try {
@@ -1380,6 +1414,7 @@ function ChatInner() {
     setFilesOpen(false)
     setGithubOpen(false)
     setDesktopOpen(false)
+    setContextOpen(false)
     setTerminalOpen(false)
     setView("chat")
     if (isMobile) setSidebarOpen(false)
@@ -1399,6 +1434,7 @@ function ChatInner() {
     setFilesOpen(false)
     setGithubOpen(false)
     setDesktopOpen(false)
+    setContextOpen(false)
     setTerminalOpen(false)
     setView("chat")
     if (isMobile) setSidebarOpen(false)
@@ -1411,6 +1447,7 @@ function ChatInner() {
     setFilesOpen(false)
     setGithubOpen(false)
     setDesktopOpen(false)
+    setContextOpen(false)
     setTerminalOpen(false)
     if (isMobile) setSidebarOpen(false)
   }
@@ -2070,6 +2107,7 @@ function ChatInner() {
               if (!v) {
                 setGithubOpen(false)
                 setDesktopOpen(false)
+                setContextOpen(false)
               }
               return !v
             })
@@ -2081,6 +2119,7 @@ function ChatInner() {
               if (!v) {
                 setFilesOpen(false)
                 setDesktopOpen(false)
+                setContextOpen(false)
               }
               return !v
             })
@@ -2092,6 +2131,19 @@ function ChatInner() {
               if (!v) {
                 setFilesOpen(false)
                 setGithubOpen(false)
+                setContextOpen(false)
+              }
+              return !v
+            })
+          }
+          contextOpen={contextOpen}
+          canOpenContext={view !== "settings" && Boolean(active)}
+          onToggleContext={() =>
+            setContextOpen((v) => {
+              if (!v) {
+                setFilesOpen(false)
+                setGithubOpen(false)
+                setDesktopOpen(false)
               }
               return !v
             })
@@ -2265,6 +2317,22 @@ function ChatInner() {
         sandboxId={activeSandboxId}
         onClose={() => setDesktopOpen(false)}
       />
+      <ChatContextPanel
+        open={contextOpen && Boolean(active)}
+        environment={{
+          additions: changeStats.additions,
+          baseBranch,
+          branch: activeBranch,
+          changedFileCount: changeStats.files.length,
+          deletions: changeStats.deletions,
+          repoName: activeRepoName,
+        }}
+        notes={active?.notes ?? ""}
+        notesThreadId={activeId as string | null}
+        onClose={() => setContextOpen(false)}
+        onSaveNotes={saveThreadNotes}
+        onOpenChanges={openAllDiffs}
+      />
     </div>
   )
 }
@@ -2369,6 +2437,9 @@ function TopBar({
   desktopOpen,
   canOpenDesktop,
   onToggleDesktop,
+  contextOpen,
+  canOpenContext,
+  onToggleContext,
   onSandboxStateChange,
   onSandboxMissing,
   sandboxAction,
@@ -2396,6 +2467,9 @@ function TopBar({
   desktopOpen: boolean
   canOpenDesktop: boolean
   onToggleDesktop: () => void
+  contextOpen: boolean
+  canOpenContext: boolean
+  onToggleContext: () => void
   onSandboxStateChange: (state: SandboxState, sandboxId: string) => void
   onSandboxMissing: (sandboxId: string) => void
   sandboxAction: SandboxAction | null
@@ -2413,7 +2487,7 @@ function TopBar({
   const showSandboxSection =
     showSandboxControls || Boolean(sandboxId || sandboxPending)
   const showToolsSection =
-    showSandboxSection || Boolean(sandboxId || canOpenFiles)
+    showSandboxSection || Boolean(sandboxId || canOpenFiles) || canOpenContext
 
   return (
     <header className="flex h-[calc(3.25rem+env(safe-area-inset-top))] shrink-0 items-center gap-2.5 border-b border-border/60 bg-background/80 pt-[env(safe-area-inset-top)] pr-3 pl-2 backdrop-blur-xl">
@@ -2514,6 +2588,16 @@ function TopBar({
               >
                 <GitBranch className="size-3.5" />
               </TopBarIconButton>
+              <TopBarIconButton
+                onClick={onToggleContext}
+                active={contextOpen}
+                disabled={!canOpenContext}
+                label={
+                  contextOpen ? "Hide context panel" : "Show context panel"
+                }
+              >
+                <StickyNote className="size-3.5" />
+              </TopBarIconButton>
             </div>
             <TopBarToolsMenu
               className="md:hidden"
@@ -2530,6 +2614,9 @@ function TopBar({
               desktopOpen={desktopOpen}
               canOpenDesktop={canOpenDesktop}
               onToggleDesktop={onToggleDesktop}
+              contextOpen={contextOpen}
+              canOpenContext={canOpenContext}
+              onToggleContext={onToggleContext}
             />
           </>
         ) : null}
@@ -2553,6 +2640,9 @@ function TopBarToolsMenu({
   desktopOpen,
   canOpenDesktop,
   onToggleDesktop,
+  contextOpen,
+  canOpenContext,
+  onToggleContext,
 }: {
   className?: string
   sandboxId: string | null
@@ -2568,6 +2658,9 @@ function TopBarToolsMenu({
   desktopOpen: boolean
   canOpenDesktop: boolean
   onToggleDesktop: () => void
+  contextOpen: boolean
+  canOpenContext: boolean
+  onToggleContext: () => void
 }) {
   const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(
     null
@@ -2593,7 +2686,8 @@ function TopBarToolsMenu({
     })
   }
 
-  const anyOpen = terminalOpen || filesOpen || githubOpen || desktopOpen
+  const anyOpen =
+    terminalOpen || filesOpen || githubOpen || desktopOpen || contextOpen
   const items = [
     {
       key: "terminal",
@@ -2630,6 +2724,14 @@ function TopBarToolsMenu({
       active: githubOpen,
       disabled: !canOpenGithub,
       onSelect: onToggleGithub,
+    },
+    {
+      key: "context",
+      label: contextOpen ? "Hide context" : "Context",
+      icon: <StickyNote className="size-4" />,
+      active: contextOpen,
+      disabled: !canOpenContext,
+      onSelect: onToggleContext,
     },
   ]
 
