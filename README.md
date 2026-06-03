@@ -6,6 +6,8 @@ the Codex OAuth flow, stores the resulting OAuth fields in Convex under the
 authenticated Clerk user, and reconstructs `$CODEX_HOME/auth.json` inside each
 sandbox just before `codex exec` runs.
 
+This repo favors reproducible sandbox setup over per-run manual configuration.
+
 ## Environment
 
 Create `.env.local` with:
@@ -147,6 +149,8 @@ chat is deleted.
 ```bash
 pnpm dev
 ```
+
+Use the local dev server for browser checks when validating visible workflows.
 
 Trigger.dev runs Codex jobs outside the request/response lifecycle. In a second
 terminal, start the Trigger worker:
