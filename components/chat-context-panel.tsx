@@ -1,6 +1,6 @@
 "use client"
 
-import { FileDiff, FolderGit2, GitBranch, X } from "lucide-react"
+import { FileDiff, FolderGit2, GitBranch, Maximize2, X } from "lucide-react"
 import { type CSSProperties, type ReactNode } from "react"
 
 import { NotesEditor } from "@/components/notes-editor"
@@ -27,6 +27,7 @@ export function ChatContextPanel({
   onClose,
   onSaveNotes,
   onOpenChanges,
+  onOpenNotesFullscreen,
 }: {
   open: boolean
   environment: ChatEnvironment
@@ -35,6 +36,7 @@ export function ChatContextPanel({
   onClose: () => void
   onSaveNotes: (notes: string) => void
   onOpenChanges: () => void
+  onOpenNotesFullscreen: () => void
 }) {
   const isMobile = useIsMobile()
   const { width, resizing, onResizeStart, resetWidth } = useResizablePanel({
@@ -71,8 +73,8 @@ export function ChatContextPanel({
         </IconButton>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-4 pb-5">
-        <div className="mb-6 space-y-2.5 px-1">
+      <div className="flex min-h-0 w-full flex-1 flex-col px-3 pt-4 pb-5">
+        <div className="mb-6 shrink-0 space-y-2.5 px-1">
           <EnvRow
             icon={<FolderGit2 className="size-3.5" />}
             label="Repository"
@@ -111,34 +113,29 @@ export function ChatContextPanel({
           />
         </div>
 
-        <Section title="Notes" last>
+        <section className="flex min-h-0 flex-1 flex-col">
+          <div className="flex items-center gap-2 px-1 pb-2">
+            <h3 className="text-[11px] font-semibold tracking-wide text-muted-foreground/70 uppercase">
+              Notes
+            </h3>
+            <IconButton
+              size="xs"
+              onClick={onOpenNotesFullscreen}
+              aria-label="Open notes fullscreen"
+              title="Open notes fullscreen"
+              className="-my-1 ml-auto"
+            >
+              <Maximize2 className="size-3.5" />
+            </IconButton>
+          </div>
           <NotesEditor
             notes={notes}
             notesThreadId={notesThreadId}
             onSave={onSaveNotes}
           />
-        </Section>
+        </section>
       </div>
     </aside>
-  )
-}
-
-function Section({
-  title,
-  last,
-  children,
-}: {
-  title: string
-  last?: boolean
-  children: ReactNode
-}) {
-  return (
-    <section className={cn(last ? "" : "mb-6")}>
-      <h3 className="px-1 pb-2 text-[11px] font-semibold tracking-wide text-muted-foreground/70 uppercase">
-        {title}
-      </h3>
-      {children}
-    </section>
   )
 }
 

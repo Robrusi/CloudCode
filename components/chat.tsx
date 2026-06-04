@@ -61,6 +61,7 @@ import {
 } from "@/components/chat-controls"
 import { DiffList } from "@/components/changed-files"
 import { MessageBlock } from "@/components/chat-message"
+import { NotesEditor } from "@/components/notes-editor"
 import { Button } from "@/components/ui/button"
 import { IconButton as UiIconButton } from "@/components/ui/icon-button"
 import { MenuItem, menuPanelClass } from "@/components/ui/menu"
@@ -520,6 +521,7 @@ function ChatInner() {
     useState<FileBrowserOpenMode>("file")
   const [activeFileDiff, setActiveFileDiff] = useState<string | null>(null)
   const [allDiffsOpen, setAllDiffsOpen] = useState(false)
+  const [notesOpen, setNotesOpen] = useState(false)
   const [diffStyle, setDiffStyle] = useState<"unified" | "split">("unified")
   const [sidebarOpen, setSidebarOpen] = useState(() =>
     typeof window === "undefined"
@@ -971,6 +973,7 @@ function ChatInner() {
       setActiveFileMode("file")
       setActiveFileDiff(null)
       setAllDiffsOpen(false)
+      setNotesOpen(false)
     },
     [captureThreadScrollForPanel]
   )
@@ -982,6 +985,7 @@ function ChatInner() {
       setActiveFileMode("diff")
       setActiveFileDiff(diff)
       setAllDiffsOpen(false)
+      setNotesOpen(false)
     },
     [captureThreadScrollForPanel]
   )
@@ -991,6 +995,16 @@ function ChatInner() {
     setActiveFilePath(null)
     setActiveFileDiff(null)
     setAllDiffsOpen(true)
+    setNotesOpen(false)
+  }, [captureThreadScrollForPanel])
+
+  const openNotesFullscreen = useCallback(() => {
+    captureThreadScrollForPanel()
+    setActiveFilePath(null)
+    setActiveFileDiff(null)
+    setAllDiffsOpen(false)
+    setNotesOpen(true)
+    setContextOpen(false)
   }, [captureThreadScrollForPanel])
 
   const saveThreadNotes = useCallback(
@@ -1415,6 +1429,7 @@ function ChatInner() {
     setGithubOpen(false)
     setDesktopOpen(false)
     setContextOpen(false)
+    setNotesOpen(false)
     setTerminalOpen(false)
     setView("chat")
     if (isMobile) setSidebarOpen(false)
@@ -1435,6 +1450,7 @@ function ChatInner() {
     setGithubOpen(false)
     setDesktopOpen(false)
     setContextOpen(false)
+    setNotesOpen(false)
     setTerminalOpen(false)
     setView("chat")
     if (isMobile) setSidebarOpen(false)
@@ -1448,6 +1464,7 @@ function ChatInner() {
     setGithubOpen(false)
     setDesktopOpen(false)
     setContextOpen(false)
+    setNotesOpen(false)
     setTerminalOpen(false)
     if (isMobile) setSidebarOpen(false)
   }
@@ -1908,7 +1925,7 @@ function ChatInner() {
   }
 
   const composerBlock =
-    view === "settings" || activeFilePath ? null : (
+    view === "settings" || activeFilePath || notesOpen ? null : (
       <div className="pointer-events-auto w-full max-w-3xl rounded-3xl shadow-[0_1px_2px_rgba(0,0,0,0.04),0_10px_28px_-14px_rgba(0,0,0,0.18)]">
         <form
           onSubmit={onSubmit}
@@ -2191,6 +2208,13 @@ function ChatInner() {
                 diffStyle={diffStyle}
                 onClose={() => setAllDiffsOpen(false)}
               />
+            ) : notesOpen ? (
+              <NotesPanel
+                notes={active?.notes ?? ""}
+                notesThreadId={activeId as string | null}
+                onSave={saveThreadNotes}
+                onClose={() => setNotesOpen(false)}
+              />
             ) : (
               <div
                 key={activeRunKey}
@@ -2252,7 +2276,7 @@ function ChatInner() {
                   ref={composerRef}
                   className={cn(
                     "pointer-events-none absolute inset-x-0 z-10 flex justify-center bg-background px-3 pt-3 pb-4 md:px-4 md:pb-6",
-                    (activeFilePath || allDiffsOpen) && "hidden"
+                    (activeFilePath || allDiffsOpen || notesOpen) && "hidden"
                   )}
                   style={{
                     bottom: terminalVisible
@@ -2289,6 +2313,7 @@ function ChatInner() {
           setActiveFileMode(mode)
           setActiveFileDiff(null)
           setAllDiffsOpen(false)
+          setNotesOpen(false)
           if (isMobile) setFilesOpen(false)
         }}
         onOpenAllDiffs={openAllDiffs}
@@ -2309,6 +2334,7 @@ function ChatInner() {
           setActiveFileMode(mode)
           setActiveFileDiff(null)
           setAllDiffsOpen(false)
+          setNotesOpen(false)
           if (isMobile) setGithubOpen(false)
         }}
       />
@@ -2332,6 +2358,7 @@ function ChatInner() {
         onClose={() => setContextOpen(false)}
         onSaveNotes={saveThreadNotes}
         onOpenChanges={openAllDiffs}
+        onOpenNotesFullscreen={openNotesFullscreen}
       />
     </div>
   )
@@ -2394,6 +2421,37 @@ function AllDiffsPanel({
           </div>
         )}
       </div>
+    </section>
+  )
+}
+
+function NotesPanel({
+  notes,
+  notesThreadId,
+  onSave,
+  onClose,
+}: {
+  notes: string
+  notesThreadId: string | null
+  onSave: (value: string) => void
+  onClose: () => void
+}) {
+  return (
+    <section className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+      <NotesEditor
+        bare
+        toolbarPlacement="top"
+        toolbarClassName="h-[3.25rem] shrink-0 gap-0.5 bg-background/80 px-2.5 backdrop-blur-xl"
+        toolbarTrailing={
+          <UiIconButton onClick={onClose} aria-label="Close notes">
+            <X />
+          </UiIconButton>
+        }
+        notes={notes}
+        notesThreadId={notesThreadId}
+        onSave={onSave}
+        contentClassName="min-h-0 flex-1 px-4 py-4"
+      />
     </section>
   )
 }
