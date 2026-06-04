@@ -11,6 +11,7 @@
 import type * as chats from "../chats.js";
 import type * as codexAuth from "../codexAuth.js";
 import type * as codexRuns from "../codexRuns.js";
+import type * as files from "../files.js";
 import type * as githubApp from "../githubApp.js";
 import type * as lib_users from "../lib/users.js";
 import type * as lib_workerAuth from "../lib/workerAuth.js";
@@ -27,6 +28,7 @@ declare const fullApi: ApiFromModules<{
   chats: typeof chats;
   codexAuth: typeof codexAuth;
   codexRuns: typeof codexRuns;
+  files: typeof files;
   githubApp: typeof githubApp;
   "lib/users": typeof lib_users;
   "lib/workerAuth": typeof lib_workerAuth;
