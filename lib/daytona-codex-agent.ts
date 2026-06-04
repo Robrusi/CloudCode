@@ -40,6 +40,7 @@ import {
   type DaytonaCommandResult,
   type DaytonaSandboxPaths,
 } from "./daytona-sandbox"
+import { runCloudcodeYamlSetup } from "./cloudcode-yaml-setup"
 import { cloneGitRepositoryInSandbox } from "./daytona-git"
 import {
   CLOUDCODE_LEGACY_PRESET_ENV_PATH,
@@ -54,7 +55,6 @@ import {
   setupSandboxGitHubAuth,
   type SandboxGitHubAuth,
 } from "./sandbox-github-auth"
-import { restoreAutoEnvironmentRepoBaseline } from "./sandbox-repo-baseline"
 
 const EXIT_MARKER = "__CLOUDCODE_CODEX_EXIT__"
 const CODEX_CAPABILITIES_EXEC_BEGIN = "__CLOUDCODE_EXEC_HELP_BEGIN__"
@@ -120,10 +120,8 @@ export type RunCodexInSandboxInput = {
   previousDiff?: string
   prompt: string
   reasoningEffort?: ReasoningEffort
-  requireExistingSandbox?: boolean
   resumeContext?: string
   repoUrl: string
-  preparedSandboxFresh?: boolean
   runId?: string
   sandboxId?: string
   sandboxPreset?: SandboxPresetInput
@@ -1173,14 +1171,6 @@ async function connectOrCreateSandbox(input: RunCodexInSandboxInput) {
       const sandbox = await ensureDaytonaSandboxStarted(
         await getDaytonaSandbox(input.sandboxId)
       )
-      if (input.preparedSandboxFresh || input.requireExistingSandbox) {
-        return {
-          createdSandbox: false,
-          recoveredSandbox: false,
-          sandbox,
-        }
-      }
-
       const snapshotMismatch =
         desiredSnapshot && sandbox.snapshot !== desiredSnapshot
       const resourceMismatch =
@@ -1202,9 +1192,6 @@ async function connectOrCreateSandbox(input: RunCodexInSandboxInput) {
         sandbox,
       }
     } catch {
-      if (input.preparedSandboxFresh || input.requireExistingSandbox) {
-        throw new Error("Prepared auto environment sandbox is unavailable.")
-      }
       // The DB can outlive an auto-deleted sandbox. Continue in a fresh one.
     }
   }
@@ -2019,23 +2006,19 @@ async function cloneRepo({
 async function prepareExistingRepoForFreshRun({
   baseBranch,
   branchName,
-  cloudcodeYaml,
   gitAuth,
   input,
   paths,
   requestedBranchName,
-  restoreAutoEnvironmentBaseline,
   sandbox,
   useBaseBranch,
 }: {
   baseBranch?: string
   branchName: string
-  cloudcodeYaml?: string
   gitAuth?: SandboxGitHubAuth | null
   input: RunCodexInSandboxInput
   paths: DaytonaSandboxPaths
   requestedBranchName?: string
-  restoreAutoEnvironmentBaseline?: boolean
   sandbox: Sandbox
   useBaseBranch: boolean
 }) {
@@ -2082,13 +2065,6 @@ async function prepareExistingRepoForFreshRun({
         compactLine(refreshResult.stderr || refreshResult.stdout) ||
         "Unable to refresh prepared repo.",
     })
-  } else if (restoreAutoEnvironmentBaseline) {
-    await restoreAutoEnvironmentRepoBaseline({
-      cloudcodeYaml,
-      paths,
-      sandbox,
-      signal: input.signal,
-    })
   }
 
   if (useBaseBranch) {
@@ -2108,6 +2084,79 @@ function helpIncludes(help: string, flag: string) {
 
 function isAutoEnvironmentRun(input: RunCodexInSandboxInput) {
   return input.sandboxPreset?.mode === "auto"
+}
+
+async function readCloudcodeYamlForLiveSandbox(
+  sandbox: Sandbox,
+  input: RunCodexInSandboxInput,
+  paths: DaytonaSandboxPaths
+) {
+  if (!isAutoEnvironmentRun(input)) return undefined
+
+  const repoCloudcodeYaml = await readDaytonaTextFile(
+    sandbox,
+    `${paths.repoPath}/cloudcode.yaml`
+  ).catch(() => "")
+  if (repoCloudcodeYaml.trim()) {
+    return {
+      source: "repo" as const,
+      yaml: repoCloudcodeYaml,
+    }
+  }
+
+  const convexCloudcodeYaml = input.sandboxPreset?.cloudcodeYaml?.trim()
+  if (!convexCloudcodeYaml) return undefined
+
+  return {
+    source: "convex" as const,
+    yaml: convexCloudcodeYaml,
+  }
+}
+
+async function runLiveCloudcodeYamlSetup(
+  sandbox: Sandbox,
+  input: RunCodexInSandboxInput,
+  paths: DaytonaSandboxPaths,
+  gitAuth?: SandboxGitHubAuth | null
+) {
+  const selected = await readCloudcodeYamlForLiveSandbox(sandbox, input, paths)
+  if (!selected) return
+
+  await emitLog(input, {
+    kind: "setup",
+    message:
+      selected.source === "repo"
+        ? "Using repo cloudcode.yaml"
+        : "Using saved Convex cloudcode.yaml",
+  })
+
+  const result = await runCloudcodeYamlSetup({
+    cloudcodeYaml: selected.yaml,
+    emit: (log) => emitLog(input, log),
+    env: {
+      CI: "1",
+      CLOUDCODE_REPO: paths.repoPath,
+      HOME: paths.home,
+      MISE_TRUSTED_CONFIG_PATHS: paths.repoPath,
+      MISE_YES: "1",
+      PATH: daytonaTerminalPath(paths.home),
+      TAR_OPTIONS: "--no-same-owner --no-same-permissions",
+      ...presetSecretEnv(input.sandboxPreset?.secrets),
+      ...gitAuth?.env,
+    },
+    markerPath: `${paths.codexHome}/cloudcode-yaml-setup.sha256`,
+    paths,
+    sandbox,
+    signal: input.signal,
+    writeCloudcodeYaml: selected.source === "convex",
+  })
+
+  if (result.ran) {
+    await emitLog(input, {
+      kind: "setup",
+      message: "cloudcode.yaml environment setup completed",
+    })
+  }
 }
 
 export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
@@ -2131,9 +2180,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     emitLog(input, {
       kind: "setup",
       message: input.sandboxId
-        ? input.preparedSandboxFresh
-          ? "Connecting to prepared Daytona sandbox"
-          : "Connecting to Daytona sandbox"
+        ? "Connecting to Daytona sandbox"
         : input.sandboxPreset?.daytonaSnapshot
           ? "Creating Daytona sandbox from preset snapshot"
           : "Creating Daytona sandbox",
@@ -2285,20 +2332,15 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         signal: input.signal,
       })
       await trustRepoMiseConfig(sandbox, input, paths)
-      const shouldPrepareFreshRepo =
-        createdSandbox ||
-        input.preparedSandboxFresh ||
-        (isAutoEnvironmentRun(input) && !input.requireExistingSandbox)
+      const shouldPrepareFreshRepo = createdSandbox
       if (shouldPrepareFreshRepo) {
         branchName = await prepareExistingRepoForFreshRun({
           baseBranch,
           branchName,
-          cloudcodeYaml: input.sandboxPreset?.cloudcodeYaml,
           gitAuth,
           input,
           paths,
           requestedBranchName,
-          restoreAutoEnvironmentBaseline: isAutoEnvironmentRun(input),
           sandbox,
           useBaseBranch,
         })
@@ -2351,6 +2393,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       input,
       paths
     )
+      .then(() => runLiveCloudcodeYamlSetup(sandbox, input, paths, gitAuth))
       .then(() =>
         contextConfig
           ? installCloudcodeContextTools(sandbox, paths, input.signal)

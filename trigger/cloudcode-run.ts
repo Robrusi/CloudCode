@@ -35,8 +35,7 @@ function sandboxIdFromLog(log: RunCodexLog) {
   }
 
   return log.message === "Daytona sandbox ready" ||
-    log.message === "Recovered with a fresh Daytona sandbox" ||
-    log.message === "Using prepared auto environment sandbox"
+    log.message === "Recovered with a fresh Daytona sandbox"
     ? log.detail
     : undefined
 }
@@ -324,10 +323,11 @@ export const cloudcodeRun = task({
       latestSandboxId = runInput.sandboxId
 
       if (runInput.sandboxPreset?.mode === "auto") {
+        const currentSandboxId = runInput.sandboxId
         const autoEnvironment = await ensureAutoEnvironmentSandbox({
           authJson: runAuthJson,
           baseBranch: runInput.baseBranch,
-          currentSandboxId: runInput.sandboxId,
+          currentSandboxId,
           githubToken: runInput.githubToken,
           githubUserEmail: runInput.githubUserEmail,
           githubUserName: runInput.githubUserName,
@@ -346,12 +346,7 @@ export const cloudcodeRun = task({
         runInput = {
           ...runInput,
           authJson: runAuthJson,
-          preparedSandboxFresh: Boolean(autoEnvironment.preparedSandboxFresh),
-          requireExistingSandbox: Boolean(
-            autoEnvironment.requireExistingSandbox ||
-            autoEnvironment.preparedSandboxFresh
-          ),
-          sandboxId: autoEnvironment.sandboxId ?? runInput.sandboxId,
+          sandboxId: autoEnvironment.sandboxId,
           sandboxPreset: {
             ...runInput.sandboxPreset,
             ...autoEnvironment.preset,

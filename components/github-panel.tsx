@@ -1,7 +1,6 @@
 "use client"
 
 import {
-  ArrowUp,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -9,7 +8,6 @@ import {
   Copy,
   ExternalLink,
   GitBranch,
-  GitCommitHorizontal,
   GitPullRequest,
   Loader2,
   Plus,
@@ -194,11 +192,20 @@ export function GithubPanel({
   const connected = prData?.connected ?? githubConnected
   const files = status?.files ?? []
   const branch = status?.branch ?? prData?.branch ?? null
+  const upstream = status?.upstream ?? null
   const hasChanges = files.length > 0
   const canCommit =
     hasChanges && commitMessage.trim().length > 0 && busy === null
   const ahead = status?.ahead ?? 0
-  const canPush = connected && busy === null
+  const hasUnpushedBranch = Boolean(
+    status?.hasRepo && branch && status.sha && !upstream
+  )
+  const pushLabel =
+    connected && (ahead > 0 || hasUnpushedBranch)
+      ? ahead > 0
+        ? `Push ${ahead} ${ahead === 1 ? "commit" : "commits"}`
+        : "Push branch"
+      : null
 
   const runAction = useCallback(
     async (kind: Exclude<BusyKind, null>, fn: () => Promise<void>) => {
@@ -340,7 +347,7 @@ export function GithubPanel({
               baseBranch={baseBranch}
               ahead={ahead}
               behind={status?.behind ?? 0}
-              upstream={status?.upstream ?? null}
+              upstream={upstream}
             />
 
             {actionError ? <ErrorBanner message={actionError} /> : null}
@@ -355,23 +362,14 @@ export function GithubPanel({
               value={commitMessage}
               onChange={setCommitMessage}
               canCommit={canCommit}
+              hasChanges={hasChanges}
               busy={busy}
-              canPush={connected}
+              connected={connected}
+              pushLabel={pushLabel}
               onCommit={() => commit("commit")}
               onCommitAndPush={() => commit("commit-push")}
+              onPush={push}
             />
-
-            {connected && ahead > 0 ? (
-              <SecondaryButton
-                onClick={push}
-                disabled={!canPush}
-                loading={busy === "push"}
-                className="mt-2 w-full"
-              >
-                <ArrowUp className="size-3.5" />
-                Push {ahead} {ahead === 1 ? "commit" : "commits"}
-              </SecondaryButton>
-            ) : null}
 
             <PullRequestSection
               connected={connected}
@@ -558,57 +556,66 @@ function FileRow({
 function CommitSection({
   busy,
   canCommit,
-  canPush,
+  connected,
+  hasChanges,
   onChange,
   onCommit,
   onCommitAndPush,
+  onPush,
+  pushLabel,
   value,
 }: {
   busy: BusyKind
   canCommit: boolean
-  canPush: boolean
+  connected: boolean
+  hasChanges: boolean
   onChange: (value: string) => void
   onCommit: () => void
   onCommitAndPush: () => void
+  onPush: () => void
+  pushLabel: string | null
   value: string
 }) {
   return (
     <div className="mt-4">
       <SectionHeading>Commit</SectionHeading>
-      <div
-        className={cn(
-          "overflow-hidden transition-[border-color,box-shadow] focus-within:border-border focus-within:ring-2 focus-within:ring-ring/15",
-          cardSurfaceClass
-        )}
-      >
-        <Textarea
-          variant="bare"
-          aria-label="Commit message"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          placeholder="Message"
-          rows={3}
-          spellCheck={false}
-          className="block px-3 py-2.5 text-[13px] text-foreground"
-        />
-        <div className="flex items-center justify-end gap-2 border-t border-border/60 bg-muted/30 px-2.5 py-2">
+      <Textarea
+        aria-label="Commit message"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="Message"
+        rows={3}
+        spellCheck={false}
+        className="text-[13px]"
+      />
+      {hasChanges ? (
+        <div className="mt-2 flex items-center justify-end gap-2">
           <SecondaryButton
             onClick={onCommit}
             disabled={!canCommit}
             loading={busy === "commit"}
           >
-            <GitCommitHorizontal className="size-3.5" />
             Commit
           </SecondaryButton>
           <PrimaryButton
             onClick={onCommitAndPush}
-            disabled={!canCommit || !canPush}
+            disabled={!canCommit || !connected}
             loading={busy === "commit-push"}
           >
             Commit &amp; Push
           </PrimaryButton>
         </div>
-      </div>
+      ) : pushLabel ? (
+        <div className="mt-2 flex justify-end">
+          <PrimaryButton
+            onClick={onPush}
+            disabled={busy !== null}
+            loading={busy === "push"}
+          >
+            {pushLabel}
+          </PrimaryButton>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -775,14 +782,14 @@ function CreatePrForm({
           href={compareUrl}
           target="_blank"
           rel="noreferrer"
-          className="flex items-center gap-1.5 border-t border-border/60 bg-muted/30 px-3 py-2 text-[11px] text-foreground/80 transition-colors hover:bg-muted"
+          className="flex items-center gap-1.5 border-t border-border/60 px-3 py-2 text-[11px] text-foreground/80 transition-colors hover:bg-muted/40"
         >
           <ExternalLink className="size-3.5 shrink-0" />
           Open on GitHub to finish creating it.
         </a>
       ) : null}
 
-      <div className="flex items-center justify-between gap-2 border-t border-border/60 bg-muted/30 px-2.5 py-2">
+      <div className="flex items-center justify-between gap-2 border-t border-border/60 px-2.5 py-2">
         <CheckboxToggle
           checked={draft}
           label="Draft"
@@ -862,7 +869,7 @@ function PullRequestCard({
       {checks && checks.total > 0 ? <ChecksRollup checks={checks} /> : null}
 
       {status ? (
-        <div className="flex items-center gap-2 border-t border-border/60 bg-muted/30 px-3 py-2 text-[11px]">
+        <div className="flex items-center gap-2 border-t border-border/60 px-3 py-2 text-[11px]">
           <span
             className={cn(
               "size-1.5 shrink-0 rounded-full",
@@ -915,27 +922,28 @@ function mergeStatus(
     }
   }
   const failing = checks?.failing ?? 0
-  if (failing > 0 || state === "unstable") {
+  const pending = checks?.pending ?? 0
+  if (failing > 0) {
     return {
       blocked: false,
-      label:
-        failing > 0
-          ? `${failing} check${failing === 1 ? "" : "s"} failing`
-          : "Some checks are failing",
+      label: `${failing} check${failing === 1 ? "" : "s"} failing`,
       tone: "danger",
     }
+  }
+  if (pending > 0) {
+    return {
+      blocked: false,
+      label: `Waiting for ${pending} check${pending === 1 ? "" : "s"}…`,
+      tone: "muted",
+    }
+  }
+  if (state === "unstable") {
+    return { blocked: false, label: "Some checks are failing", tone: "danger" }
   }
   if (state === "behind") {
     return {
       blocked: false,
       label: "Out of date with the base branch",
-      tone: "muted",
-    }
-  }
-  if ((checks?.pending ?? 0) > 0) {
-    return {
-      blocked: false,
-      label: "Waiting for checks to finish",
       tone: "muted",
     }
   }
@@ -1046,28 +1054,17 @@ function ChecksRollup({ checks }: { checks: ChecksSummary }) {
 }
 
 function PrStateBadge({ pr }: { pr: PullRequestSummary }) {
-  const { className, label } = pr.merged
-    ? {
-        className: "bg-success/10 text-success",
-        label: "Merged",
-      }
+  const { dot, label } = pr.merged
+    ? { dot: "bg-success", label: "Merged" }
     : pr.state === "closed"
-      ? { className: "bg-destructive/10 text-destructive", label: "Closed" }
+      ? { dot: "bg-destructive", label: "Closed" }
       : pr.draft
-        ? { className: "bg-muted text-muted-foreground", label: "Draft" }
-        : {
-            className: "bg-success/10 text-success",
-            label: "Open",
-          }
+        ? { dot: "bg-muted-foreground/50", label: "Draft" }
+        : { dot: "bg-success", label: "Open" }
 
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium",
-        className
-      )}
-    >
-      <span className="size-1.5 rounded-full bg-current" />
+    <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-foreground/80">
+      <span className={cn("size-1.5 shrink-0 rounded-full", dot)} />
       {label}
     </span>
   )

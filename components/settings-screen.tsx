@@ -801,10 +801,10 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                   Automatic cloudcode.yaml environments
                 </div>
                 <p className={fieldHint}>
-                  When this preset runs against a repo, Cloudcode scans the
-                  repo, writes cloudcode.yaml, executes its setup commands in a
-                  builder sandbox once, then reuses that sandbox for later
-                  chats.
+                  When this preset runs against a repo, Cloudcode uses the
+                  repo&apos;s cloudcode.yaml first. If the repo does not have
+                  one, it uses the saved Convex cloudcode.yaml for the live
+                  sandbox.
                 </p>
                 {selected?.environments?.length ? (
                   <div className="-mx-4 mt-3 border-y border-border/60">
@@ -835,10 +835,10 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                       Auto environment
                     </div>
                     <p className={fieldHint}>
-                      Scan the repo&apos;s cloudcode.yaml and build the
-                      environment once in a builder sandbox, then reuse it. The
-                      scripts and secrets below run after the environment is
-                      ready.
+                      Use the repo&apos;s cloudcode.yaml for each live chat
+                      sandbox, falling back to the saved Convex cloudcode.yaml
+                      when the repo does not include one. The scripts and
+                      secrets below run after the environment is ready.
                     </p>
                   </div>
                   <Switch

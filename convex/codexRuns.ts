@@ -252,8 +252,7 @@ function sandboxIdFromLog(log: StoredRunLog) {
   }
 
   return log.message === "Daytona sandbox ready" ||
-    log.message === "Recovered with a fresh Daytona sandbox" ||
-    log.message === "Using prepared auto environment sandbox"
+    log.message === "Recovered with a fresh Daytona sandbox"
     ? log.detail
     : undefined
 }
