@@ -535,36 +535,8 @@ function isSetupSummaryLog(log: ChatRunLog) {
   )
 }
 
-function isWarmAutoEnvironmentDuplicateLog(
-  log: ChatRunLog,
-  preparedSandboxId?: string
-) {
-  if (log.kind !== "setup" || !preparedSandboxId) return false
-
-  return (
-    log.message === "Connecting to Daytona sandbox" ||
-    (log.message === "Daytona sandbox ready" &&
-      log.detail === preparedSandboxId)
-  )
-}
-
 function visibleSetupSummaryLogs(logs: ChatRunLog[]) {
-  let preparedSandboxId: string | undefined
-
-  return logs.flatMap((log) => {
-    if (!isSetupSummaryLog(log)) return []
-    if (isWarmAutoEnvironmentDuplicateLog(log, preparedSandboxId)) return []
-
-    if (
-      log.kind === "setup" &&
-      log.message === "Using prepared auto environment sandbox" &&
-      log.detail
-    ) {
-      preparedSandboxId = log.detail
-    }
-
-    return [log]
-  })
+  return logs.filter(isSetupSummaryLog)
 }
 
 type ParsedLogDetail = {

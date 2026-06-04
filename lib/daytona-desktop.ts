@@ -24,7 +24,7 @@ import {
 
 const DAYTONA_DESKTOP_PORT = 6080
 const DESKTOP_PREVIEW_TTL_SECONDS = 60 * 60
-const DESKTOP_TOOL_VERSION = "7"
+const DESKTOP_TOOL_VERSION = "8"
 const DESKTOP_DEPENDENCY_TIMEOUT_MS = 10 * 60 * 1000
 const DESKTOP_BROWSER_URL = "about:blank"
 const DESKTOP_BROWSER_COMMAND = "/usr/local/bin/cloudcode-browser"
@@ -60,11 +60,15 @@ if [ -z "$browser" ]; then
 fi
 
 profile="\${CLOUDCODE_BROWSER_PROFILE:-\${HOME:-/tmp}/.cache/cloudcode-chromium}"
+browser_locale="\${CLOUDCODE_BROWSER_LANG:-en-US}"
+browser_accept_languages="\${CLOUDCODE_BROWSER_ACCEPT_LANGUAGES:-en-US,en}"
 mkdir -p "$profile"
 exec "$browser" \\
   --no-sandbox \\
   --test-type \\
   --disable-dev-shm-usage \\
+  --lang="$browser_locale" \\
+  --accept-lang="$browser_accept_languages" \\
   --no-first-run \\
   --no-default-browser-check \\
   --password-store=basic \\

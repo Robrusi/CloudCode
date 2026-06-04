@@ -7,7 +7,7 @@ import { Daytona, Image } from "@daytona/sdk"
 
 const DEFAULT_SNAPSHOT_NAME = "cloudcode-batteries-included"
 const DEFAULT_BASE_IMAGE = "daytonaio/sandbox:0.8.0"
-const DESKTOP_BROWSER_SETUP_VERSION = "cloudcode-browser-v2"
+const DESKTOP_BROWSER_SETUP_VERSION = "cloudcode-browser-v3"
 const DESKTOP_BROWSER_LAUNCHER = `#!/usr/bin/env bash
 set -euo pipefail
 
@@ -29,11 +29,15 @@ if [ -z "$browser" ]; then
 fi
 
 profile="\${CLOUDCODE_BROWSER_PROFILE:-\${HOME:-/tmp}/.cache/cloudcode-chromium}"
+browser_locale="\${CLOUDCODE_BROWSER_LANG:-en-US}"
+browser_accept_languages="\${CLOUDCODE_BROWSER_ACCEPT_LANGUAGES:-en-US,en}"
 mkdir -p "$profile"
 exec "$browser" \\
   --no-sandbox \\
   --test-type \\
   --disable-dev-shm-usage \\
+  --lang="$browser_locale" \\
+  --accept-lang="$browser_accept_languages" \\
   --no-first-run \\
   --no-default-browser-check \\
   --password-store=basic \\
