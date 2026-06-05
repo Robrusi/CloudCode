@@ -13,6 +13,8 @@ import {
 
 const MAX_REPLAY_BYTES = 1_000_000
 const GITHUB_AUTH_VERSION = 7
+const GITHUB_AUTH_REFRESH_BUFFER_MS = 5 * 60 * 1000
+const GITHUB_AUTH_UNAVAILABLE_RECHECK_MS = 60_000
 
 type StartedDaytonaSandbox = Awaited<
   ReturnType<typeof getStartedDaytonaSandbox>
@@ -34,6 +36,8 @@ type TerminalSession = {
   bufferBytes: number
   connecting?: Promise<PtyHandle>
   githubAuth?: SandboxGitHubAuth | null
+  githubAuthCheckedAt?: number
+  githubAuthExpiresAt?: number
   githubAuthVersion?: number
   handle?: PtyHandle
   subscribers: Set<TerminalSubscriber>
@@ -147,18 +151,41 @@ async function connectExistingPty(
   throw lastError
 }
 
+function timeValue(value?: string) {
+  if (!value) return undefined
+  const time = new Date(value).getTime()
+  return Number.isFinite(time) ? time : undefined
+}
+
+function terminalGitHubAuthIsCurrent(session: TerminalSession | undefined) {
+  if (!session || session.githubAuthVersion !== GITHUB_AUTH_VERSION) {
+    return false
+  }
+
+  if (session.githubAuth) {
+    return (
+      !session.githubAuthExpiresAt ||
+      session.githubAuthExpiresAt - Date.now() > GITHUB_AUTH_REFRESH_BUFFER_MS
+    )
+  }
+
+  return (
+    Date.now() - (session.githubAuthCheckedAt ?? 0) <
+    GITHUB_AUTH_UNAVAILABLE_RECHECK_MS
+  )
+}
+
 export function daytonaTerminalHasCurrentGitHubAuth(
   sandboxId: string,
   terminalId: string
 ) {
   const session = sessions.get(terminalSessionKey(sandboxId, terminalId))
-  return Boolean(
-    session?.githubAuth && session.githubAuthVersion === GITHUB_AUTH_VERSION
-  )
+  return terminalGitHubAuthIsCurrent(session)
 }
 
 export async function refreshDaytonaTerminalGitHubAuth({
   githubToken,
+  githubTokenExpiresAt,
   githubUserEmail,
   githubUserName,
   githubUsername,
@@ -169,6 +196,7 @@ export async function refreshDaytonaTerminalGitHubAuth({
   terminalId,
 }: {
   githubToken?: string
+  githubTokenExpiresAt?: string
   githubUserEmail?: string
   githubUserName?: string
   githubUsername?: string | null
@@ -180,10 +208,20 @@ export async function refreshDaytonaTerminalGitHubAuth({
 }) {
   const session = getSession(terminalSessionKey(sandboxId, terminalId))
 
-  if (session.githubAuth && session.githubAuthVersion === GITHUB_AUTH_VERSION) {
-    return session.githubAuth
+  if (terminalGitHubAuthIsCurrent(session)) {
+    if (!githubToken?.trim() || session.githubAuth) {
+      return session.githubAuth ?? null
+    }
   }
-  if (!githubToken?.trim()) return session.githubAuth ?? null
+
+  const checkedAt = Date.now()
+  if (!githubToken?.trim()) {
+    session.githubAuth = null
+    session.githubAuthCheckedAt = checkedAt
+    session.githubAuthExpiresAt = undefined
+    session.githubAuthVersion = GITHUB_AUTH_VERSION
+    return null
+  }
 
   const sandbox = providedSandbox ?? (await getStartedDaytonaSandbox(sandboxId))
   const paths = providedPaths ?? (await resolveDaytonaPaths(sandbox))
@@ -200,7 +238,11 @@ export async function refreshDaytonaTerminalGitHubAuth({
     sandbox,
   })
   session.githubAuth = auth
-  session.githubAuthVersion = auth ? GITHUB_AUTH_VERSION : undefined
+  session.githubAuthCheckedAt = checkedAt
+  session.githubAuthExpiresAt = auth
+    ? timeValue(githubTokenExpiresAt)
+    : undefined
+  session.githubAuthVersion = GITHUB_AUTH_VERSION
 
   await configureSandboxGitHubRemote({
     auth,
@@ -214,6 +256,7 @@ export async function refreshDaytonaTerminalGitHubAuth({
 export async function connectDaytonaTerminal({
   cols,
   githubToken,
+  githubTokenExpiresAt,
   githubUserEmail,
   githubUserName,
   githubUsername,
@@ -225,6 +268,7 @@ export async function connectDaytonaTerminal({
 }: {
   cols?: number
   githubToken?: string
+  githubTokenExpiresAt?: string
   githubUserEmail?: string
   githubUserName?: string
   githubUsername?: string | null
@@ -273,6 +317,7 @@ export async function connectDaytonaTerminal({
   async function ensureTerminalGitHubAuth(context?: DaytonaTerminalContext) {
     return await refreshDaytonaTerminalGitHubAuth({
       githubToken,
+      githubTokenExpiresAt,
       githubUserEmail,
       githubUserName,
       githubUsername,
@@ -344,9 +389,6 @@ export async function connectDaytonaTerminal({
         }
       }
     }
-
-    session.githubAuth = githubAuth
-    session.githubAuthVersion = githubAuth ? GITHUB_AUTH_VERSION : undefined
     return handle
   }
 

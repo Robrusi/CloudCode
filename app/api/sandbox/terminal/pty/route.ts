@@ -34,6 +34,33 @@ function numberParam(value: string | null, fallback: number) {
   return Number.isFinite(number) ? number : fallback
 }
 
+type TerminalGitHubAuth = Awaited<
+  ReturnType<typeof maybeGetCurrentGitHubRepoCredential>
+>
+
+async function refreshTerminalGitHubAuthFromCredential({
+  githubAuth,
+  repoUrl,
+  sandboxId,
+  terminalId,
+}: {
+  githubAuth: TerminalGitHubAuth
+  repoUrl: string
+  sandboxId: string
+  terminalId: string
+}) {
+  await refreshDaytonaTerminalGitHubAuth({
+    githubToken: githubAuth?.token,
+    githubTokenExpiresAt: githubAuth?.expiresAt,
+    githubUserEmail: githubAuth?.gitUserEmail,
+    githubUserName: githubAuth?.gitUserName,
+    githubUsername: githubAuth?.username,
+    repoUrl,
+    sandboxId,
+    terminalId,
+  })
+}
+
 export async function GET(request: Request) {
   const blocked = requireSameOrigin(request)
   if (blocked) return blocked
@@ -75,15 +102,14 @@ export async function GET(request: Request) {
       }
 
       try {
-        const githubAuth = await maybeGetCurrentGitHubRepoCredential(
-          sandboxAccess.repoUrl
+        const githubAuthPromise = daytonaTerminalHasCurrentGitHubAuth(
+          sandboxId,
+          terminalId
         )
+          ? null
+          : maybeGetCurrentGitHubRepoCredential(sandboxAccess.repoUrl)
         const connection = await connectDaytonaTerminal({
           cols,
-          githubToken: githubAuth?.token,
-          githubUserEmail: githubAuth?.gitUserEmail,
-          githubUserName: githubAuth?.gitUserName,
-          githubUsername: githubAuth?.username,
           onData: (data) => {
             enqueue(terminalData(data))
           },
@@ -118,6 +144,24 @@ export async function GET(request: Request) {
         connection.activate()
         enqueue({ type: "ready" })
         heartbeat = setInterval(() => enqueue({ type: "ping" }), 20_000)
+
+        if (githubAuthPromise) {
+          void githubAuthPromise
+            .then((githubAuth) =>
+              refreshTerminalGitHubAuthFromCredential({
+                githubAuth,
+                repoUrl: sandboxAccess.repoUrl,
+                sandboxId,
+                terminalId,
+              })
+            )
+            .catch((error: unknown) => {
+              console.warn(
+                "Unable to refresh Daytona terminal GitHub auth.",
+                error
+              )
+            })
+        }
       } catch (error) {
         enqueue({
           error:
@@ -190,11 +234,8 @@ export async function POST(request: Request) {
       const githubAuth = await maybeGetCurrentGitHubRepoCredential(
         sandboxAccess.repoUrl
       )
-      await refreshDaytonaTerminalGitHubAuth({
-        githubToken: githubAuth?.token,
-        githubUserEmail: githubAuth?.gitUserEmail,
-        githubUserName: githubAuth?.gitUserName,
-        githubUsername: githubAuth?.username,
+      await refreshTerminalGitHubAuthFromCredential({
+        githubAuth,
         repoUrl: sandboxAccess.repoUrl,
         sandboxId,
         terminalId,
