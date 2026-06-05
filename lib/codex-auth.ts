@@ -8,6 +8,7 @@ import type { Id } from "@/convex/_generated/dataModel"
 
 const DEFAULT_PROFILE = "default"
 const CONVEX_JWT_TEMPLATE = "convex"
+type ClerkAuthSession = Awaited<ReturnType<typeof auth>>
 
 export type CodexChatGptAuth = {
   accessToken: string
@@ -64,9 +65,7 @@ function createClient(convexToken: string) {
   return client
 }
 
-export async function getConvexAuthToken() {
-  const session = await auth()
-
+export async function getConvexAuthTokenForSession(session: ClerkAuthSession) {
   if (!session.userId) {
     throw new Error("Sign in with Clerk before using Codex OAuth storage.")
   }
@@ -90,6 +89,10 @@ export async function getConvexAuthToken() {
   }
 
   return token
+}
+
+export async function getConvexAuthToken() {
+  return await getConvexAuthTokenForSession(await auth())
 }
 
 function normalizeProfile(profile?: string) {

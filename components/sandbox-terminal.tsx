@@ -23,7 +23,6 @@ import {
 import { ContextMenu } from "@/components/context-menu"
 import { IconButton } from "@/components/ui/icon-button"
 import { Input } from "@/components/ui/input"
-import { SegmentedControl } from "@/components/ui/segmented-control"
 import {
   killBrowserTerminalSession,
   registerTerminalCloser,
@@ -32,7 +31,6 @@ import {
 import { cn } from "@/lib/utils"
 
 type TerminalStatus = "connecting" | "ready" | "reconnecting" | "error"
-type TerminalInputMode = "direct" | "compose"
 
 type TerminalPalette = {
   background: string
@@ -78,14 +76,8 @@ type TerminalSessionState = {
 }
 
 const TERMINAL_DOCK_KEY = "cloudcode:terminalDock:v1"
-const TERMINAL_INPUT_MODE_KEY = "cloudcode:terminalInputMode:v1"
 const TERMINAL_ID_PATTERN = /^[A-Za-z0-9._:-]{1,120}$/
-const TERMINAL_RECENT_TEXT_LIMIT = 4000
-const TERMINAL_FANCY_PROMPT_PATTERN = /^(?:➜|❯|›)(?:\s|$)/
-const TERMINAL_SIMPLE_PROMPT_PATTERN = /^[$#%]\s*$/
-const TERMINAL_SHELL_NAME_PROMPT_PATTERN =
-  /^(?:bash|sh|zsh)(?:-[\d.]+)?[$#%]\s*$/
-const TERMINAL_USER_HOST_PROMPT_PATTERN = /^[\w.-]+@[\w.-]+(?::.*)?[$#%]\s*$/
+const TERMINAL_INPUT_FLUSH_DELAY_MS = 10
 
 const darkPalette: TerminalPalette = {
   background: "#0b0d10",
@@ -219,17 +211,6 @@ function loadPersistedTerminalDock(): TerminalDockState {
   }
 }
 
-function loadPersistedTerminalInputMode(): TerminalInputMode {
-  if (typeof window === "undefined") return "direct"
-
-  try {
-    const value = localStorage.getItem(TERMINAL_INPUT_MODE_KEY)
-    return value === "compose" ? "compose" : "direct"
-  } catch {
-    return "direct"
-  }
-}
-
 function persistTerminalDock(dock: TerminalDockState) {
   if (typeof window === "undefined") return
 
@@ -260,16 +241,6 @@ function persistTerminalDock(dock: TerminalDockState) {
   }
 }
 
-function persistTerminalInputMode(inputMode: TerminalInputMode) {
-  if (typeof window === "undefined") return
-
-  try {
-    localStorage.setItem(TERMINAL_INPUT_MODE_KEY, inputMode)
-  } catch {
-    // Input mode persistence is convenience-only.
-  }
-}
-
 function terminalNumbersFromDock(dock: TerminalDockState) {
   const numbers: Record<string, number> = {}
 
@@ -282,18 +253,6 @@ function terminalNumbersFromDock(dock: TerminalDockState) {
   }
 
   return numbers
-}
-
-function terminalLineLooksLikeShellPrompt(line: string) {
-  const trimmed = line.trimEnd()
-  if (!trimmed) return false
-
-  return (
-    TERMINAL_FANCY_PROMPT_PATTERN.test(trimmed) ||
-    TERMINAL_SIMPLE_PROMPT_PATTERN.test(trimmed) ||
-    TERMINAL_SHELL_NAME_PROMPT_PATTERN.test(trimmed) ||
-    TERMINAL_USER_HOST_PROMPT_PATTERN.test(trimmed)
-  )
 }
 
 function isEditableElement(element: Element | null) {
@@ -327,9 +286,6 @@ export function SandboxTerminalPanel({
 }) {
   const [startedSandboxId, setStartedSandboxId] = useState<string | null>(null)
   const [dock, setDock] = useState<TerminalDockState>(loadPersistedTerminalDock)
-  const [inputMode, setInputMode] = useState<TerminalInputMode>(
-    loadPersistedTerminalInputMode
-  )
   const [sessionStates, setSessionStates] = useState<
     Record<string, TerminalSessionState>
   >({})
@@ -411,10 +367,6 @@ export function SandboxTerminalPanel({
   useEffect(() => {
     persistTerminalDock(dock)
   }, [dock])
-
-  useEffect(() => {
-    persistTerminalInputMode(inputMode)
-  }, [inputMode])
 
   useEffect(() => {
     if (!connectedSandboxId) return
@@ -730,16 +682,6 @@ export function SandboxTerminalPanel({
           </IconButton>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <SegmentedControl<TerminalInputMode>
-            value={inputMode}
-            onChange={setInputMode}
-            label="Terminal input mode"
-            className="mr-1"
-            options={[
-              { value: "direct", label: "Direct" },
-              { value: "compose", label: "Compose" },
-            ]}
-          />
           <span
             aria-live="polite"
             className={cn(
@@ -787,7 +729,6 @@ export function SandboxTerminalPanel({
                 key={`${connectedSandboxId}:${session.id}:${session.restartKey}`}
                 active={open && session.id === activeSession?.id}
                 palette={palette}
-                inputMode={inputMode}
                 sandboxId={connectedSandboxId}
                 session={session}
                 onStatusChange={handleSessionStatusChange}
@@ -913,66 +854,26 @@ function TerminalTab({
 
 function SandboxTerminalPane({
   active,
-  inputMode,
   palette,
   sandboxId,
   session,
   onStatusChange,
 }: {
   active: boolean
-  inputMode: TerminalInputMode
   palette: TerminalPalette
   sandboxId: string
   session: TerminalWindow
   onStatusChange: (terminalId: string, state: TerminalSessionState) => void
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const composeCursorRef = useRef(0)
-  const composeDraftRef = useRef("")
-  const composeHistoryDraftRef = useRef("")
-  const composeHistoryRef = useRef<string[]>([])
-  const composeHistoryIndexRef = useRef<number | null>(null)
-  const composeAwaitingPromptRef = useRef(false)
-  const composeInputReadyRef = useRef(false)
-  const composeStartRef = useRef<{ x: number; y: number } | null>(null)
-  const handleComposeKeyEventRef = useRef<(event: KeyboardEvent) => boolean>(
-    () => true
-  )
-  const handleComposeTerminalDataRef = useRef<(data: string) => void>(
-    () => undefined
-  )
-  const pendingRemoteEchoRef = useRef("")
   const terminalRef = useRef<Terminal | null>(null)
   const activeRef = useRef(active)
-  const inputModeRef = useRef<TerminalInputMode>(inputMode)
   const paletteRef = useRef<TerminalPalette>(palette)
   const scheduleResizeRef = useRef<(() => void) | null>(null)
-  const sendInputRef = useRef<(data: string) => void>(() => undefined)
-  const terminalTextDecoderRef = useRef<TextDecoder | null>(null)
-  const terminalRecentTextRef = useRef("")
 
   useEffect(() => {
     activeRef.current = active
   }, [active])
-
-  useEffect(() => {
-    inputModeRef.current = inputMode
-    if (inputMode === "direct" && composeDraftRef.current) {
-      eraseLocalComposeDraft()
-      composeHistoryDraftRef.current = ""
-      pendingRemoteEchoRef.current = ""
-      setComposeHistoryIndexValue(null)
-      composeStartRef.current = null
-    }
-    if (inputMode === "compose") {
-      composeInputReadyRef.current =
-        !composeAwaitingPromptRef.current && recentTerminalTextEndsWithPrompt()
-    }
-    if (!activeRef.current) return
-
-    const frame = requestAnimationFrame(() => terminalRef.current?.focus())
-    return () => cancelAnimationFrame(frame)
-  }, [inputMode])
 
   useEffect(() => {
     paletteRef.current = palette
@@ -983,10 +884,6 @@ function SandboxTerminalPane({
 
   useEffect(() => {
     if (!active) return
-    if (inputModeRef.current === "compose") {
-      composeInputReadyRef.current =
-        !composeAwaitingPromptRef.current && recentTerminalTextEndsWithPrompt()
-    }
 
     const frame = requestAnimationFrame(() => {
       scheduleResizeRef.current?.()
@@ -1024,7 +921,8 @@ function SandboxTerminalPane({
     const fitAddon = new FitAddon()
     const node = containerRef.current
     let disposed = false
-    let inputFlushScheduled = false
+    let inputFlushTimer: ReturnType<typeof setTimeout> | undefined
+    let inputSendQueue = Promise.resolve()
     let pendingInput = ""
     let resizeTimer: ReturnType<typeof setTimeout> | undefined
     let lastSize = { cols: 0, rows: 0 }
@@ -1061,7 +959,10 @@ function SandboxTerminalPane({
     }
 
     function sendInput(data: string) {
-      return postTerminal({ data }).catch((err) => {
+      const send = inputSendQueue.then(() => postTerminal({ data }))
+      inputSendQueue = send.catch(() => undefined)
+
+      return send.catch((err) => {
         if (disposed) return
         setTerminalState(
           "error",
@@ -1070,16 +971,11 @@ function SandboxTerminalPane({
         throw err
       })
     }
-    const sendInputFireAndForget = (data: string) => {
-      void sendInput(data).catch(() => undefined)
-    }
-    sendInputRef.current = sendInputFireAndForget
-
     function flushInput() {
       if (!pendingInput || disposed) return
       const data = pendingInput
       pendingInput = ""
-      sendInputRef.current(data)
+      void sendInput(data).catch(() => undefined)
     }
 
     function sendResize() {
@@ -1119,18 +1015,12 @@ function SandboxTerminalPane({
     )
 
     function queueInput(data: string) {
-      if (inputModeRef.current === "compose") {
-        handleComposeTerminalDataRef.current(data)
-        return
-      }
-
       pendingInput += data
-      if (inputFlushScheduled) return
-      inputFlushScheduled = true
-      queueMicrotask(() => {
-        inputFlushScheduled = false
+      if (inputFlushTimer) return
+      inputFlushTimer = setTimeout(() => {
+        inputFlushTimer = undefined
         flushInput()
-      })
+      }, TERMINAL_INPUT_FLUSH_DELAY_MS)
     }
 
     const dataDisposable = terminal.onData(queueInput)
@@ -1138,9 +1028,6 @@ function SandboxTerminalPane({
     // xterm.js doesn't translate Option/Cmd + Arrow/Backspace to readline word/line edits.
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown") return true
-      if (inputModeRef.current === "compose") {
-        return handleComposeKeyEventRef.current(event)
-      }
       const { altKey, ctrlKey, metaKey, shiftKey } = event
 
       if (altKey && !ctrlKey && !metaKey) {
@@ -1214,35 +1101,20 @@ function SandboxTerminalPane({
 
       if (message.type === "ready") {
         setTerminalState("ready")
-        composeInputReadyRef.current =
-          !composeAwaitingPromptRef.current &&
-          recentTerminalTextEndsWithPrompt()
         focusTerminal()
         return
       }
 
       if (message.type === "data" && typeof message.data === "string") {
-        const binary = filterSuppressedRemoteEcho(atob(message.data))
+        const binary = atob(message.data)
         if (!binary) return
 
         const bytes = bytesFromBinary(binary)
-        const promptReady = rememberRemoteTerminalText(bytes)
-        if (inputModeRef.current === "compose") {
-          if (composeDraftRef.current) discardComposeDraftForRemoteOutput()
-          if (!promptReady) composeInputReadyRef.current = false
-        }
-        terminal.write(bytes, () => {
-          if (!promptReady) return
-
-          composeAwaitingPromptRef.current = false
-          composeInputReadyRef.current = true
-        })
+        terminal.write(bytes)
         return
       }
 
       if (message.type === "error") {
-        composeAwaitingPromptRef.current = false
-        composeInputReadyRef.current = false
         const detail =
           typeof message.error === "string"
             ? message.error
@@ -1254,7 +1126,6 @@ function SandboxTerminalPane({
     }
     eventSource.onerror = () => {
       if (disposed || eventSource.readyState === EventSource.CLOSED) return
-      composeInputReadyRef.current = false
       setTerminalState("reconnecting")
     }
 
@@ -1262,6 +1133,10 @@ function SandboxTerminalPane({
       unregisterCloser()
       if (scheduleResizeRef.current === scheduleResize) {
         scheduleResizeRef.current = null
+      }
+      if (inputFlushTimer) {
+        clearTimeout(inputFlushTimer)
+        inputFlushTimer = undefined
       }
       if (resizeTimer) clearTimeout(resizeTimer)
       flushInput()
@@ -1272,20 +1147,10 @@ function SandboxTerminalPane({
       eventSource.close()
       terminal.dispose()
       if (terminalRef.current === terminal) terminalRef.current = null
-      if (sendInputRef.current === sendInputFireAndForget) {
-        sendInputRef.current = () => undefined
-      }
     }
     // palette is applied via a separate effect; we intentionally don't recreate
     // the terminal when the theme changes.
   }, [onStatusChange, sandboxId, session.id, session.restartKey])
-
-  function utf8Binary(value: string) {
-    const bytes = new TextEncoder().encode(value)
-    let binary = ""
-    for (const byte of bytes) binary += String.fromCharCode(byte)
-    return binary
-  }
 
   function bytesFromBinary(binary: string) {
     const bytes = new Uint8Array(binary.length)
@@ -1293,165 +1158,6 @@ function SandboxTerminalPane({
       bytes[i] = binary.charCodeAt(i)
     }
     return bytes
-  }
-
-  function filterSuppressedRemoteEcho(binary: string) {
-    let pending = pendingRemoteEchoRef.current
-    if (!pending) return binary
-
-    let remaining = binary
-    while (pending && remaining) {
-      let length = 0
-      while (
-        length < pending.length &&
-        length < remaining.length &&
-        pending.charCodeAt(length) === remaining.charCodeAt(length)
-      ) {
-        length += 1
-      }
-
-      if (length === 0) {
-        const matchIndex = remaining.indexOf(pending)
-        if (matchIndex >= 0) {
-          const prefix = remaining.slice(0, matchIndex)
-          if (terminalEchoPrefixLooksIgnorable(prefix)) {
-            remaining = remaining.slice(matchIndex + pending.length)
-            pending = ""
-            break
-          }
-        }
-
-        const suffixLength = matchingEchoSuffixLength(remaining, pending)
-        if (
-          suffixLength > 0 &&
-          terminalEchoPrefixLooksIgnorable(
-            remaining.slice(0, remaining.length - suffixLength)
-          )
-        ) {
-          pending = pending.slice(suffixLength)
-          remaining = ""
-          break
-        }
-
-        if (terminalEchoPrefixLooksIgnorable(remaining)) {
-          remaining = ""
-          break
-        }
-
-        pending = ""
-        break
-      }
-
-      pending = pending.slice(length)
-      remaining = remaining.slice(length)
-    }
-
-    pendingRemoteEchoRef.current = pending
-    return remaining
-  }
-
-  function matchingEchoSuffixLength(value: string, echo: string) {
-    const maxLength = Math.min(value.length, echo.length)
-    for (let length = maxLength; length > 0; length -= 1) {
-      if (echo.startsWith(value.slice(-length))) return length
-    }
-    return 0
-  }
-
-  function terminalEchoPrefixLooksIgnorable(value: string) {
-    const plain = stripTerminalControlSequences(value).replaceAll("\r", "\n")
-    if (!plain.trim()) return true
-
-    const contentLines = plain
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-    if (contentLines.length !== 1) return false
-
-    return terminalLineLooksLikeShellPrompt(contentLines[0] ?? "")
-  }
-
-  function stripTerminalControlSequences(value: string) {
-    let result = ""
-    let index = 0
-
-    while (index < value.length) {
-      const code = value.charCodeAt(index)
-      if (code !== 0x1b) {
-        if (code !== 0x07) result += value[index] ?? ""
-        index += 1
-        continue
-      }
-
-      const next = value[index + 1]
-      if (next === "]") {
-        index += 2
-        while (index < value.length) {
-          const current = value.charCodeAt(index)
-          if (current === 0x07) {
-            index += 1
-            break
-          }
-          if (current === 0x1b && value[index + 1] === "\\") {
-            index += 2
-            break
-          }
-          index += 1
-        }
-        continue
-      }
-
-      if (next === "[") {
-        index += 2
-        while (index < value.length) {
-          const current = value.charCodeAt(index)
-          index += 1
-          if (current >= 0x40 && current <= 0x7e) break
-        }
-        continue
-      }
-
-      index += next === "=" || next === ">" ? 2 : 1
-    }
-
-    return result
-  }
-
-  function terminalTextDecoder() {
-    terminalTextDecoderRef.current ??= new TextDecoder()
-    return terminalTextDecoderRef.current
-  }
-
-  function rememberRemoteTerminalText(bytes: Uint8Array) {
-    const text = terminalTextDecoder().decode(bytes, { stream: true })
-    if (!text) return false
-
-    const plain = stripTerminalControlSequences(text).replaceAll("\r", "\n")
-    if (!plain) return false
-
-    terminalRecentTextRef.current = (
-      terminalRecentTextRef.current + plain
-    ).slice(-TERMINAL_RECENT_TEXT_LIMIT)
-
-    return recentTerminalTextEndsWithPrompt()
-  }
-
-  function recentTerminalTextEndsWithPrompt() {
-    const lines = terminalRecentTextRef.current.split("\n")
-    const lastLine = lines.at(-1) ?? ""
-    return terminalLineLooksLikeShellPrompt(lastLine)
-  }
-
-  function canEditComposeInput() {
-    return inputModeRef.current === "compose" && composeInputReadyRef.current
-  }
-
-  function canPassThroughComposeInput() {
-    return (
-      inputModeRef.current === "compose" &&
-      !composeAwaitingPromptRef.current &&
-      !composeDraftRef.current
-    )
   }
 
   function shouldFocusTerminal() {
@@ -1465,144 +1171,6 @@ function SandboxTerminalPane({
     return !isEditableElement(activeElement)
   }
 
-  function interruptBusyComposeInput() {
-    composeAwaitingPromptRef.current = true
-    composeInputReadyRef.current = false
-    pendingRemoteEchoRef.current = ""
-    sendInputRef.current("\x03")
-  }
-
-  function shouldInterruptBusyComposeInput(data: string) {
-    return data.includes("\x03")
-  }
-
-  function discardComposeDraftForRemoteOutput() {
-    if (!composeDraftRef.current) return
-
-    eraseLocalComposeDraft()
-    composeHistoryDraftRef.current = ""
-    setComposeHistoryIndexValue(null)
-    composeStartRef.current = null
-  }
-
-  function composeChars(value = composeDraftRef.current) {
-    return Array.from(value)
-  }
-
-  function composeLength(value = composeDraftRef.current) {
-    return composeChars(value).length
-  }
-
-  function composeText(chars: string[]) {
-    return chars.join("")
-  }
-
-  function clampComposeCursor(value: number, draft = composeDraftRef.current) {
-    return Math.min(composeLength(draft), Math.max(0, value))
-  }
-
-  function composeStart() {
-    const terminal = terminalRef.current
-    const existing = composeStartRef.current
-    if (existing || !terminal) return existing
-
-    const start = {
-      x: Math.min(terminal.cols - 1, terminal.buffer.active.cursorX),
-      y: terminal.buffer.active.cursorY,
-    }
-    composeStartRef.current = start
-    return start
-  }
-
-  function composePosition(offset: number) {
-    const terminal = terminalRef.current
-    const start = composeStart()
-    if (!terminal || !start) return null
-
-    const cols = Math.max(1, terminal.cols)
-    const absolute = start.x + Math.max(0, offset)
-    return {
-      x: absolute % cols,
-      y: start.y + Math.floor(absolute / cols),
-    }
-  }
-
-  function adjustComposeStartForLength(length = composeLength()) {
-    const terminal = terminalRef.current
-    const start = composeStartRef.current
-    if (!terminal || !start) return
-
-    const cols = Math.max(1, terminal.cols)
-    const endY = start.y + Math.floor((start.x + length) / cols)
-    if (endY < terminal.rows) return
-
-    start.y = Math.max(0, start.y - (endY - terminal.rows + 1))
-  }
-
-  function writeCursorMove(from: number, to: number) {
-    const terminal = terminalRef.current
-    const next = composePosition(to)
-    if (!terminal || !next || from === to) return
-
-    const row = Math.max(1, Math.min(terminal.rows, next.y + 1))
-    const col = Math.max(1, Math.min(terminal.cols, next.x + 1))
-    terminal.write(`\x1b[${row};${col}H`)
-  }
-
-  function moveComposeCursorTo(nextCursor: number) {
-    const next = clampComposeCursor(nextCursor)
-    writeCursorMove(composeCursorRef.current, next)
-    composeCursorRef.current = next
-  }
-
-  function isComposeWordCharacter(character: string) {
-    return /^[A-Za-z0-9_]$/.test(character)
-  }
-
-  function previousComposeWordIndex() {
-    const chars = composeChars()
-    let index = composeCursorRef.current
-
-    while (index > 0 && !isComposeWordCharacter(chars[index - 1] ?? "")) {
-      index -= 1
-    }
-    while (index > 0 && isComposeWordCharacter(chars[index - 1] ?? "")) {
-      index -= 1
-    }
-
-    return index
-  }
-
-  function nextComposeWordIndex() {
-    const chars = composeChars()
-    let index = composeCursorRef.current
-
-    while (
-      index < chars.length &&
-      !isComposeWordCharacter(chars[index] ?? "")
-    ) {
-      index += 1
-    }
-    while (index < chars.length && isComposeWordCharacter(chars[index] ?? "")) {
-      index += 1
-    }
-
-    return index
-  }
-
-  function setComposeDraftValue(value: string, cursor = composeLength(value)) {
-    composeDraftRef.current = value
-    composeCursorRef.current = clampComposeCursor(cursor, value)
-  }
-
-  function setComposeHistoryValue(value: string[]) {
-    composeHistoryRef.current = value
-  }
-
-  function setComposeHistoryIndexValue(value: number | null) {
-    composeHistoryIndexRef.current = value
-  }
-
   function focusTerminal() {
     requestAnimationFrame(() => {
       if (shouldFocusTerminal()) terminalRef.current?.focus()
@@ -1613,374 +1181,6 @@ function SandboxTerminalPane({
     if (!activeRef.current) return
     terminalRef.current?.focus()
   }
-
-  function writeLocalCompose(value: string) {
-    terminalRef.current?.write(
-      value.replace(/\r\n?/g, "\n").replaceAll("\n", "\r\n")
-    )
-  }
-
-  function eraseLocalComposeDraft() {
-    const length = composeLength()
-    if (length === 0) {
-      setComposeDraftValue("")
-      return
-    }
-
-    writeCursorMove(composeCursorRef.current, 0)
-    terminalRef.current?.write(" ".repeat(length))
-    writeCursorMove(length, 0)
-    setComposeDraftValue("")
-  }
-
-  function replaceComposeDraft(nextDraft: string) {
-    eraseLocalComposeDraft()
-    setComposeDraftValue(nextDraft)
-    writeLocalCompose(nextDraft)
-    adjustComposeStartForLength(composeLength(nextDraft))
-  }
-
-  function deleteComposeRange(start: number, end: number) {
-    const chars = composeChars()
-    const safeStart = Math.min(chars.length, Math.max(0, start))
-    const safeEnd = Math.min(chars.length, Math.max(safeStart, end))
-    const removedLength = safeEnd - safeStart
-    if (removedLength === 0) return
-
-    const nextChars = [...chars.slice(0, safeStart), ...chars.slice(safeEnd)]
-    const tail = chars.slice(safeEnd)
-    writeCursorMove(composeCursorRef.current, safeStart)
-    terminalRef.current?.write(composeText(tail) + " ".repeat(removedLength))
-    writeCursorMove(safeStart + tail.length + removedLength, safeStart)
-    setComposeDraftValue(composeText(nextChars), safeStart)
-  }
-
-  function insertComposeText(value: string) {
-    if (!value) return
-
-    const insert = composeChars(value)
-    if (insert.length === 0) return
-
-    const chars = composeChars()
-    const cursor = composeCursorRef.current
-    const tail = chars.slice(cursor)
-    const nextChars = [...chars.slice(0, cursor), ...insert, ...tail]
-
-    composeHistoryDraftRef.current = ""
-    setComposeHistoryIndexValue(null)
-    composeStart()
-    terminalRef.current?.write(value + composeText(tail))
-    adjustComposeStartForLength(nextChars.length)
-    writeCursorMove(
-      cursor + insert.length + tail.length,
-      cursor + insert.length
-    )
-    setComposeDraftValue(composeText(nextChars), cursor + insert.length)
-  }
-
-  function sendComposeDraft() {
-    const command = composeDraftRef.current
-    if (!command) return
-
-    const terminalInput =
-      command.replace(/\r\n?/g, "\n").replaceAll("\n", "\r") + "\r"
-    const expectedEcho =
-      command.replace(/\r\n?/g, "\n").replaceAll("\n", "\r\n") + "\r\n"
-    pendingRemoteEchoRef.current += utf8Binary(expectedEcho)
-    writeCursorMove(composeCursorRef.current, composeLength())
-    terminalRef.current?.write("\r\n")
-    composeAwaitingPromptRef.current = true
-    composeInputReadyRef.current = false
-    sendInputRef.current(terminalInput)
-    composeStartRef.current = null
-    setComposeHistoryValue(
-      (() => {
-        const current = composeHistoryRef.current
-        if (current.at(-1) === command) return current
-        return [...current.slice(-49), command]
-      })()
-    )
-    composeHistoryDraftRef.current = ""
-    setComposeHistoryIndexValue(null)
-    setComposeDraftValue("", 0)
-    focusTerminal()
-  }
-
-  function recallComposeHistory(direction: -1 | 1) {
-    const history = composeHistoryRef.current
-    if (history.length === 0) return
-
-    const currentIndex = composeHistoryIndexRef.current
-    if (direction < 0 && currentIndex === null) {
-      composeHistoryDraftRef.current = composeDraftRef.current
-    }
-
-    if (direction > 0 && currentIndex === null) return
-
-    const nextIndex =
-      direction < 0
-        ? currentIndex === null
-          ? history.length - 1
-          : Math.max(0, currentIndex - 1)
-        : Math.min(history.length, (currentIndex ?? history.length) + 1)
-
-    if (nextIndex >= history.length) {
-      setComposeHistoryIndexValue(null)
-      replaceComposeDraft(composeHistoryDraftRef.current)
-      return
-    }
-
-    setComposeHistoryIndexValue(nextIndex)
-    replaceComposeDraft(history[nextIndex] ?? "")
-  }
-
-  function backspaceComposeDraft() {
-    const cursor = composeCursorRef.current
-    if (cursor === 0) return
-    deleteComposeRange(cursor - 1, cursor)
-  }
-
-  function deleteComposeBeforeCursor() {
-    deleteComposeRange(0, composeCursorRef.current)
-  }
-
-  function deleteComposeAfterCursor() {
-    deleteComposeRange(composeCursorRef.current, composeLength())
-  }
-
-  function deleteComposePreviousWord() {
-    deleteComposeRange(previousComposeWordIndex(), composeCursorRef.current)
-  }
-
-  function deleteComposeNextWord() {
-    deleteComposeRange(composeCursorRef.current, nextComposeWordIndex())
-  }
-
-  function handleComposeKeyEvent(event: KeyboardEvent) {
-    if (event.type !== "keydown") return true
-    if (!canEditComposeInput()) {
-      if (
-        event.ctrlKey &&
-        !event.altKey &&
-        !event.metaKey &&
-        event.key.toLowerCase() === "c"
-      ) {
-        interruptBusyComposeInput()
-      }
-
-      event.preventDefault()
-      return false
-    }
-
-    const handled = (() => {
-      const { altKey, ctrlKey, key, metaKey } = event
-      const lowerKey = key.toLowerCase()
-
-      if (metaKey && !altKey && !ctrlKey) {
-        if (key === "ArrowLeft") moveComposeCursorTo(0)
-        else if (key === "ArrowRight") moveComposeCursorTo(composeLength())
-        else if (key === "Backspace") deleteComposeBeforeCursor()
-        else if (key === "Delete") deleteComposeAfterCursor()
-        else return false
-        return true
-      }
-
-      if (altKey && !metaKey && !ctrlKey) {
-        if (key === "ArrowLeft") moveComposeCursorTo(previousComposeWordIndex())
-        else if (key === "ArrowRight")
-          moveComposeCursorTo(nextComposeWordIndex())
-        else if (key === "Backspace") deleteComposePreviousWord()
-        else if (key === "Delete") deleteComposeNextWord()
-        else return false
-        return true
-      }
-
-      if (!metaKey && !altKey && !ctrlKey) {
-        if (key === "ArrowLeft")
-          moveComposeCursorTo(composeCursorRef.current - 1)
-        else if (key === "ArrowRight")
-          moveComposeCursorTo(composeCursorRef.current + 1)
-        else if (key === "ArrowUp") recallComposeHistory(-1)
-        else if (key === "ArrowDown") recallComposeHistory(1)
-        else if (key === "Home") moveComposeCursorTo(0)
-        else if (key === "End") moveComposeCursorTo(composeLength())
-        else if (key === "Delete")
-          deleteComposeRange(
-            composeCursorRef.current,
-            composeCursorRef.current + 1
-          )
-        else return false
-        return true
-      }
-
-      if (!metaKey && !altKey && ctrlKey) {
-        if (lowerKey === "a") moveComposeCursorTo(0)
-        else if (lowerKey === "e") moveComposeCursorTo(composeLength())
-        else if (lowerKey === "u") deleteComposeBeforeCursor()
-        else if (lowerKey === "k") deleteComposeAfterCursor()
-        else if (lowerKey === "w") deleteComposePreviousWord()
-        else if (lowerKey === "d")
-          deleteComposeRange(
-            composeCursorRef.current,
-            composeCursorRef.current + 1
-          )
-        else return false
-        return true
-      }
-
-      return false
-    })()
-
-    if (!handled) return true
-    event.preventDefault()
-    return false
-  }
-  handleComposeKeyEventRef.current = handleComposeKeyEvent
-
-  function handleComposeTerminalData(data: string) {
-    if (!data) return
-    if (!canEditComposeInput()) {
-      if (shouldInterruptBusyComposeInput(data)) interruptBusyComposeInput()
-      else if (canPassThroughComposeInput()) sendInputRef.current(data)
-      return
-    }
-
-    let index = 0
-    while (index < data.length) {
-      const rest = data.slice(index)
-      if (rest.startsWith("\x1b\x7f")) {
-        deleteComposePreviousWord()
-        index += 2
-        continue
-      }
-      if (rest.startsWith("\x1bb")) {
-        moveComposeCursorTo(previousComposeWordIndex())
-        index += 2
-        continue
-      }
-      if (rest.startsWith("\x1bf")) {
-        moveComposeCursorTo(nextComposeWordIndex())
-        index += 2
-        continue
-      }
-      if (rest.startsWith("\x1bd")) {
-        deleteComposeNextWord()
-        index += 2
-        continue
-      }
-      if (rest.startsWith("\x1b[1;3D")) {
-        moveComposeCursorTo(previousComposeWordIndex())
-        index += 6
-        continue
-      }
-      if (rest.startsWith("\x1b[1;3C")) {
-        moveComposeCursorTo(nextComposeWordIndex())
-        index += 6
-        continue
-      }
-      if (rest.startsWith("\x1b[1;9D")) {
-        moveComposeCursorTo(previousComposeWordIndex())
-        index += 6
-        continue
-      }
-      if (rest.startsWith("\x1b[1;9C")) {
-        moveComposeCursorTo(nextComposeWordIndex())
-        index += 6
-        continue
-      }
-      if (rest.startsWith("\x1b[A")) {
-        recallComposeHistory(-1)
-        index += 3
-        continue
-      }
-      if (rest.startsWith("\x1b[B")) {
-        recallComposeHistory(1)
-        index += 3
-        continue
-      }
-      if (rest.startsWith("\x1b[C")) {
-        moveComposeCursorTo(composeCursorRef.current + 1)
-        index += 3
-        continue
-      }
-      if (rest.startsWith("\x1b[D")) {
-        moveComposeCursorTo(composeCursorRef.current - 1)
-        index += 3
-        continue
-      }
-      if (rest.startsWith("\x1b[H") || rest.startsWith("\x1bOH")) {
-        moveComposeCursorTo(0)
-        index += 3
-        continue
-      }
-      if (rest.startsWith("\x1b[F") || rest.startsWith("\x1bOF")) {
-        moveComposeCursorTo(composeLength())
-        index += 3
-        continue
-      }
-      if (rest.startsWith("\x1b[3~")) {
-        deleteComposeRange(
-          composeCursorRef.current,
-          composeCursorRef.current + 1
-        )
-        index += 4
-        continue
-      }
-      if (rest.startsWith("\x1b[")) {
-        let sequenceLength = 2
-        while (
-          sequenceLength < rest.length &&
-          "0123456789;?".includes(rest[sequenceLength] ?? "")
-        ) {
-          sequenceLength += 1
-        }
-        index += Math.min(rest.length, sequenceLength + 1)
-        continue
-      }
-
-      const character = data[index]
-      if (character === "\r" || character === "\n") {
-        sendComposeDraft()
-      } else if (character === "\x1b") {
-        index += 1
-        continue
-      } else if (character === "\x7f" || character === "\b") {
-        backspaceComposeDraft()
-      } else if (character === "\x15") {
-        deleteComposeBeforeCursor()
-      } else if (character === "\x0b") {
-        deleteComposeAfterCursor()
-      } else if (character === "\x01") {
-        moveComposeCursorTo(0)
-      } else if (character === "\x05") {
-        moveComposeCursorTo(composeLength())
-      } else if (character === "\x17") {
-        deleteComposePreviousWord()
-      } else if (character === "\x04") {
-        deleteComposeRange(
-          composeCursorRef.current,
-          composeCursorRef.current + 1
-        )
-      } else if (character === "\x03") {
-        if (composeDraftRef.current) {
-          setComposeHistoryIndexValue(null)
-          eraseLocalComposeDraft()
-          composeStartRef.current = null
-        } else {
-          sendInputRef.current("\x03")
-        }
-      } else if (character === "\t") {
-        insertComposeText("\t")
-      } else if (character >= " ") {
-        const printable = Array.from(rest)[0] ?? character
-        insertComposeText(printable)
-        index += printable.length - 1
-      }
-
-      index += 1
-    }
-  }
-  handleComposeTerminalDataRef.current = handleComposeTerminalData
 
   return (
     <div
