@@ -32,7 +32,7 @@ function SegmentedControl<T extends string>({
   return (
     <fieldset
       className={cn(
-        "inline-flex h-7 items-center gap-0.5 rounded-lg border border-border bg-muted/40 p-0.5",
+        "inline-flex h-7 items-center gap-0.5 rounded-lg border border-field bg-muted/40 p-0.5",
         fill && "flex w-full",
         className
       )}

@@ -81,7 +81,11 @@ const TERMINAL_DOCK_KEY = "cloudcode:terminalDock:v1"
 const TERMINAL_INPUT_MODE_KEY = "cloudcode:terminalInputMode:v1"
 const TERMINAL_ID_PATTERN = /^[A-Za-z0-9._:-]{1,120}$/
 const TERMINAL_RECENT_TEXT_LIMIT = 4000
-const TERMINAL_SHELL_PROMPT_PATTERN = /(?:➜|❯|›).*(?:\$|#)\s*$/
+const TERMINAL_FANCY_PROMPT_PATTERN = /^(?:➜|❯|›)(?:\s|$)/
+const TERMINAL_SIMPLE_PROMPT_PATTERN = /^[$#%]\s*$/
+const TERMINAL_SHELL_NAME_PROMPT_PATTERN =
+  /^(?:bash|sh|zsh)(?:-[\d.]+)?[$#%]\s*$/
+const TERMINAL_USER_HOST_PROMPT_PATTERN = /^[\w.-]+@[\w.-]+(?::.*)?[$#%]\s*$/
 
 const darkPalette: TerminalPalette = {
   background: "#0b0d10",
@@ -278,6 +282,34 @@ function terminalNumbersFromDock(dock: TerminalDockState) {
   }
 
   return numbers
+}
+
+function terminalLineLooksLikeShellPrompt(line: string) {
+  const trimmed = line.trimEnd()
+  if (!trimmed) return false
+
+  return (
+    TERMINAL_FANCY_PROMPT_PATTERN.test(trimmed) ||
+    TERMINAL_SIMPLE_PROMPT_PATTERN.test(trimmed) ||
+    TERMINAL_SHELL_NAME_PROMPT_PATTERN.test(trimmed) ||
+    TERMINAL_USER_HOST_PROMPT_PATTERN.test(trimmed)
+  )
+}
+
+function isEditableElement(element: Element | null) {
+  if (!element) return false
+  if (
+    element instanceof HTMLInputElement ||
+    element instanceof HTMLTextAreaElement ||
+    element instanceof HTMLSelectElement
+  ) {
+    return true
+  }
+
+  return (
+    element instanceof HTMLElement &&
+    (element.isContentEditable || element.getAttribute("role") === "textbox")
+  )
 }
 
 export function SandboxTerminalPanel({
@@ -1146,7 +1178,7 @@ function SandboxTerminalPane({
 
     terminal.loadAddon(fitAddon)
     terminal.open(node)
-    if (activeRef.current) terminal.focus()
+    focusTerminal()
     resizeObserver?.observe(node)
     window.addEventListener("resize", scheduleResize)
 
@@ -1185,7 +1217,7 @@ function SandboxTerminalPane({
         composeInputReadyRef.current =
           !composeAwaitingPromptRef.current &&
           recentTerminalTextEndsWithPrompt()
-        if (activeRef.current) terminal.focus()
+        focusTerminal()
         return
       }
 
@@ -1336,7 +1368,7 @@ function SandboxTerminalPane({
       .filter(Boolean)
     if (contentLines.length !== 1) return false
 
-    return TERMINAL_SHELL_PROMPT_PATTERN.test(contentLines[0] ?? "")
+    return terminalLineLooksLikeShellPrompt(contentLines[0] ?? "")
   }
 
   function stripTerminalControlSequences(value: string) {
@@ -1407,11 +1439,30 @@ function SandboxTerminalPane({
   function recentTerminalTextEndsWithPrompt() {
     const lines = terminalRecentTextRef.current.split("\n")
     const lastLine = lines.at(-1) ?? ""
-    return TERMINAL_SHELL_PROMPT_PATTERN.test(lastLine)
+    return terminalLineLooksLikeShellPrompt(lastLine)
   }
 
   function canEditComposeInput() {
     return inputModeRef.current === "compose" && composeInputReadyRef.current
+  }
+
+  function canPassThroughComposeInput() {
+    return (
+      inputModeRef.current === "compose" &&
+      !composeAwaitingPromptRef.current &&
+      !composeDraftRef.current
+    )
+  }
+
+  function shouldFocusTerminal() {
+    if (!activeRef.current) return false
+
+    const activeElement = document.activeElement
+    const terminalElement = terminalRef.current?.element
+    if (!activeElement || activeElement === document.body) return true
+    if (terminalElement?.contains(activeElement)) return true
+
+    return !isEditableElement(activeElement)
   }
 
   function interruptBusyComposeInput() {
@@ -1553,7 +1604,14 @@ function SandboxTerminalPane({
   }
 
   function focusTerminal() {
-    requestAnimationFrame(() => terminalRef.current?.focus())
+    requestAnimationFrame(() => {
+      if (shouldFocusTerminal()) terminalRef.current?.focus()
+    })
+  }
+
+  function focusTerminalFromPointer() {
+    if (!activeRef.current) return
+    terminalRef.current?.focus()
   }
 
   function writeLocalCompose(value: string) {
@@ -1783,6 +1841,7 @@ function SandboxTerminalPane({
     if (!data) return
     if (!canEditComposeInput()) {
       if (shouldInterruptBusyComposeInput(data)) interruptBusyComposeInput()
+      else if (canPassThroughComposeInput()) sendInputRef.current(data)
       return
     }
 
@@ -1935,6 +1994,7 @@ function SandboxTerminalPane({
       <div className="relative min-h-0 w-full flex-1 overflow-hidden">
         <div
           ref={containerRef}
+          onPointerDown={focusTerminalFromPointer}
           className="h-full w-full overflow-hidden [&_.xterm]:!bg-transparent [&_.xterm-screen]:outline-none [&_.xterm-viewport]:!bg-transparent"
           style={{ background: palette.background }}
         />

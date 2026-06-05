@@ -9,7 +9,7 @@ const textareaVariants = cva(
     variants: {
       variant: {
         default:
-          "resize-none rounded-lg border border-border bg-background px-3 py-2 focus:border-ring focus:ring-3 focus:ring-ring/20",
+          "resize-none rounded-lg border border-field bg-background px-3 py-2 focus:border-ring focus:ring-3 focus:ring-ring/20",
         bare: "resize-none bg-transparent",
       },
     },

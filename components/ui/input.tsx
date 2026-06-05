@@ -9,7 +9,7 @@ const inputVariants = cva(
     variants: {
       variant: {
         default:
-          "h-9 rounded-lg border border-border bg-background px-3 focus:border-ring focus:ring-3 focus:ring-ring/20",
+          "h-9 rounded-lg border border-field bg-background px-3 focus:border-ring focus:ring-3 focus:ring-ring/20",
         bare: "bg-transparent",
       },
     },

@@ -5,10 +5,10 @@
  * actually floats.
  */
 
-/** Floating surface: menus, dropdowns, popovers, dialogs. Soft drop shadow. */
+/** Floating surface: menus, dropdowns, popovers, dialogs. Flat; hairline border defines the edge. */
 export const popoverSurfaceClass =
-  "rounded-2xl border border-black/[0.06] bg-popover text-popover-foreground shadow-[0_10px_30px_-12px_rgba(0,0,0,0.18)] dark:border-white/10"
+  "rounded-2xl border border-black/10 bg-popover text-popover-foreground dark:border-white/10"
 
 /** Inline content card: same hairline border + rounding, no elevation. */
 export const cardSurfaceClass =
-  "rounded-2xl border border-black/[0.06] bg-background dark:border-white/10"
+  "rounded-2xl border border-black/10 bg-background dark:border-white/10"

@@ -167,7 +167,7 @@ export function RepoChip({
 
     return (
       <div className="relative min-w-0">
-        <div className="flex h-8 min-w-0 items-center gap-1.5 rounded-lg border border-border bg-background pr-1 pl-2.5 text-xs focus-within:ring-3 focus-within:ring-ring/30">
+        <div className="flex h-8 min-w-0 items-center gap-1.5 rounded-lg border border-field bg-background pr-1 pl-2.5 text-xs focus-within:ring-3 focus-within:ring-ring/30">
           <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
           <Input
             ref={setFocusedInputRef}
@@ -344,7 +344,7 @@ export function BranchChip({
 
     return (
       <div className="relative">
-        <div className="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background pr-1 pl-2.5 text-xs focus-within:ring-3 focus-within:ring-ring/30">
+        <div className="flex h-8 items-center gap-1.5 rounded-lg border border-field bg-background pr-1 pl-2.5 text-xs focus-within:ring-3 focus-within:ring-ring/30">
           <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
           <Input
             ref={setFocusedInputRef}
@@ -543,7 +543,7 @@ export function BranchTargetChip({
                 </button>
                 {option === "custom" && mode === "custom" ? (
                   <div className="px-2 pt-0.5 pb-1.5">
-                    <div className="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-xs focus-within:ring-3 focus-within:ring-ring/30">
+                    <div className="flex h-8 items-center gap-1.5 rounded-lg border border-field bg-background px-2.5 text-xs focus-within:ring-3 focus-within:ring-ring/30">
                       <GitBranchPlus className="size-3.5 shrink-0 text-muted-foreground" />
                       <input
                         ref={focusInputRef}

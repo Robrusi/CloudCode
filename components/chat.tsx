@@ -1926,10 +1926,10 @@ function ChatInner() {
 
   const composerBlock =
     view === "settings" || activeFilePath || notesOpen ? null : (
-      <div className="pointer-events-auto w-full max-w-3xl rounded-3xl shadow-[0_1px_2px_rgba(0,0,0,0.04),0_10px_28px_-14px_rgba(0,0,0,0.18)]">
+      <div className="pointer-events-auto w-full max-w-3xl rounded-3xl">
         <form
           onSubmit={onSubmit}
-          className="relative z-[1] w-full rounded-3xl border border-border/70 bg-background transition-colors focus-within:border-border"
+          className="relative z-[1] w-full rounded-3xl border border-field/70 bg-background transition-colors focus-within:border-border"
         >
           <textarea
             ref={textareaRef}
@@ -2006,7 +2006,7 @@ function ChatInner() {
         </form>
 
         {active ? null : (
-          <div className="-mt-3 flex flex-col items-stretch gap-1 rounded-b-3xl border border-t-0 border-border/60 bg-muted/40 px-2.5 pt-5 pb-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-1 sm:gap-y-0.5 sm:px-3 sm:pb-2">
+          <div className="-mt-3 flex flex-col items-stretch gap-1 rounded-b-3xl border border-t-0 border-field/60 bg-muted/40 px-2.5 pt-5 pb-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-1 sm:gap-y-0.5 sm:px-3 sm:pb-2">
             <ComposerSettingRow label="Repository">
               <RepoChip
                 value={repoUrl}
@@ -2599,84 +2599,40 @@ function TopBar({
         ) : null}
 
         {showToolsSection ? (
-          <>
-            <div className="hidden items-center gap-0.5 md:flex">
-              <TopBarIconButton
-                onClick={onToggleTerminal}
-                onFocus={() => warmBrowserTerminal(sandboxId)}
-                onPointerDown={() => warmBrowserTerminal(sandboxId)}
-                onPointerEnter={() => warmBrowserTerminal(sandboxId)}
-                active={terminalOpen}
-                disabled={!sandboxId && !sandboxPending}
-                label={
-                  terminalOpen
-                    ? "Hide sandbox terminals"
-                    : "Show sandbox terminals"
-                }
-              >
-                <SquareTerminal className="size-3.5" />
-              </TopBarIconButton>
-              <TopBarIconButton
-                onClick={onToggleFiles}
-                active={filesOpen}
-                disabled={!canOpenFiles}
-                label={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
-              >
-                {filesOpen ? (
-                  <FolderOpen className="size-3.5" />
-                ) : (
-                  <Folder className="size-3.5" />
-                )}
-              </TopBarIconButton>
-              <TopBarIconButton
-                onClick={onToggleDesktop}
-                active={desktopOpen}
-                disabled={!canOpenDesktop}
-                label={
-                  desktopOpen ? "Hide sandbox desktop" : "Show sandbox desktop"
-                }
-              >
-                <Monitor className="size-3.5" />
-              </TopBarIconButton>
-              <TopBarIconButton
-                onClick={onToggleGithub}
-                active={githubOpen}
-                disabled={!canOpenGithub}
-                label={githubOpen ? "Hide GitHub panel" : "Show GitHub panel"}
-              >
-                <GitBranch className="size-3.5" />
-              </TopBarIconButton>
-              <TopBarIconButton
-                onClick={onToggleContext}
-                active={contextOpen}
-                disabled={!canOpenContext}
-                label={
-                  contextOpen ? "Hide context panel" : "Show context panel"
-                }
-              >
-                <StickyNote className="size-3.5" />
-              </TopBarIconButton>
-            </div>
+          <div className="flex items-center gap-0.5">
+            <TopBarIconButton
+              onClick={onToggleFiles}
+              active={filesOpen}
+              disabled={!canOpenFiles}
+              label={filesOpen ? "Hide sandbox files" : "Show sandbox files"}
+            >
+              {filesOpen ? (
+                <FolderOpen className="size-3.5" />
+              ) : (
+                <Folder className="size-3.5" />
+              )}
+            </TopBarIconButton>
+            <TopBarIconButton
+              onClick={onToggleContext}
+              active={contextOpen}
+              disabled={!canOpenContext}
+              label={contextOpen ? "Hide context panel" : "Show context panel"}
+            >
+              <StickyNote className="size-3.5" />
+            </TopBarIconButton>
             <TopBarToolsMenu
-              className="md:hidden"
               sandboxId={sandboxId}
               sandboxPending={sandboxPending}
               terminalOpen={terminalOpen}
               onToggleTerminal={onToggleTerminal}
-              filesOpen={filesOpen}
-              canOpenFiles={canOpenFiles}
-              onToggleFiles={onToggleFiles}
               githubOpen={githubOpen}
               canOpenGithub={canOpenGithub}
               onToggleGithub={onToggleGithub}
               desktopOpen={desktopOpen}
               canOpenDesktop={canOpenDesktop}
               onToggleDesktop={onToggleDesktop}
-              contextOpen={contextOpen}
-              canOpenContext={canOpenContext}
-              onToggleContext={onToggleContext}
             />
-          </>
+          </div>
         ) : null}
       </div>
     </header>
@@ -2689,36 +2645,24 @@ function TopBarToolsMenu({
   sandboxPending,
   terminalOpen,
   onToggleTerminal,
-  filesOpen,
-  canOpenFiles,
-  onToggleFiles,
   githubOpen,
   canOpenGithub,
   onToggleGithub,
   desktopOpen,
   canOpenDesktop,
   onToggleDesktop,
-  contextOpen,
-  canOpenContext,
-  onToggleContext,
 }: {
   className?: string
   sandboxId: string | null
   sandboxPending: boolean
   terminalOpen: boolean
   onToggleTerminal: () => void
-  filesOpen: boolean
-  canOpenFiles: boolean
-  onToggleFiles: () => void
   githubOpen: boolean
   canOpenGithub: boolean
   onToggleGithub: () => void
   desktopOpen: boolean
   canOpenDesktop: boolean
   onToggleDesktop: () => void
-  contextOpen: boolean
-  canOpenContext: boolean
-  onToggleContext: () => void
 }) {
   const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(
     null
@@ -2744,8 +2688,7 @@ function TopBarToolsMenu({
     })
   }
 
-  const anyOpen =
-    terminalOpen || filesOpen || githubOpen || desktopOpen || contextOpen
+  const anyOpen = terminalOpen || githubOpen || desktopOpen
   const items = [
     {
       key: "terminal",
@@ -2754,18 +2697,6 @@ function TopBarToolsMenu({
       active: terminalOpen,
       disabled: !sandboxId && !sandboxPending,
       onSelect: onToggleTerminal,
-    },
-    {
-      key: "files",
-      label: filesOpen ? "Hide files" : "Files",
-      icon: filesOpen ? (
-        <FolderOpen className="size-4" />
-      ) : (
-        <Folder className="size-4" />
-      ),
-      active: filesOpen,
-      disabled: !canOpenFiles,
-      onSelect: onToggleFiles,
     },
     {
       key: "desktop",
@@ -2782,14 +2713,6 @@ function TopBarToolsMenu({
       active: githubOpen,
       disabled: !canOpenGithub,
       onSelect: onToggleGithub,
-    },
-    {
-      key: "context",
-      label: contextOpen ? "Hide context" : "Context",
-      icon: <StickyNote className="size-4" />,
-      active: contextOpen,
-      disabled: !canOpenContext,
-      onSelect: onToggleContext,
     },
   ]
 
@@ -2810,8 +2733,9 @@ function TopBarToolsMenu({
         aria-expanded={open}
         aria-pressed={open || anyOpen}
         size="lg"
+        className="md:size-7"
       >
-        <PanelRight className="size-[18px]" />
+        <PanelRight className="size-[18px] md:size-3.5" />
       </UiIconButton>
       {open && menuPos && typeof document !== "undefined"
         ? createPortal(
