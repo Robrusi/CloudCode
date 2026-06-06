@@ -1,11 +1,11 @@
-export const CODEX_APP_SERVER_DAEMON_VERSION = "1"
+export const CODEX_APP_SERVER_DAEMON_VERSION = "2"
 
 export const CODEX_APP_SERVER_DAEMON_SCRIPT = String.raw`import { createHash } from "node:crypto"
 import { spawn } from "node:child_process"
 import fs from "node:fs"
 import net from "node:net"
 
-const VERSION = "1"
+const VERSION = "2"
 const REQUEST_TIMEOUT_MS = Number(process.env.CLOUDCODE_APP_SERVER_REQUEST_TIMEOUT_MS || "45000")
 const SOCKET_PATH = requiredEnv("CLOUDCODE_DAEMON_SOCKET")
 const STATE_PATH = requiredEnv("CLOUDCODE_DAEMON_STATE")
@@ -547,18 +547,43 @@ async function respondToServerRequest(id, method, params) {
   }
 }
 
-function interruptRun(run) {
-  if (!run || !run.threadId || !run.turnId) return
-  void request(
-    "turn/interrupt",
-    { threadId: run.threadId, turnId: run.turnId },
-    5000
-  ).catch(() => undefined)
+async function interruptActiveRun(run, reason) {
+  if (!run || run.interrupting) return
+  run.interrupting = true
+
+  try {
+    if (run.threadId && run.turnId) {
+      await request(
+        "turn/interrupt",
+        { threadId: run.threadId, turnId: run.turnId },
+        5000
+      )
+    } else {
+      stopCodexAppServer()
+    }
+  } catch {
+    stopCodexAppServer()
+  } finally {
+    if (activeRun === run) activeRun = null
+    run.reject?.(new Error(reason || "Codex turn interrupted."))
+  }
 }
 
 async function runTurn(payload, socket) {
   if (activeRun) {
-    throw new Error("A Codex turn is already active in this sandbox daemon.")
+    if (activeRun.socket.destroyed) {
+      await interruptActiveRun(
+        activeRun,
+        "Previous Codex turn client disconnected."
+      )
+      if (activeRun) {
+        throw new Error(
+          "A previous Codex turn is still interrupting in this sandbox daemon."
+        )
+      }
+    } else {
+      throw new Error("A Codex turn is already active in this sandbox daemon.")
+    }
   }
 
   const authHash = stringValue(payload.authHash)
@@ -576,6 +601,7 @@ async function runTurn(payload, socket) {
     auth,
     authJson,
     completedTurn: null,
+    interrupting: false,
     reject: null,
     resolve: null,
     socket,
@@ -585,7 +611,9 @@ async function runTurn(payload, socket) {
   activeRun = run
 
   const socketClosed = () => {
-    if (activeRun === run) interruptRun(run)
+    if (activeRun === run) {
+      void interruptActiveRun(run, "Codex turn client disconnected.")
+    }
   }
   socket.on("close", socketClosed)
 
@@ -691,6 +719,19 @@ async function handleClientPayload(payload, socket) {
       } catch {}
       process.exit(0)
     }, 10)
+    return
+  }
+  if (type === "interrupt") {
+    if (activeRun) {
+      await interruptActiveRun(
+        activeRun,
+        "Codex turn interrupted by client request."
+      )
+      writeLine(socket, { ok: true, type: "interrupted" })
+    } else {
+      writeLine(socket, { ok: true, type: "idle" })
+    }
+    socket.end()
     return
   }
   if (type === "run") {

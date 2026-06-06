@@ -46,6 +46,7 @@ import { appendFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 const spawnLog = process.env.MOCK_CODEX_SPAWN_LOG;
+const interruptLog = process.env.MOCK_CODEX_INTERRUPT_LOG;
 if (spawnLog) appendFileSync(spawnLog, String(process.pid) + "\\n");
 
 let turnCount = 0;
@@ -83,6 +84,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     turnCount += 1;
     const turnId = "turn-" + turnCount;
     const threadId = params.threadId;
+    const shouldHang = params?.input?.[0]?.text === "hang";
     send({ id, result: { turn: { id: turnId, status: "inProgress" } } });
     setTimeout(() => {
       send({
@@ -92,6 +94,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           turn: { id: turnId, status: "inProgress" },
         },
       });
+      if (shouldHang) return;
       send({
         method: "item/agentMessage/delta",
         params: {
@@ -123,6 +126,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     return;
   }
   if (method === "turn/interrupt") {
+    if (interruptLog) appendFileSync(interruptLog, JSON.stringify(params) + "\\n");
     send({ id, result: {} });
     return;
   }
@@ -211,10 +215,12 @@ function runPayload({
   authHash,
   authJson,
   codexThreadIdToResume,
+  text = "hello",
 }: {
   authHash: string
   authJson: string
   codexThreadIdToResume?: string
+  text?: string
 }) {
   return {
     authHash,
@@ -230,7 +236,7 @@ function runPayload({
     turnParams: {
       approvalPolicy: "never",
       cwd: "/tmp/mock-repo",
-      input: [{ text: "hello", text_elements: [], type: "text" }],
+      input: [{ text, text_elements: [], type: "text" }],
       sandboxPolicy: { type: "dangerFullAccess" },
       threadId: codexThreadIdToResume ?? "__pending__",
     },
@@ -250,6 +256,18 @@ async function spawnCount(spawnLogPath: string) {
   return (await readFile(spawnLogPath, "utf8")).trim().split(/\r?\n/).length
 }
 
+async function eventually(
+  predicate: () => boolean | Promise<boolean>,
+  label: string
+) {
+  const deadline = Date.now() + REQUEST_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    if (await predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  throw new Error(`Timed out waiting for ${label}.`)
+}
+
 const root = await mkdtemp(join("/tmp", "ccd-"))
 let daemon: ChildProcess | undefined
 
@@ -257,6 +275,7 @@ try {
   const daemonScriptPath = join(root, "cloudcode-codex-daemon.mjs")
   const daemonClientPath = join(root, "cloudcode-codex-daemon-client.mjs")
   const mockCodexPath = join(root, "mock-codex.mjs")
+  const interruptLogPath = join(root, "mock-interrupts.log")
   const spawnLogPath = join(root, "mock-spawns.log")
   const socketPath = join(root, "codex-app-server.sock")
   const statePath = join(root, "codex-app-server-daemon.json")
@@ -281,6 +300,7 @@ try {
     CODEX_HOME: root,
     HOME: root,
     MOCK_CODEX_SPAWN_LOG: spawnLogPath,
+    MOCK_CODEX_INTERRUPT_LOG: interruptLogPath,
   }
 
   daemon = spawn(process.execPath, [daemonScriptPath], {
@@ -398,6 +418,78 @@ try {
   )
   assert.equal(resultEvent(thirdRun.events)?.updatedAuthJson, secondAuth)
   assert.equal(await spawnCount(spawnLogPath), spawnsAfterFirstRun + 1)
+
+  const hangingPayloadPath = join(root, "payload-hanging-run.json")
+  await writeFile(
+    hangingPayloadPath,
+    JSON.stringify(
+      runPayload({
+        authHash: "auth-two",
+        authJson: secondAuth,
+        codexThreadIdToResume: "thread-1",
+        text: "hang",
+      })
+    ),
+    "utf8"
+  )
+  const hangingClient = spawn(
+    process.execPath,
+    [daemonClientPath, hangingPayloadPath],
+    {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    }
+  )
+  let hangingStdout = ""
+  hangingClient.stdout?.on("data", (chunk) => {
+    hangingStdout += chunk.toString()
+  })
+  await eventually(
+    () => hangingStdout.includes('"method":"turn/started"'),
+    "hanging mock turn to start"
+  )
+  hangingClient.kill("SIGTERM")
+  await Promise.race([
+    new Promise((resolve) => hangingClient.once("exit", resolve)),
+    new Promise((resolve) => setTimeout(resolve, 1_000)),
+  ])
+  await eventually(
+    async () =>
+      await readFile(interruptLogPath, "utf8")
+        .then((value) => value.includes('"turnId":"turn-2"'))
+        .catch(() => false),
+    "daemon to interrupt disconnected turn"
+  )
+
+  const afterInterruptedRun = await requestDaemon({
+    clientPath: daemonClientPath,
+    env,
+    payload: runPayload({
+      authHash: "auth-two",
+      authJson: secondAuth,
+      codexThreadIdToResume: "thread-1",
+    }),
+    root,
+  })
+  assert.equal(afterInterruptedRun.exitCode, 0)
+  assert.ok(
+    afterInterruptedRun.events.some(
+      (event) =>
+        event.type === "result" &&
+        event.threadId === "thread-1" &&
+        event.finalAssistantText === "answer 3"
+    ),
+    eventLines(afterInterruptedRun.events)
+  )
+  assert.ok(
+    !afterInterruptedRun.events.some(
+      (event) =>
+        event.type === "error" &&
+        typeof event.message === "string" &&
+        event.message.includes("A Codex turn is already active")
+    ),
+    eventLines(afterInterruptedRun.events)
+  )
 
   const missingResume = await requestDaemon({
     clientPath: daemonClientPath,

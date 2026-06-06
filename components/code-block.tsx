@@ -104,7 +104,7 @@ export const CodeBlock = memo(function CodeBlock({
   )
 })
 
-function formatCodeLanguage(lang: string) {
+export function formatCodeLanguage(lang: string) {
   return CODE_LANGUAGE_LABELS[lang] ?? lang
 }
 

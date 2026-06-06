@@ -23,8 +23,10 @@ import {
   useState,
 } from "react"
 
+import { formatCodeLanguage } from "@/components/code-block"
 import { Checkbox } from "@/components/ui/checkbox"
 import { IconButton } from "@/components/ui/icon-button"
+import { cardSurfaceClass } from "@/components/ui/surface"
 import { cn } from "@/lib/utils"
 
 type BlockType =
@@ -34,10 +36,12 @@ type BlockType =
   | "numbered"
   | "todo"
   | "image"
+  | "code"
 
 type Block = {
   checked?: boolean
   id: string
+  lang?: string
   text: string
   type: BlockType
   uploading?: boolean
@@ -58,7 +62,7 @@ function nextBlockId() {
 function makeBlock(
   type: BlockType,
   text: string,
-  extra?: { checked?: boolean; url?: string }
+  extra?: { checked?: boolean; lang?: string; url?: string }
 ): Block {
   return {
     id: nextBlockId(),
@@ -66,6 +70,7 @@ function makeBlock(
     text,
     ...(type === "todo" ? { checked: Boolean(extra?.checked) } : {}),
     ...(type === "image" ? { url: extra?.url ?? "" } : {}),
+    ...(type === "code" ? { lang: extra?.lang ?? "" } : {}),
   }
 }
 
@@ -100,7 +105,29 @@ function lineToBlock(line: string): Block {
 
 function parseMarkdown(md: string): Block[] {
   if (!md) return [emptyParagraph()]
-  const blocks = md.replace(/\r\n/g, "\n").split("\n").map(lineToBlock)
+  const lines = md.replace(/\r\n/g, "\n").split("\n")
+  const blocks: Block[] = []
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const fence = lines[index].match(/^```\s*([^\s`]*)\s*$/)
+    if (!fence) {
+      blocks.push(lineToBlock(lines[index]))
+      continue
+    }
+
+    const body: string[] = []
+    let closed = false
+    index += 1
+    for (; index < lines.length; index += 1) {
+      if (/^```\s*$/.test(lines[index])) {
+        closed = true
+        break
+      }
+      body.push(lines[index])
+    }
+    blocks.push(makeBlock("code", body.join("\n"), { lang: fence[1] }))
+    if (!closed) break
+  }
   return blocks.length > 0 ? blocks : [emptyParagraph()]
 }
 
@@ -111,6 +138,10 @@ function serialize(blocks: Block[]): string {
       if (block.type === "image") {
         const url = (block.url ?? "").trim()
         return url ? `![${block.text}](${url})` : null
+      }
+      if (block.type === "code") {
+        const lang = block.lang?.trim() ?? ""
+        return `\`\`\`${lang}\n${block.text}\n\`\`\``
       }
       if (block.type === "numbered") {
         counter += 1
@@ -331,6 +362,9 @@ export function MarkdownEditor({
         // Remove the image rather than merging into it.
         removeBlock(prev.id)
         return true
+      }
+      if (prev.type === "code") {
+        return false
       }
       const caret = prev.text.length
       const next = [...current]
@@ -570,6 +604,20 @@ export function MarkdownEditor({
                 />
               )
             }
+            if (block.type === "code") {
+              return (
+                <CodeRow
+                  key={block.id}
+                  block={block}
+                  ariaLabel={ariaLabel}
+                  setRef={setRef}
+                  onFocus={() => onRowFocus(block.id)}
+                  onChangeText={(text) => changeText(block.id, text)}
+                  onBackspaceAtStart={() => handleBackspaceAtStart(block.id)}
+                  onNavigate={(dir) => navigate(block.id, dir)}
+                />
+              )
+            }
             return (
               <TextRow
                 key={block.id}
@@ -623,10 +671,11 @@ function makeTransformed(
     type,
     text,
     ...(type === "todo" ? { checked: Boolean(extra?.checked) } : {}),
+    ...(type === "code" ? { lang: block.lang ?? "" } : {}),
   }
 }
 
-const TEXT_CLASS: Record<Exclude<BlockType, "image">, string> = {
+const TEXT_CLASS: Record<Exclude<BlockType, "image" | "code">, string> = {
   paragraph: "text-[13px] leading-6 text-foreground/90",
   heading: "text-[15px] font-semibold leading-7 text-foreground",
   bullet: "text-[13px] leading-6 text-foreground/90",
@@ -634,7 +683,7 @@ const TEXT_CLASS: Record<Exclude<BlockType, "image">, string> = {
   todo: "text-[13px] leading-6 text-foreground/90",
 }
 
-const PLACEHOLDER: Record<Exclude<BlockType, "image">, string> = {
+const PLACEHOLDER: Record<Exclude<BlockType, "image" | "code">, string> = {
   paragraph: "",
   heading: "Heading",
   bullet: "List",
@@ -668,7 +717,7 @@ function TextRow({
   onToggle: () => void
 }) {
   const ref = useRef<HTMLTextAreaElement | null>(null)
-  const type = block.type as Exclude<BlockType, "image">
+  const type = block.type as Exclude<BlockType, "image" | "code">
   const done = block.type === "todo" && block.checked
 
   useLayoutEffect(() => {
@@ -764,6 +813,92 @@ function TextRow({
         </span>
       )}
       {textarea}
+    </div>
+  )
+}
+
+function CodeRow({
+  block,
+  ariaLabel,
+  setRef,
+  onFocus,
+  onChangeText,
+  onBackspaceAtStart,
+  onNavigate,
+}: {
+  block: Block
+  ariaLabel: string
+  setRef: (id: string) => (el: EditableField | null) => void
+  onFocus: () => void
+  onChangeText: (text: string) => void
+  onBackspaceAtStart: () => boolean
+  onNavigate: (dir: -1 | 1) => boolean
+}) {
+  const ref = useRef<HTMLTextAreaElement | null>(null)
+
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = "0px"
+    el.style.height = `${el.scrollHeight}px`
+  }, [block.text])
+
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    const el = event.currentTarget
+
+    if (
+      event.key === "Backspace" &&
+      el.selectionStart === 0 &&
+      el.selectionEnd === 0
+    ) {
+      if (onBackspaceAtStart()) event.preventDefault()
+      return
+    }
+
+    const collapsed = el.selectionStart === el.selectionEnd
+    if (
+      !collapsed ||
+      event.shiftKey ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.altKey
+    ) {
+      return
+    }
+
+    const atStart = el.selectionStart === 0
+    const atEnd = el.selectionStart === el.value.length
+
+    if (event.key === "ArrowLeft" && atStart) {
+      if (onNavigate(-1)) event.preventDefault()
+    } else if (event.key === "ArrowRight" && atEnd) {
+      if (onNavigate(1)) event.preventDefault()
+    } else if (event.key === "ArrowUp" && atStart) {
+      if (onNavigate(-1)) event.preventDefault()
+    } else if (event.key === "ArrowDown" && atEnd) {
+      if (onNavigate(1)) event.preventDefault()
+    }
+  }
+
+  return (
+    <div className={`overflow-hidden ${cardSurfaceClass}`}>
+      <div className="flex h-8 items-center border-b border-border bg-muted/70 px-3 font-mono text-[11px] font-medium text-muted-foreground uppercase">
+        {formatCodeLanguage(block.lang?.trim() || "plaintext")}
+      </div>
+      <textarea
+        ref={(el) => {
+          ref.current = el
+          setRef(block.id)(el)
+        }}
+        rows={1}
+        aria-label={ariaLabel}
+        spellCheck={false}
+        value={block.text}
+        onFocus={onFocus}
+        onChange={(event) => onChangeText(event.target.value)}
+        onKeyDown={handleKeyDown}
+        className="w-full resize-none overflow-hidden bg-transparent px-3 py-2 font-mono text-[13px] leading-6 text-foreground outline-none"
+      />
     </div>
   )
 }

@@ -1054,7 +1054,21 @@ async function runCodexViaAppServer({
       void input.onLog?.(log)
     }
 
-    const { result } = await requestCodexAppServerDaemon({
+    const interruptDaemonRun = () => {
+      void requestCodexAppServerDaemon({
+        daemonPaths: daemon.paths,
+        gitAuth,
+        label: "interrupt",
+        paths,
+        payload: { type: "interrupt" },
+        sandbox,
+        timeoutMs: 10_000,
+      }).catch(() => undefined)
+    }
+    input.signal?.addEventListener("abort", interruptDaemonRun, { once: true })
+    if (input.signal?.aborted) interruptDaemonRun()
+
+    const daemonResponse = await requestCodexAppServerDaemon({
       daemonPaths: daemon.paths,
       gitAuth,
       label: "run",
@@ -1132,7 +1146,10 @@ async function runCodexViaAppServer({
       },
       sandbox,
       signal: input.signal,
+    }).finally(() => {
+      input.signal?.removeEventListener("abort", interruptDaemonRun)
     })
+    const { result } = daemonResponse
 
     if (result.stderr) {
       stderr += result.stderr
