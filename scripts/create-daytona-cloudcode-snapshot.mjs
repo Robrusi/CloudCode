@@ -7,6 +7,8 @@ import { Daytona, Image } from "@daytona/sdk"
 
 const DEFAULT_SNAPSHOT_NAME = "cloudcode-batteries-included"
 const DEFAULT_BASE_IMAGE = "daytonaio/sandbox:0.8.0"
+const CODEX_CLI_VERSION =
+  process.env.CLOUDCODE_CODEX_CLI_VERSION?.trim() || "0.136.0"
 const DESKTOP_BROWSER_SETUP_VERSION = "cloudcode-browser-v3"
 const DESKTOP_BROWSER_LAUNCHER = `#!/usr/bin/env bash
 set -euo pipefail
@@ -143,6 +145,7 @@ function snapshotHasCurrentDesktopSetup(snapshot) {
     dockerfile.includes("chromium") &&
     dockerfile.includes("cloudcode-browser") &&
     dockerfile.includes(DESKTOP_BROWSER_SETUP_VERSION) &&
+    dockerfile.includes(`@openai/codex@${CODEX_CLI_VERSION}`) &&
     dockerfile.includes("net-tools") &&
     dockerfile.includes("websockify") &&
     dockerfile.includes("novnc_proxy") &&
@@ -294,7 +297,7 @@ function cloudcodeImage(baseImage) {
     [
       "RUN if command -v npm >/dev/null 2>&1; then",
       "npm install -g --force",
-      "@openai/codex@latest",
+      `@openai/codex@${CODEX_CLI_VERSION}`,
       "pnpm@latest",
       "typescript@latest",
       "tsx@latest;",

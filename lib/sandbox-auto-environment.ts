@@ -4,6 +4,11 @@ import type { Sandbox } from "@daytona/sdk"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { getConvexAuthToken } from "@/lib/codex-auth"
+import {
+  codexCliPackageName,
+  codexCliVersionOutput,
+  desiredCodexCliVersion,
+} from "@/lib/codex-cli-version"
 import { cloudcodeYamlHash, normalizeCloudcodeYaml } from "@/lib/cloudcode-yaml"
 import {
   listCloudcodeMiseConfigFiles,
@@ -402,14 +407,22 @@ async function prepareBuilderCodex(
   )
   await installDaytonaTarWrapper(sandbox, paths)
 
+  const desiredVersion = desiredCodexCliVersion()
+  const packageName = codexCliPackageName(desiredVersion)
+  const versionReady =
+    desiredVersion === "latest"
+      ? "command -v codex >/dev/null 2>&1"
+      : `current="$(codex --version 2>/dev/null || true)"; [ "$current" = ${shellQuote(
+          codexCliVersionOutput(desiredVersion)
+        )} ]`
   const installCommand = [
     "set -e",
-    "if command -v codex >/dev/null 2>&1; then",
+    `if command -v codex >/dev/null 2>&1 && ${versionReady}; then`,
     "  true",
     "elif command -v npm >/dev/null 2>&1; then",
-    "  npm install -g @openai/codex@latest",
+    `  npm install -g --force ${shellQuote(packageName)}`,
     "elif command -v bun >/dev/null 2>&1; then",
-    "  bun install -g @openai/codex@latest",
+    `  bun install -g ${shellQuote(packageName)}`,
     "else",
     "  echo 'Install Node.js/npm, Bun, or the Codex CLI in the base snapshot.' >&2",
     "  exit 1",

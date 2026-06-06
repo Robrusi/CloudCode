@@ -2,10 +2,9 @@ import { createHash, randomBytes } from "node:crypto"
 import { createServer, type Server } from "node:http"
 
 import { saveCodexOAuthTokens } from "@/lib/codex-auth"
+import { codexOAuthClientId, codexOAuthIssuer } from "@/lib/codex-oauth-config"
 import { escapeHtml } from "@/lib/html-escape"
 
-const DEFAULT_ISSUER = "https://auth.openai.com"
-const DEFAULT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 const DEFAULT_PORT = 1455
 const FALLBACK_PORT = 1457
 const SCOPE =
@@ -50,14 +49,6 @@ function createState() {
   return base64Url(randomBytes(32))
 }
 
-function getClientId() {
-  return process.env.OPENAI_CODEX_CLIENT_ID ?? DEFAULT_CLIENT_ID
-}
-
-function getIssuer() {
-  return process.env.OPENAI_CODEX_ISSUER ?? DEFAULT_ISSUER
-}
-
 function buildAuthorizeUrl({
   codeChallenge,
   port,
@@ -67,11 +58,11 @@ function buildAuthorizeUrl({
   port: number
   state: string
 }) {
-  const issuer = getIssuer()
+  const issuer = codexOAuthIssuer()
   const url = new URL("/oauth/authorize", issuer)
 
   url.searchParams.set("response_type", "code")
-  url.searchParams.set("client_id", getClientId())
+  url.searchParams.set("client_id", codexOAuthClientId())
   url.searchParams.set("redirect_uri", `http://localhost:${port}/auth/callback`)
   url.searchParams.set("scope", SCOPE)
   url.searchParams.set("code_challenge", codeChallenge)
@@ -89,9 +80,9 @@ async function exchangeCodeForTokens(
   code: string,
   port: number
 ) {
-  const tokenEndpoint = new URL("/oauth/token", getIssuer())
+  const tokenEndpoint = new URL("/oauth/token", codexOAuthIssuer())
   const body = new URLSearchParams({
-    client_id: getClientId(),
+    client_id: codexOAuthClientId(),
     code,
     code_verifier: login.codeVerifier,
     grant_type: "authorization_code",

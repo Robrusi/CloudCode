@@ -1,13 +1,34 @@
-import { createHash } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 
 import type { Sandbox } from "@daytona/sdk"
 
+import {
+  CodexAppServerError,
+  type CodexAppServerNotification,
+  CodexAppServerStdioRpcClient,
+  type CodexAppServerTransport,
+  type CodexAppServerChatgptAuthTokens,
+  createCodexAppServerTurnReducer,
+  type CodexAppServerThreadResponse,
+  type CodexAppServerTurnResponse,
+} from "./codex-app-server"
+import {
+  buildCodexAuthJsonFromParsed,
+  getAccountIdFromIdToken,
+  parseCodexAuthJson,
+} from "./codex-auth-json"
 import {
   defaultBranchName,
   defaultBranchNameWithSuffix,
   parseBranchMode,
   shuffledCityBranchNames,
 } from "./codex-branch-names"
+import {
+  codexCliPackageName,
+  codexCliVersionOutput,
+  desiredCodexCliVersion,
+} from "./codex-cli-version"
+import { refreshCodexOAuthTokens } from "./codex-oauth-refresh"
 import {
   daytonaDesktopAgentContext,
   installDaytonaDesktopTools,
@@ -37,7 +58,6 @@ import {
   shellQuote,
   startDaytonaActivityHeartbeat,
   writeDaytonaTextFile,
-  type DaytonaCommandResult,
   type DaytonaSandboxPaths,
 } from "./daytona-sandbox"
 import { runCloudcodeYamlSetup } from "./cloudcode-yaml-setup"
@@ -56,14 +76,10 @@ import {
   type SandboxGitHubAuth,
 } from "./sandbox-github-auth"
 
-const EXIT_MARKER = "__CLOUDCODE_CODEX_EXIT__"
-const CODEX_CAPABILITIES_EXEC_BEGIN = "__CLOUDCODE_EXEC_HELP_BEGIN__"
-const CODEX_CAPABILITIES_EXEC_END = "__CLOUDCODE_EXEC_HELP_END__"
-const CODEX_CAPABILITIES_RESUME_BEGIN = "__CLOUDCODE_RESUME_HELP_BEGIN__"
-const CODEX_CAPABILITIES_RESUME_END = "__CLOUDCODE_RESUME_HELP_END__"
 const CODEX_AUTH_CURRENT = "__CLOUDCODE_CODEX_AUTH_CURRENT__"
 const CODEX_UPDATE_TIMEOUT_MS = 3 * 60 * 1000
-const CODEX_CAPABILITIES_TIMEOUT_MS = 25_000
+const CODEX_APP_SERVER_LOCAL_READY_TIMEOUT_MS = 5_000
+const CODEX_APP_SERVER_REQUEST_TIMEOUT_MS = 45_000
 const RUNTIME_BOOTSTRAP_REFRESHED = "__CLOUDCODE_RUNTIME_BOOTSTRAP_REFRESHED__"
 const RUNTIME_BOOTSTRAP_VERSION = "1"
 const PRESET_INSTALL_TIMEOUT_MS = 10 * 60 * 1000
@@ -137,6 +153,7 @@ export type RunCodexInSandboxResult = {
   diff: string
   exitCode: number
   lastMessage: string
+  lastMessageAuthoritative?: boolean
   repoUrl: string
   sandboxId: string
   stderr: string
@@ -144,19 +161,6 @@ export type RunCodexInSandboxResult = {
   stdout: string
   updatedAuthJson: string
   recoveredSandbox: boolean
-}
-
-type CodexCliCapabilities = {
-  execHelp: string
-  resumeHelp: string
-}
-
-type RecordingArtifact = {
-  fileName?: string
-  filePath?: string
-  id: string
-  sandboxId?: string
-  status?: string
 }
 
 function parseModel(model?: string) {
@@ -244,6 +248,79 @@ function compactLine(value: string, max = 220) {
   return line.length > max ? `${line.slice(0, max - 3)}...` : line
 }
 
+function stripAnsi(value: string) {
+  let output = ""
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) === 0x1b && value[index + 1] === "[") {
+      index += 2
+      while (index < value.length) {
+        const code = value.charCodeAt(index)
+        if (code >= 0x40 && code <= 0x7e) break
+        index += 1
+      }
+      continue
+    }
+    output += value[index] ?? ""
+  }
+  return output
+}
+
+function isBundledBubblewrapWarning(value: string) {
+  const normalized = value.toLowerCase()
+  return (
+    normalized.includes("codex could not find bubblewrap on path") &&
+    normalized.includes("bundled bubblewrap")
+  )
+}
+
+export function codexAppServerStderrLogForLine(
+  line: string,
+  options: { bundledBubblewrapWarningAlreadyLogged?: boolean } = {}
+): RunCodexLog | undefined {
+  const clean = stripAnsi(line)
+  const trimmed = compactLine(clean)
+  if (!trimmed) return undefined
+
+  if (isBundledBubblewrapWarning(clean)) {
+    if (options.bundledBubblewrapWarningAlreadyLogged) return undefined
+    return {
+      kind: "setup",
+      message: "Codex using bundled bubblewrap sandbox helper",
+    }
+  }
+
+  return { kind: "stderr", message: trimmed }
+}
+
+function createCodexAppServerStderrLogger(input: RunCodexInSandboxInput) {
+  let buffer = ""
+  let bundledBubblewrapWarningLogged = false
+
+  const emitLine = (line: string) => {
+    const log = codexAppServerStderrLogForLine(line, {
+      bundledBubblewrapWarningAlreadyLogged: bundledBubblewrapWarningLogged,
+    })
+    if (!log) return
+    if (log.message === "Codex using bundled bubblewrap sandbox helper") {
+      bundledBubblewrapWarningLogged = true
+    }
+    void input.onLog?.(log)
+  }
+
+  return {
+    flush() {
+      if (buffer.trim()) emitLine(buffer)
+      buffer = ""
+    },
+    write(chunk: string) {
+      buffer += chunk
+      const lines = buffer.split(/\r?\n/)
+      buffer = lines.pop() ?? ""
+      for (const line of lines) emitLine(line)
+    },
+  }
+}
+
 function objectRecord(value: unknown): Record<string, unknown> | undefined {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>
@@ -256,658 +333,535 @@ function stringValue(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
 }
 
-function numberValue(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined
+type CodexAppServerHandle = {
+  attachClient: (client: CodexAppServerStdioRpcClient) => void
+  commandId: string
+  log: () => string
+  sessionId: string
+  stop: () => Promise<void>
+  transport: CodexAppServerTransport
 }
 
-function recordingArtifactFromRecord(
-  record: Record<string, unknown>
-): RecordingArtifact | undefined {
-  const id = stringValue(record.id)
-  if (!id || !/^[0-9a-fA-F-]{36}$/.test(id)) return undefined
-
-  const filePath = stringValue(record.filePath)
-  const fileName = stringValue(record.fileName)
-  if (
-    !filePath?.includes("/.daytona/recordings/") &&
-    !fileName?.endsWith(".mp4")
-  ) {
-    return undefined
-  }
-
-  return {
-    ...(fileName ? { fileName } : {}),
-    ...(filePath ? { filePath } : {}),
-    id,
-    ...(stringValue(record.sandboxId)
-      ? { sandboxId: stringValue(record.sandboxId) }
-      : {}),
-    ...(stringValue(record.status)
-      ? { status: stringValue(record.status) }
-      : {}),
-  }
+type CodexAppServerRunResult = {
+  codexThreadId: string
+  exitCode: number
+  lastMessage: string
+  stderr: string
+  stdout: string
 }
 
-function findRecordingArtifact(
-  value: unknown,
-  depth = 0
-): RecordingArtifact | undefined {
-  if (depth > 6) return undefined
-
-  if (Array.isArray(value)) {
-    for (const nested of value) {
-      const recording = findRecordingArtifact(nested, depth + 1)
-      if (recording) return recording
-    }
-    return undefined
-  }
-
-  const record = objectRecord(value)
-  if (!record) return undefined
-
-  const current = recordingArtifactFromRecord(record)
-  if (current) return current
-
-  for (const nested of Object.values(record)) {
-    const recording = findRecordingArtifact(nested, depth + 1)
-    if (recording) return recording
-  }
-
-  return undefined
-}
-
-function collectStringValues(
-  value: unknown,
-  keys: readonly string[],
-  depth = 0
-): string[] {
-  if (depth > 6) return []
-
-  if (Array.isArray(value)) {
-    return value.flatMap((nested) =>
-      collectStringValues(nested, keys, depth + 1)
-    )
-  }
-
-  const record = objectRecord(value)
-  if (!record) return []
-
-  const values: string[] = []
-  for (const key of keys) {
-    const found = stringValue(record[key])
-    if (found) values.push(found)
-  }
-
-  for (const nested of Object.values(record)) {
-    values.push(...collectStringValues(nested, keys, depth + 1))
-  }
-
-  return values
-}
-
-function eventTypeText(record: Record<string, unknown>) {
-  return collectStringValues(record, ["type", "method"]).join(" ").toLowerCase()
-}
-
-function normalizedEventTypeText(type: string) {
-  return type.replace(/[\s._/-]+/g, "")
-}
-
-function readableCodexText(value: string): string {
-  try {
-    const parsed = JSON.parse(value) as unknown
-    const nested = findString(parsed, ["detail", "message", "error"])
-    return nested && nested !== value ? readableCodexText(nested) : value
-  } catch {
-    return value
-  }
-}
-
-function codexThreadIdFromEvent(event: unknown) {
-  const record = objectRecord(event)
-  if (!record) return undefined
-
-  const type = eventTypeText(record)
-  const normalizedType = normalizedEventTypeText(type)
-  const threadId = findString(record, [
-    "thread_id",
-    "threadId",
-    "conversation_id",
-    "conversationId",
-  ])
-
-  return normalizedType.includes("threadstarted") ||
-    normalizedType.includes("threadcreated") ||
-    normalizedType.includes("conversationstarted") ||
-    normalizedType.includes("conversationcreated")
-    ? threadId
-    : undefined
-}
-
-function assistantTextFromEvent(event: unknown) {
-  const record = objectRecord(event)
-  if (!record) return undefined
-
-  const type = eventTypeText(record)
-  if (!type) {
-    return undefined
-  }
-  const normalizedType = normalizedEventTypeText(type)
-  const isAssistantTextEvent =
-    type.includes("assistant") ||
-    type.includes("agent_message") ||
-    normalizedType.includes("agentmessage") ||
-    type.includes("message_delta") ||
-    normalizedType.includes("messagedelta") ||
-    type.includes("output_text") ||
-    normalizedType.includes("outputtext") ||
-    type.includes("text_delta") ||
-    normalizedType.includes("textdelta")
-
-  if (
-    !isAssistantTextEvent ||
-    type.includes("reason") ||
-    type.includes("tool") ||
-    type.includes("user") ||
-    normalizedType.includes("commandexecution")
-  ) {
-    return undefined
-  }
-
-  const text = findString(record, ["delta", "text_delta", "content_delta"])
-  if (text && isAssistantTextEvent) {
-    return { mode: "delta" as const, text }
-  }
-
-  const snapshot = findString(record, ["message", "content", "text"])
-  if (snapshot && isAssistantTextEvent) {
-    return { mode: "snapshot" as const, text: snapshot }
-  }
-
-  return undefined
-}
-
-function findString(
-  value: unknown,
-  keys: readonly string[],
-  depth = 0
-): string | undefined {
-  if (Array.isArray(value)) {
-    if (depth > 6) return undefined
-
-    const parts = value.flatMap((nested) => {
-      const part = findString(nested, keys, depth + 1)
-      return part ? [part] : []
-    })
-
-    return parts.length ? parts.join(" ") : undefined
-  }
-
-  const record = objectRecord(value)
-  if (!record || depth > 6) return undefined
-
-  for (const key of keys) {
-    const found = stringValue(record[key])
-    if (found) return found
-  }
-
-  for (const nested of Object.values(record)) {
-    const found = findString(nested, keys, depth + 1)
-    if (found) return found
-  }
-
-  return undefined
-}
-
-function findNumber(
-  value: unknown,
-  keys: readonly string[],
-  depth = 0
-): number | undefined {
-  if (Array.isArray(value)) {
-    if (depth > 6) return undefined
-
-    for (const nested of value) {
-      const found = findNumber(nested, keys, depth + 1)
-      if (found !== undefined) return found
-    }
-
-    return undefined
-  }
-
-  const record = objectRecord(value)
-  if (!record || depth > 6) return undefined
-
-  for (const key of keys) {
-    const found = numberValue(record[key])
-    if (found !== undefined) return found
-  }
-
-  for (const nested of Object.values(record)) {
-    const found = findNumber(nested, keys, depth + 1)
-    if (found !== undefined) return found
-  }
-
-  return undefined
-}
-
-type CodexFileChange = {
-  diff?: string
-  kind: "add" | "delete" | "update"
-  path: string
-}
-
-function normalizeFileChangeKind(value: string | undefined) {
-  if (value === "add" || value === "create") return "add"
-  if (value === "delete" || value === "remove") return "delete"
-  if (value === "update" || value === "modify" || value === "edit") {
-    return "update"
-  }
-  return undefined
-}
-
-function parseFileChange(value: unknown): CodexFileChange | null {
-  const record = objectRecord(value)
-  if (!record) return null
-
-  const path = stringValue(record.path)
-  const kind = normalizeFileChangeKind(
-    stringValue(record.kind) ?? stringValue(record.type)
-  )
-  const diff = findString(record, [
-    "unified_diff",
-    "unifiedDiff",
-    "diff",
-    "patch",
-    "body",
-    "content",
-  ])
-
-  return path && kind ? { diff, kind, path } : null
-}
-
-function findPatchBody(value: unknown, depth = 0): string | undefined {
-  if (depth > 6) return undefined
-  if (typeof value === "string") {
-    if (
-      value.includes("*** Begin Patch") ||
-      /\*\*\* (Add|Update|Delete) File:/.test(value)
-    ) {
-      return value
-    }
-    // Sometimes a JSON-encoded argument string carries the patch.
-    if (value.startsWith("{") || value.startsWith("[")) {
-      try {
-        return findPatchBody(JSON.parse(value), depth + 1)
-      } catch {
-        return undefined
-      }
-    }
-    return undefined
-  }
-  if (Array.isArray(value)) {
-    for (const nested of value) {
-      const found = findPatchBody(nested, depth + 1)
-      if (found) return found
-    }
-    return undefined
-  }
-  const record = objectRecord(value)
-  if (!record) return undefined
-  for (const key of [
-    "input",
-    "patch",
-    "unified_diff",
-    "unifiedDiff",
-    "diff",
-    "body",
-    "arguments",
-    "args",
-  ]) {
-    const candidate = record[key]
-    const found = findPatchBody(candidate, depth + 1)
-    if (found) return found
-  }
-  for (const nested of Object.values(record)) {
-    const found = findPatchBody(nested, depth + 1)
-    if (found) return found
-  }
-  return undefined
-}
-
-function extractPatchForPath(
-  patchBody: string | undefined,
-  path: string
-): string | undefined {
-  if (!patchBody || !path) return undefined
-  // Locate the `*** (Add|Update|Delete) File: <path>` header and grab through
-  // the next file header or end-of-patch sentinel.
-  const escapedPath = path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-  const fileRegex = new RegExp(
-    `\\*\\*\\* (Add|Update|Delete) File:\\s*${escapedPath}[ \\t]*\\n?([\\s\\S]*?)(?=\\n\\*\\*\\* (?:Add|Update|Delete) File:|\\n\\*\\*\\* End Patch|$)`
-  )
-  const match = patchBody.match(fileRegex)
-  if (!match) return undefined
-  return `*** ${match[1]} File: ${path}\n${match[2].replace(/\n+$/, "")}`
-}
-
-const PATCH_FILE_HEADER_REGEX = /\*\*\* (Add|Update|Delete) File:\s*([^\n]+)/g
-
-function collectPatchFileChanges(patchBody: string | undefined) {
-  if (!patchBody) return []
-
-  const changes: CodexFileChange[] = []
-  let match: RegExpExecArray | null
-  PATCH_FILE_HEADER_REGEX.lastIndex = 0
-  while ((match = PATCH_FILE_HEADER_REGEX.exec(patchBody)) !== null) {
-    const kind = normalizeFileChangeKind(match[1].toLowerCase())
-    const path = match[2].trim()
-    if (!kind || !path) continue
-    changes.push({
-      diff: extractPatchForPath(patchBody, path),
-      kind,
-      path,
-    })
-  }
-  return changes
-}
-
-function mergeFileChanges(
-  primary: CodexFileChange[],
-  fallback: CodexFileChange[]
-) {
-  const byKey = new Map<string, CodexFileChange>()
-  for (const change of [...primary, ...fallback]) {
-    const key = `${change.kind}:${change.path}`
-    const existing = byKey.get(key)
-    byKey.set(key, existing?.diff ? existing : change)
-  }
-  return Array.from(byKey.values())
-}
-
-function collectFileChanges(value: unknown, depth = 0): CodexFileChange[] {
-  if (depth > 6) return []
-
-  if (Array.isArray(value)) {
-    return value.flatMap((nested) => collectFileChanges(nested, depth + 1))
-  }
-
-  const record = objectRecord(value)
-  if (!record) return []
-
-  const changes: CodexFileChange[] = []
-  for (const key of ["changes", "file_changes", "fileChanges"]) {
-    const nested = record[key]
-    if (!Array.isArray(nested)) continue
-    changes.push(
-      ...nested.flatMap((item) => {
-        const change = parseFileChange(item)
-        return change ? [change] : []
-      })
-    )
-  }
-
-  for (const nested of Object.values(record)) {
-    changes.push(...collectFileChanges(nested, depth + 1))
-  }
-
-  return changes
-}
-
-function logDetail(value: Record<string, unknown>) {
-  return JSON.stringify(value)
-}
-
-function summarizeCodexEvent(event: unknown): RunCodexLog | undefined {
-  const record = objectRecord(event)
-  if (!record) return undefined
-
-  const type = eventTypeText(record)
-  const normalizedType = normalizedEventTypeText(type)
-  const status = stringValue(record.status)
-  const nestedStatus = findString(record, ["status"])
-  const command = findString(record, ["command", "cmd", "shell_command"])
-  const output = findString(record, ["aggregated_output", "output", "stdout"])
-  const exitCode = findNumber(record, ["exit_code", "exitCode"])
-  const eventPatch = findPatchBody(record)
-  const fileChanges = mergeFileChanges(
-    collectFileChanges(record),
-    collectPatchFileChanges(eventPatch)
-  )
-  const toolName = findString(record, [
-    "tool",
-    "tool_name",
-    "name",
-    "function_name",
-  ])
-  const text = findString(record, [
-    "summary",
-    "message",
-    "text",
-    "content",
-    "delta",
-  ])
-  const recording = findRecordingArtifact(record)
-
-  if (
-    fileChanges.length > 0 &&
-    (normalizedType.includes("filechange") ||
-      type.includes("tool") ||
-      type.includes("function"))
-  ) {
-    const completeStatus = nestedStatus ?? status
-    if (completeStatus === "in_progress") return undefined
-
-    const enriched = fileChanges.map((change) =>
-      change.diff
-        ? change
-        : { ...change, diff: extractPatchForPath(eventPatch, change.path) }
-    )
-
-    return {
-      detail: logDetail({
-        changes: enriched,
-        kind: "file_change",
-        status: completeStatus,
-      }),
-      kind: "command",
-      message: "File change",
-    }
-  }
-
-  if (type.includes("reason")) {
-    return {
-      kind: "reasoning",
-      message: text ? compactLine(readableCodexText(text)) : "Reasoning",
-    }
-  }
-
-  if (
-    command &&
-    (type.includes("command") ||
-      normalizedType.includes("commandexecution") ||
-      type.includes("exec") ||
-      type.includes("tool") ||
-      type.includes("function"))
-  ) {
-    return {
-      detail: logDetail({
-        command,
-        exitCode,
-        kind: "command_execution",
-        output,
-        status: nestedStatus ?? status,
-      }),
-      kind: "command",
-      message: "Shell command",
-    }
-  }
-
-  if (
-    type.includes("tool") ||
-    type.includes("function") ||
-    normalizedType.includes("toolcall") ||
-    normalizedType.includes("functioncall")
-  ) {
-    const name = toolName ?? "Tool call"
-    return {
-      detail: logDetail({
-        kind: "tool_call",
-        name,
-        ...(recording ? { recording } : {}),
-        status: nestedStatus ?? status,
-        text: text ? readableCodexText(text) : undefined,
-      }),
-      kind: "command",
-      message: name,
-    }
-  }
-
-  if (type.includes("result")) {
-    return {
-      detail: status,
-      kind: "result",
-      message: text ? compactLine(readableCodexText(text)) : "Result",
-    }
-  }
-
-  if (
-    (type.includes("turn") || normalizedType.includes("turn")) &&
-    (type.includes("start") || normalizedType.includes("started") || status)
-  ) {
-    return {
-      kind: "setup",
-      message: status ? `Codex turn ${status}` : "Codex turn started",
-    }
-  }
-
-  if (type.includes("error")) {
-    return {
-      kind: "stderr",
-      message: text
-        ? compactLine(readableCodexText(text))
-        : "Codex reported an error",
-    }
-  }
-
-  return undefined
-}
-
-function summarizeUnknownCodexEvent(event: unknown): RunCodexLog | undefined {
-  const record = objectRecord(event)
-  if (!record) return undefined
-
-  const type = eventTypeText(record)
-  if (!type) return undefined
-
-  const status = stringValue(record.status)
-  const text = findString(record, [
-    "summary",
-    "message",
-    "text",
-    "content",
-    "delta",
-    "reason",
-    "detail",
-  ])
-
-  if (!text && !status) return undefined
-
-  return {
-    kind: type.toLowerCase().includes("error") ? "stderr" : "stdout",
-    message: compactLine([type, status, text].filter(Boolean).join(": ")),
-  }
-}
-
-function createStdoutLogger(
-  onLog: RunCodexInSandboxInput["onLog"],
-  onContentDelta: RunCodexInSandboxInput["onContentDelta"],
-  onCodexThreadId: (threadId: string) => void
-) {
-  let buffer = ""
-  let assistantSnapshot = ""
-
-  function emitPlainLine(line: string) {
-    const trimmed = compactLine(line)
-    if (!trimmed || trimmed.startsWith(EXIT_MARKER)) return
-    void onLog?.({ kind: "stdout", message: trimmed })
-  }
-
-  function flushLine(line: string) {
-    const trimmed = line.trim()
-    if (!trimmed) return
-
-    try {
-      const event = JSON.parse(trimmed) as unknown
-      const threadId = codexThreadIdFromEvent(event)
-      if (threadId) onCodexThreadId(threadId)
-      const assistantText = assistantTextFromEvent(event)
-      if (assistantText) {
-        if (assistantText.mode === "delta") {
-          assistantSnapshot += assistantText.text
-          void onContentDelta?.(assistantText.text)
-        } else if (assistantText.text.startsWith(assistantSnapshot)) {
-          const delta = assistantText.text.slice(assistantSnapshot.length)
-          assistantSnapshot = assistantText.text
-          if (delta) void onContentDelta?.(delta)
-        } else if (assistantText.text !== assistantSnapshot) {
-          const separator = assistantSnapshot ? "\n\n" : ""
-          assistantSnapshot = assistantText.text
-          void onContentDelta?.(`${separator}${assistantText.text}`)
-        }
-        return
-      }
-      const summary = summarizeCodexEvent(event)
-      if (summary) {
-        void onLog?.(summary)
-      } else {
-        const fallback = summarizeUnknownCodexEvent(event)
-        if (fallback) void onLog?.(fallback)
-      }
-    } catch {
-      emitPlainLine(trimmed)
-    }
-  }
-
-  return {
-    chunk(data: string) {
-      buffer += data
-      const lines = buffer.split(/\r?\n/)
-      buffer = lines.pop() ?? ""
-      for (const line of lines) flushLine(line)
-    },
-    flush() {
-      if (buffer) flushLine(buffer)
-      buffer = ""
-    },
-  }
-}
-
-function redactAuthPathOutput(
-  result: DaytonaCommandResult,
+type CodexAppServerAuthRefreshContext = {
+  input: RunCodexInSandboxInput
   paths: DaytonaSandboxPaths
-) {
-  const exitPattern = new RegExp(`\\n?${EXIT_MARKER}(\\d+)\\s*$`)
-  const exitMatch = result.stdout.match(exitPattern)
-  const exitCode = exitMatch?.[1] ? Number(exitMatch[1]) : result.exitCode
+  sandbox: Sandbox
+}
+
+export function codexAppServerStdioCommand({
+  env,
+  paths,
+}: {
+  env: Record<string, string>
+  paths: DaytonaSandboxPaths
+}) {
+  const envExports = Object.entries(env)
+    .filter(([name, value]) => validShellEnvName(name) && value !== undefined)
+    .map(([name, value]) => `export ${name}=${shellQuote(value)}`)
+
+  return `bash -c ${shellQuote(
+    [
+      `[ -f ${shellQuote(paths.presetEnvPath)} ] && . ${shellQuote(
+        paths.presetEnvPath
+      )}`,
+      ...envExports,
+      `cd ${shellQuote(paths.repoPath)}`,
+      `exec ${shellQuote(paths.codexLauncherPath)} app-server`,
+    ].join("\n")
+  )}`
+}
+
+function validShellEnvName(name: string) {
+  return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)
+}
+
+async function startCodexAppServer({
+  gitAuth,
+  input,
+  paths,
+  sandbox,
+}: {
+  gitAuth?: SandboxGitHubAuth | null
+  input: RunCodexInSandboxInput
+  paths: DaytonaSandboxPaths
+  sandbox: Sandbox
+}): Promise<CodexAppServerHandle> {
+  const sessionId = `cloudcode-codex-app-server-${Date.now()}-${randomBytes(4).toString("hex")}`
+  const command = codexAppServerStdioCommand({
+    env: codexShellEnv(paths, input.sandboxPreset?.secrets, gitAuth?.env),
+    paths,
+  })
+
+  await emitLog(input, {
+    detail: "stdio",
+    kind: "command",
+    message: "codex app-server",
+  })
+
+  await sandbox.process.createSession(sessionId)
+  let commandId = ""
+  let client: CodexAppServerStdioRpcClient | undefined
+  let stderr = ""
+  const stderrLogger = createCodexAppServerStderrLogger(input)
+  let stopped = false
+
+  try {
+    const started = await sandbox.process.executeSessionCommand(
+      sessionId,
+      {
+        command,
+        runAsync: true,
+        suppressInputEcho: true,
+      },
+      Math.ceil(CODEX_APP_SERVER_LOCAL_READY_TIMEOUT_MS / 1000)
+    )
+    commandId = started.cmdId
+    if (!commandId) {
+      throw new Error("Codex app-server did not return a Daytona command id.")
+    }
+  } catch (error) {
+    await sandbox.process.deleteSession(sessionId).catch(() => undefined)
+    throw error
+  }
+
+  const stop = async () => {
+    stopped = true
+    await sandbox.process.deleteSession(sessionId).catch(() => undefined)
+  }
+
+  const transport: CodexAppServerTransport = {
+    close: stop,
+    isConnected: () => !stopped,
+    send: (data) =>
+      sandbox.process.sendSessionCommandInput(sessionId, commandId, data),
+  }
+
+  void sandbox.process
+    .getSessionCommandLogs(
+      sessionId,
+      commandId,
+      (chunk) => {
+        client?.receive(chunk)
+      },
+      (chunk) => {
+        stderr += chunk
+        stderrLogger.write(chunk)
+      }
+    )
+    .finally(async () => {
+      stderrLogger.flush()
+      if (stopped) return
+      stopped = true
+      const command = await sandbox.process
+        .getSessionCommand(sessionId, commandId)
+        .catch(() => undefined)
+      const suffix =
+        command?.exitCode === undefined ? "" : ` with code ${command.exitCode}`
+      client?.terminate(new Error(`Codex app-server exited${suffix}.`))
+    })
+    .catch(() => undefined)
 
   return {
-    ...result,
-    exitCode,
-    stderr: result.stderr.replaceAll(paths.codexHome, "$CODEX_HOME"),
-    stdout: result.stdout
-      .replace(exitPattern, "")
-      .replaceAll(paths.codexHome, "$CODEX_HOME"),
+    attachClient: (stdioClient) => {
+      client = stdioClient
+    },
+    commandId,
+    log: () => stderr.replaceAll(paths.codexHome, "$CODEX_HOME"),
+    sessionId,
+    stop,
+    transport,
   }
 }
 
-function restoredConversationPrompt(context: string, prompt: string) {
-  return [
-    "The previous Daytona sandbox no longer exists, so this is a fresh sandbox. The last saved diff has been applied when available. Use this handoff as the current task state and continue from it.",
-    context.trim(),
-    "Current user request:",
-    prompt,
-  ].join("\n\n")
+export function appServerThreadParams({
+  model,
+  paths,
+  reasoningEffort,
+  speed,
+}: {
+  model?: string
+  paths: DaytonaSandboxPaths
+  reasoningEffort?: ReasoningEffort
+  speed: CodexSpeed
+}) {
+  const config = {
+    approval_policy: "never",
+    sandbox_mode: "danger-full-access",
+    ...(reasoningEffort ? { model_reasoning_effort: reasoningEffort } : {}),
+    ...(speed === "fast" ? { service_tier: "fast" } : {}),
+  }
+
+  return {
+    approvalPolicy: "never" as const,
+    config,
+    cwd: paths.repoPath,
+    ephemeral: false,
+    ...(model ? { model } : {}),
+    sandbox: "danger-full-access" as const,
+    serviceName: "cloudcode",
+    ...(speed === "fast" ? { serviceTier: "fast" } : {}),
+  }
+}
+
+function appServerTurnParams({
+  model,
+  paths,
+  prompt,
+  reasoningEffort,
+  speed,
+  threadId,
+}: {
+  model?: string
+  paths: DaytonaSandboxPaths
+  prompt: string
+  reasoningEffort?: ReasoningEffort
+  speed: CodexSpeed
+  threadId: string
+}) {
+  return {
+    approvalPolicy: "never" as const,
+    cwd: paths.repoPath,
+    input: [{ text: prompt, text_elements: [] as [], type: "text" as const }],
+    ...(model ? { model } : {}),
+    ...(reasoningEffort ? { effort: reasoningEffort } : {}),
+    sandboxPolicy: { type: "dangerFullAccess" as const },
+    ...(speed === "fast" ? { serviceTier: "fast" } : {}),
+    threadId,
+  }
+}
+
+export function codexAppServerNotificationRoute(
+  notification: CodexAppServerNotification
+) {
+  const params = objectRecord(notification.params)
+  const thread = objectRecord(params?.thread)
+  const turn = objectRecord(params?.turn)
+
+  return {
+    threadId:
+      stringValue(thread?.id) ??
+      stringValue(params?.threadId) ??
+      stringValue(turn?.threadId),
+    turnId:
+      stringValue(turn?.id) ??
+      stringValue(params?.turnId) ??
+      stringValue(params?.turn_id),
+  }
+}
+
+function codexAppServerNotificationMatchesActiveRoute({
+  activeThreadId,
+  activeTurnId,
+  notification,
+}: {
+  activeThreadId: string | undefined
+  activeTurnId: string | undefined
+  notification: CodexAppServerNotification
+}) {
+  const route = codexAppServerNotificationRoute(notification)
+  if (activeThreadId && route.threadId && route.threadId !== activeThreadId) {
+    return false
+  }
+  if (activeTurnId && route.turnId && route.turnId !== activeTurnId) {
+    return false
+  }
+
+  return true
+}
+
+function readCodexAppServerLog(handle: CodexAppServerHandle | undefined) {
+  if (!handle) return ""
+  return handle.log()
+}
+
+function createCodexAppServerAuthRefresher({
+  input,
+  paths,
+  sandbox,
+}: CodexAppServerAuthRefreshContext) {
+  let auth = parseCodexAuthJson(input.authJson)
+
+  return async function refreshChatgptAuthTokens(
+    params: unknown
+  ): Promise<CodexAppServerChatgptAuthTokens> {
+    const previousAccountId = stringValue(
+      objectRecord(params)?.previousAccountId
+    )
+    const refreshed = await refreshCodexOAuthTokens(auth.refreshToken)
+    const idToken = refreshed.idToken ?? auth.idToken
+    const accountId =
+      (refreshed.idToken ? getAccountIdFromIdToken(idToken) : auth.accountId) ??
+      previousAccountId ??
+      null
+
+    auth = {
+      ...auth,
+      accessToken: refreshed.accessToken,
+      accountId,
+      idToken,
+      lastRefresh: new Date().toISOString(),
+      refreshToken: refreshed.refreshToken ?? auth.refreshToken,
+    }
+
+    const authPath = `${paths.codexHome}/auth.json`
+    await writeDaytonaTextFile(
+      sandbox,
+      authPath,
+      buildCodexAuthJsonFromParsed(auth)
+    )
+    await runDaytonaCommand(sandbox, `chmod 600 ${shellQuote(authPath)}`, {
+      signal: input.signal,
+      timeoutMs: 10_000,
+    })
+    await emitLog(input, {
+      kind: "setup",
+      message: "Refreshed Codex auth tokens",
+    })
+
+    return {
+      accessToken: auth.accessToken,
+      chatgptAccountId: auth.accountId ?? "",
+      chatgptPlanType: null,
+    }
+  }
+}
+
+async function runCodexViaAppServer({
+  codexThreadIdToResume,
+  gitAuth,
+  input,
+  model,
+  paths,
+  prompt,
+  reasoningEffort,
+  sandbox,
+  speed,
+}: {
+  codexThreadIdToResume?: string
+  gitAuth?: SandboxGitHubAuth | null
+  input: RunCodexInSandboxInput
+  model?: string
+  paths: DaytonaSandboxPaths
+  prompt: string
+  reasoningEffort?: ReasoningEffort
+  sandbox: Sandbox
+  speed: CodexSpeed
+}): Promise<CodexAppServerRunResult> {
+  let handle: CodexAppServerHandle | undefined
+  let client: CodexAppServerStdioRpcClient | undefined
+  let activeThreadId = codexThreadIdToResume
+  let activeTurnId: string | undefined
+
+  try {
+    handle = await startCodexAppServer({ gitAuth, input, paths, sandbox })
+    client = new CodexAppServerStdioRpcClient(handle.transport, {
+      refreshChatgptAuthTokens: createCodexAppServerAuthRefresher({
+        input,
+        paths,
+        sandbox,
+      }),
+    })
+    handle.attachClient(client)
+    const reducer = createCodexAppServerTurnReducer({
+      onContentDelta: input.onContentDelta,
+      onLog: input.onLog,
+    })
+    const turnCompleted = new Promise<void>((resolve) => {
+      client?.onNotification((notification) => {
+        if (
+          !codexAppServerNotificationMatchesActiveRoute({
+            activeThreadId,
+            activeTurnId,
+            notification,
+          })
+        ) {
+          return
+        }
+
+        const route = codexAppServerNotificationRoute(notification)
+        if (
+          notification.method === "turn/started" &&
+          route.turnId &&
+          (!activeThreadId ||
+            !route.threadId ||
+            route.threadId === activeThreadId)
+        ) {
+          activeTurnId ??= route.turnId
+        }
+
+        reducer.handleNotification(notification)
+        if (notification.method !== "turn/completed" || !activeThreadId) return
+        if (route.threadId && route.threadId !== activeThreadId) return
+        if (activeTurnId && route.turnId && route.turnId !== activeTurnId)
+          return
+        resolve()
+      })
+    })
+
+    await client.connect(input.signal)
+    await client.request(
+      "initialize",
+      {
+        capabilities: {
+          experimentalApi: true,
+          requestAttestation: false,
+        },
+        clientInfo: {
+          name: "cloudcode",
+          title: "Cloudcode",
+          version: "0.0.1",
+        },
+      },
+      { signal: input.signal, timeoutMs: CODEX_APP_SERVER_REQUEST_TIMEOUT_MS }
+    )
+    await client.notify("initialized")
+
+    const threadParams = appServerThreadParams({
+      model,
+      paths,
+      reasoningEffort,
+      speed,
+    })
+    if (codexThreadIdToResume) {
+      try {
+        const resumed = await client.request<
+          "thread/resume",
+          CodexAppServerThreadResponse
+        >(
+          "thread/resume",
+          { ...threadParams, threadId: codexThreadIdToResume },
+          {
+            signal: input.signal,
+            timeoutMs: CODEX_APP_SERVER_REQUEST_TIMEOUT_MS,
+          }
+        )
+        activeThreadId = resumed.thread?.id || codexThreadIdToResume
+        await emitLog(input, {
+          detail: activeThreadId,
+          kind: "setup",
+          message: "Resumed Codex thread",
+        })
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? compactLine(error.message)
+            : "Unable to resume Codex thread."
+        throw new Error(
+          `Codex app-server could not resume thread ${codexThreadIdToResume}. Refusing to start a fresh thread because fresh-thread recovery is disabled. ${message}`
+        )
+      }
+    } else {
+      const started = await client.request<
+        "thread/start",
+        CodexAppServerThreadResponse
+      >("thread/start", threadParams, {
+        signal: input.signal,
+        timeoutMs: CODEX_APP_SERVER_REQUEST_TIMEOUT_MS,
+      })
+      activeThreadId = started.thread?.id
+    }
+
+    if (!activeThreadId) {
+      throw new Error("Codex app-server did not return a thread id.")
+    }
+
+    const startedTurn = await client.request<
+      "turn/start",
+      CodexAppServerTurnResponse
+    >(
+      "turn/start",
+      appServerTurnParams({
+        model,
+        paths,
+        prompt,
+        reasoningEffort,
+        speed,
+        threadId: activeThreadId,
+      }),
+      { signal: input.signal, timeoutMs: CODEX_APP_SERVER_REQUEST_TIMEOUT_MS }
+    )
+    activeTurnId = startedTurn.turn?.id
+    const turnAlreadyCompleted =
+      startedTurn.turn?.status && startedTurn.turn.status !== "inProgress"
+        ? startedTurn.turn
+        : undefined
+
+    const abortTurn = () => {
+      if (!activeThreadId || !activeTurnId) return
+      void client
+        ?.request(
+          "turn/interrupt",
+          { threadId: activeThreadId, turnId: activeTurnId },
+          { timeoutMs: 5_000 }
+        )
+        .catch(() => undefined)
+    }
+    if (turnAlreadyCompleted) {
+      reducer.handleNotification({
+        method: "turn/completed",
+        params: { threadId: activeThreadId, turn: turnAlreadyCompleted },
+      })
+    } else {
+      input.signal?.addEventListener("abort", abortTurn, { once: true })
+      let removeAbortWait: (() => void) | undefined
+      let removeCloseWait: (() => void) | undefined
+      const abortWait = new Promise<never>((_, reject) => {
+        if (input.signal?.aborted) {
+          reject(new Error("Run was canceled."))
+          return
+        }
+        const onAbort = () => reject(new Error("Run was canceled."))
+        removeAbortWait = () =>
+          input.signal?.removeEventListener("abort", onAbort)
+        input.signal?.addEventListener("abort", onAbort, { once: true })
+      })
+      const closeWait = new Promise<never>((_, reject) => {
+        removeCloseWait = client?.onClose((error) => reject(error))
+      })
+      try {
+        await Promise.race([turnCompleted, abortWait, closeWait])
+      } finally {
+        input.signal?.removeEventListener("abort", abortTurn)
+        removeAbortWait?.()
+        removeCloseWait?.()
+      }
+    }
+
+    const summary = reducer.summary()
+    const log = readCodexAppServerLog(handle)
+    const exitCode = summary.status === "completed" ? 0 : 1
+
+    return {
+      codexThreadId: activeThreadId,
+      exitCode,
+      lastMessage: summary.finalAssistantText,
+      stderr: summary.status === "completed" ? "" : summary.turnError || "",
+      stdout: log,
+    }
+  } catch (error) {
+    const log = readCodexAppServerLog(handle)
+    const message =
+      error instanceof CodexAppServerError && error.code !== undefined
+        ? `${error.message} (${error.code})`
+        : error instanceof Error
+          ? error.message
+          : "Codex app-server run failed."
+    if (log.trim()) {
+      throw new Error(`${message}\n\n${log.trim()}`)
+    }
+    throw error
+  } finally {
+    await client?.close()
+    await handle?.stop()
+  }
 }
 
 function createSandboxTarget(
@@ -927,6 +881,75 @@ function createSandboxTarget(
     writeTextFile: (path, content) =>
       writeDaytonaTextFile(sandbox, path, content),
   }
+}
+
+async function collectRunDiffAndStatus({
+  exitCode,
+  gitAuth,
+  input,
+  paths,
+  sandbox,
+}: {
+  exitCode: number
+  gitAuth?: SandboxGitHubAuth | null
+  input: RunCodexInSandboxInput
+  paths: DaytonaSandboxPaths
+  sandbox: Sandbox
+}) {
+  const target = createSandboxTarget(sandbox, paths, input.signal)
+  return await withoutCloudcodeEnvLocal(
+    target,
+    {
+      legacyPresetEnvPath: CLOUDCODE_LEGACY_PRESET_ENV_PATH,
+      presetEnvPath: paths.presetEnvPath,
+      repoPath: paths.repoPath,
+    },
+    async () => {
+      const diff = (
+        await runDaytonaCommand(
+          sandbox,
+          [
+            "set -e",
+            `base_ref=$(cat ${shellQuote(paths.baseRefPath)} 2>/dev/null || true)`,
+            'if [ -z "$base_ref" ]; then',
+            `  base_ref=$(git -C ${shellQuote(paths.repoPath)} rev-parse --verify HEAD 2>/dev/null || git -C ${shellQuote(paths.repoPath)} hash-object -t tree /dev/null)`,
+            "fi",
+            `git -C ${shellQuote(paths.repoPath)} add -N . >/dev/null 2>&1 || true`,
+            `git -C ${shellQuote(paths.repoPath)} diff --binary "$base_ref"`,
+          ].join("\n"),
+          {
+            env: repoCommandEnv(paths, gitAuth?.env),
+            signal: input.signal,
+            timeoutMs: 60_000,
+          }
+        )
+      ).stdout
+      const [status] = await Promise.all([
+        runDaytonaCommand(
+          sandbox,
+          `git -C ${shellQuote(paths.repoPath)} status --short --branch`,
+          {
+            env: repoCommandEnv(paths, gitAuth?.env),
+            signal: input.signal,
+            timeoutMs: 60_000,
+          }
+        ).then((result) => result.stdout),
+        emitLog(input, {
+          kind: "command",
+          message: "git status --short --branch",
+        }),
+      ])
+      await emitLog(input, {
+        kind: "result",
+        message:
+          exitCode === 0
+            ? "Codex run completed"
+            : `Codex exited with code ${exitCode}`,
+      })
+
+      return { diff, status }
+    }
+  )
 }
 
 function secretExports(secrets: SandboxPresetEnvVar[]) {
@@ -1203,114 +1226,22 @@ async function connectOrCreateSandbox(input: RunCodexInSandboxInput) {
   }
 }
 
-async function readLastMessage(sandbox: Sandbox, paths: DaytonaSandboxPaths) {
-  try {
-    return (await readDaytonaTextFile(sandbox, paths.lastMessagePath)).trim()
-  } catch {
-    return ""
-  }
-}
-
-function markerSection(output: string, begin: string, end: string) {
-  const start = output.indexOf(begin)
-  if (start < 0) return ""
-  const contentStart = start + begin.length
-  const contentEnd = output.indexOf(end, contentStart)
-  if (contentEnd < 0) return ""
-
-  return output.slice(contentStart, contentEnd).replace(/^\r?\n/, "")
-}
-
-function codexCapabilitiesCacheCommand(
-  paths: DaytonaSandboxPaths,
-  includeResume: boolean
-) {
-  const cacheDir = `${paths.codexHome}/capabilities`
-  const versionPath = `${cacheDir}/codex-version`
-  const execHelpPath = `${cacheDir}/exec-help.txt`
-  const resumeHelpPath = `${cacheDir}/resume-help.txt`
-  const execTmpPath = `${cacheDir}/exec-help.tmp`
-  const resumeTmpPath = `${cacheDir}/resume-help.tmp`
-
-  return [
-    "set -e",
-    `mkdir -p ${shellQuote(cacheDir)}`,
-    `version="$(${shellQuote(paths.codexLauncherPath)} --version 2>/dev/null | head -1 || true)"`,
-    '[ -n "$version" ] || version="unknown"',
-    "refresh=0",
-    `[ -f ${shellQuote(versionPath)} ] && grep -qxF -- "$version" ${shellQuote(versionPath)} || refresh=1`,
-    `[ -s ${shellQuote(execHelpPath)} ] || refresh=1`,
-    includeResume ? `[ -s ${shellQuote(resumeHelpPath)} ] || refresh=1` : "",
-    'if [ "$refresh" = "1" ]; then',
-    `  if ! ${shellQuote(paths.codexLauncherPath)} exec --help > ${shellQuote(execTmpPath)} 2>/dev/null; then : > ${shellQuote(execTmpPath)}; fi`,
-    includeResume
-      ? `  if ! ${shellQuote(paths.codexLauncherPath)} exec resume --help > ${shellQuote(resumeTmpPath)} 2>/dev/null; then : > ${shellQuote(resumeTmpPath)}; fi`
-      : `  rm -f ${shellQuote(resumeTmpPath)} ${shellQuote(resumeHelpPath)}`,
-    `  mv ${shellQuote(execTmpPath)} ${shellQuote(execHelpPath)}`,
-    includeResume
-      ? `  mv ${shellQuote(resumeTmpPath)} ${shellQuote(resumeHelpPath)}`
-      : "",
-    `  printf '%s\\n' "$version" > ${shellQuote(versionPath)}`,
-    "fi",
-    `printf '%s\\n' ${shellQuote(CODEX_CAPABILITIES_EXEC_BEGIN)}`,
-    `cat ${shellQuote(execHelpPath)} 2>/dev/null || true`,
-    `printf '%s\\n' ${shellQuote(CODEX_CAPABILITIES_EXEC_END)}`,
-    `printf '%s\\n' ${shellQuote(CODEX_CAPABILITIES_RESUME_BEGIN)}`,
-    `cat ${shellQuote(resumeHelpPath)} 2>/dev/null || true`,
-    `printf '%s\\n' ${shellQuote(CODEX_CAPABILITIES_RESUME_END)}`,
-  ]
-    .filter(Boolean)
-    .join("\n")
-}
-
-async function getCodexCliCapabilities({
-  includeResume,
-  paths,
-  sandbox,
-}: {
-  includeResume: boolean
-  paths: DaytonaSandboxPaths
-  sandbox: Sandbox
-}): Promise<CodexCliCapabilities> {
-  try {
-    const result = await runDaytonaCommand(
-      sandbox,
-      codexCapabilitiesCacheCommand(paths, includeResume),
-      {
-        cwd: paths.home,
-        env: codexShellEnv(paths),
-        timeoutMs: CODEX_CAPABILITIES_TIMEOUT_MS,
-      }
-    )
-
-    if (result.exitCode !== 0) return { execHelp: "", resumeHelp: "" }
-
-    return {
-      execHelp: markerSection(
-        result.stdout,
-        CODEX_CAPABILITIES_EXEC_BEGIN,
-        CODEX_CAPABILITIES_EXEC_END
-      ),
-      resumeHelp: markerSection(
-        result.stdout,
-        CODEX_CAPABILITIES_RESUME_BEGIN,
-        CODEX_CAPABILITIES_RESUME_END
-      ),
-    }
-  } catch {
-    return { execHelp: "", resumeHelp: "" }
-  }
-}
-
 async function isCodexLauncherReady(
   sandbox: Sandbox,
   paths: DaytonaSandboxPaths,
   signal?: AbortSignal
 ) {
   try {
+    const desiredVersion = desiredCodexCliVersion()
+    const versionCheck =
+      desiredVersion === "latest"
+        ? "true"
+        : `[ "$(${shellQuote(paths.codexLauncherPath)} --version 2>/dev/null || true)" = ${shellQuote(
+            codexCliVersionOutput(desiredVersion)
+          )} ]`
     const result = await runDaytonaCommand(
       sandbox,
-      `test -x ${shellQuote(paths.codexLauncherPath)}`,
+      `test -x ${shellQuote(paths.codexLauncherPath)} && ${versionCheck}`,
       { signal, timeoutMs: 10_000 }
     )
     return result.exitCode === 0
@@ -1329,14 +1260,23 @@ async function updateCodexCli(
     message: "Preparing Codex CLI",
   })
 
+  const desiredVersion = desiredCodexCliVersion()
+  const packageName = codexCliPackageName(desiredVersion)
+  const versionReady =
+    desiredVersion === "latest"
+      ? "command -v codex >/dev/null 2>&1"
+      : `current="$(codex --version 2>/dev/null || true)"; [ "$current" = ${shellQuote(
+          codexCliVersionOutput(desiredVersion)
+        )} ]`
+
   const updateCommand = [
     "set -e",
-    "if command -v codex >/dev/null 2>&1; then",
+    `if command -v codex >/dev/null 2>&1 && ${versionReady}; then`,
     "  true",
     "elif command -v npm >/dev/null 2>&1; then",
-    "  npm install -g @openai/codex@latest",
+    `  npm install -g --force ${shellQuote(packageName)}`,
     "elif command -v bun >/dev/null 2>&1; then",
-    "  bun install -g @openai/codex@latest",
+    `  bun install -g ${shellQuote(packageName)}`,
     "else",
     "  echo 'Install Node.js/npm, Bun, or the Codex CLI in the selected Daytona snapshot.' >&2",
     "  exit 1",
@@ -1351,9 +1291,15 @@ async function updateCodexCli(
   ].join("\n")
 
   await emitLog(input, {
-    detail: "runs once when this app thread initializes its Daytona sandbox",
+    detail:
+      desiredVersion === "latest"
+        ? "runs once when this app thread initializes its Daytona sandbox"
+        : `requires codex-cli ${desiredVersion}`,
     kind: "command",
-    message: "use preinstalled codex or install @openai/codex when needed",
+    message:
+      desiredVersion === "latest"
+        ? "use preinstalled codex or install @openai/codex when needed"
+        : `use preinstalled codex or install ${packageName} when needed`,
   })
 
   const result = await runDaytonaCommand(sandbox, updateCommand, {
@@ -2078,10 +2024,6 @@ async function prepareExistingRepoForFreshRun({
   return await createDefaultBranch(sandbox, input, paths, branchName)
 }
 
-function helpIncludes(help: string, flag: string) {
-  return help.includes(flag)
-}
-
 function isAutoEnvironmentRun(input: RunCodexInSandboxInput) {
   return input.sandboxPreset?.mode === "auto"
 }
@@ -2253,16 +2195,8 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       message: `Sandbox resources: ${sandbox.cpu} CPU, ${sandbox.memory} GB RAM`,
     })
 
-    const codexThreadIdToResume = !recoveredSandbox
-      ? existingCodexThreadId
-      : undefined
-    const shouldRestoreConversation = Boolean(
-      existingCodexThreadId && !codexThreadIdToResume
-    )
-    const taskPrompt =
-      shouldRestoreConversation && input.resumeContext?.trim()
-        ? restoredConversationPrompt(input.resumeContext, input.prompt)
-        : input.prompt
+    const codexThreadIdToResume = existingCodexThreadId
+    const taskPrompt = input.prompt
     const sharedNotesEnabled = Boolean(
       input.convexUrl && input.notesAccessToken && input.runId && input.threadId
     )
@@ -2271,9 +2205,11 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       sharedNotesEnabled ? cloudcodeContextAgentContext() : undefined,
       daytonaDesktopAgentContext(),
     ].filter((value): value is string => Boolean(value))
-    const prompt = contextBlocks.length
-      ? [...contextBlocks, "Current user request:", taskPrompt].join("\n\n")
-      : taskPrompt
+    const promptForTask = (task: string) =>
+      contextBlocks.length
+        ? [...contextBlocks, "Current user request:", task].join("\n\n")
+        : task
+    const prompt = promptForTask(taskPrompt)
     const contextConfig = cloudcodeContextCodexConfig({
       convexUrl: input.convexUrl,
       notesAccessToken: input.notesAccessToken,
@@ -2388,11 +2324,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       }
     }
 
-    const { execHelp: help, resumeHelp } = await prepareSandboxRuntime(
-      sandbox,
-      input,
-      paths
-    )
+    await prepareSandboxRuntime(sandbox, input, paths)
       .then(() => runLiveCloudcodeYamlSetup(sandbox, input, paths, gitAuth))
       .then(() =>
         contextConfig
@@ -2409,261 +2341,68 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       )
       .then(() => runPathInstallScript(sandbox, input, paths, gitAuth))
       .then(() => runPresetInstallScript(sandbox, input, paths, gitAuth))
-      .then(() =>
+
+    {
+      const appServerResult = await runCodexViaAppServer({
+        codexThreadIdToResume,
+        gitAuth,
+        input,
+        model,
+        paths,
+        prompt,
+        reasoningEffort,
+        sandbox,
+        speed,
+      })
+      await stopDesktopAgentRecording()
+
+      const [, runArtifacts] = await Promise.all([
         Promise.all([
-          getCodexCliCapabilities({
-            includeResume: Boolean(codexThreadIdToResume),
-            paths,
-            sandbox,
-          }),
           emitLog(input, {
-            kind: "setup",
-            message: "Reading Codex CLI capabilities",
+            detail: String(appServerResult.exitCode),
+            kind: appServerResult.exitCode === 0 ? "setup" : "stderr",
+            message: `Codex exited with code ${appServerResult.exitCode}`,
           }),
-        ]).then(([capabilities]) => capabilities)
-      )
-    const modelFlag =
-      model && (helpIncludes(help, "--model") || helpIncludes(help, "-m,"))
-        ? `--model ${shellQuote(model)}`
-        : ""
-    const resumeModelFlag =
-      model &&
-      resumeHelp &&
-      (helpIncludes(resumeHelp, "--model") || helpIncludes(resumeHelp, "-m,"))
-        ? `--model ${shellQuote(model)}`
-        : ""
-    const configFlags = [
-      reasoningEffort && helpIncludes(help, "--config")
-        ? `-c ${shellQuote(`model_reasoning_effort="${reasoningEffort}"`)}`
-        : "",
-      speed === "fast" && helpIncludes(help, "--config")
-        ? `-c ${shellQuote('service_tier="fast"')}`
-        : "",
-    ]
-      .filter(Boolean)
-      .join(" ")
-    const resumeConfigFlags = [
-      reasoningEffort && helpIncludes(resumeHelp, "--config")
-        ? `-c ${shellQuote(`model_reasoning_effort="${reasoningEffort}"`)}`
-        : "",
-      speed === "fast" && helpIncludes(resumeHelp, "--config")
-        ? `-c ${shellQuote('service_tier="fast"')}`
-        : "",
-    ]
-      .filter(Boolean)
-      .join(" ")
-    const optionalFlags = [
-      helpIncludes(help, "--dangerously-bypass-approvals-and-sandbox")
-        ? "--dangerously-bypass-approvals-and-sandbox"
-        : "",
-      !helpIncludes(help, "--dangerously-bypass-approvals-and-sandbox") &&
-      helpIncludes(help, "--sandbox")
-        ? "--sandbox danger-full-access"
-        : "",
-      helpIncludes(help, "--full-auto") ? "--full-auto" : "",
-      helpIncludes(help, "--skip-git-repo-check")
-        ? "--skip-git-repo-check"
-        : "",
-      helpIncludes(help, "--ignore-rules") ? "--ignore-rules" : "",
-      helpIncludes(help, "--json") ? "--json" : "",
-    ]
-      .filter(Boolean)
-      .join(" ")
-    const resumeOptionalFlags = [
-      helpIncludes(resumeHelp, "--dangerously-bypass-approvals-and-sandbox")
-        ? "--dangerously-bypass-approvals-and-sandbox"
-        : "",
-      helpIncludes(resumeHelp, "--full-auto") ? "--full-auto" : "",
-      helpIncludes(resumeHelp, "--skip-git-repo-check")
-        ? "--skip-git-repo-check"
-        : "",
-      helpIncludes(resumeHelp, "--ignore-rules") ? "--ignore-rules" : "",
-      helpIncludes(resumeHelp, "--json") ? "--json" : "",
-    ]
-      .filter(Boolean)
-      .join(" ")
-    const outputFlag = helpIncludes(help, "--output-last-message")
-      ? `--output-last-message ${shellQuote(paths.lastMessagePath)}`
-      : ""
-    const resumeOutputFlag = helpIncludes(resumeHelp, "--output-last-message")
-      ? `--output-last-message ${shellQuote(paths.lastMessagePath)}`
-      : ""
-    const cdFlag =
-      helpIncludes(help, "--cd") || helpIncludes(help, "-C,")
-        ? `-C ${shellQuote(paths.repoPath)}`
-        : ""
-    const cdCommand = cdFlag ? "" : `cd ${shellQuote(paths.repoPath)} &&`
-    const sandboxPath = daytonaCodexPath(paths)
-    const codexCommand = codexThreadIdToResume
-      ? [
-          `cd ${shellQuote(paths.repoPath)} &&`,
-          `HOME=${shellQuote(paths.runtimeHome)}`,
-          `CODEX_HOME=${shellQuote(paths.codexHome)}`,
-          `MISE_TRUSTED_CONFIG_PATHS=${shellQuote(paths.repoPath)}`,
-          "BASH_ENV=/dev/null",
-          "SHELL=/bin/bash",
-          `${shellQuote(paths.codexLauncherPath)} exec resume`,
-          resumeOptionalFlags,
-          resumeConfigFlags,
-          resumeModelFlag,
-          resumeOutputFlag,
-          shellQuote(codexThreadIdToResume),
-          "-",
-          `< ${shellQuote(paths.promptPath)}`,
-        ]
-          .filter(Boolean)
-          .join(" ")
-      : [
-          cdCommand,
-          `HOME=${shellQuote(paths.runtimeHome)}`,
-          `CODEX_HOME=${shellQuote(paths.codexHome)}`,
-          `MISE_TRUSTED_CONFIG_PATHS=${shellQuote(paths.repoPath)}`,
-          "BASH_ENV=/dev/null",
-          "SHELL=/bin/bash",
-          `${shellQuote(paths.codexLauncherPath)} exec`,
-          optionalFlags,
-          configFlags,
-          modelFlag,
-          outputFlag,
-          cdFlag,
-          `< ${shellQuote(paths.promptPath)}`,
-        ]
-          .filter(Boolean)
-          .join(" ")
-    const command = [
-      "set +e",
-      `[ -f ${shellQuote(paths.presetEnvPath)} ] && . ${shellQuote(
-        paths.presetEnvPath
-      )}`,
-      `export PATH=${shellQuote(sandboxPath)}`,
-      `export MISE_TRUSTED_CONFIG_PATHS=${shellQuote(paths.repoPath)}`,
-      codexCommand,
-      "code=$?",
-      `printf '\\n${EXIT_MARKER}%s\\n' "$code"`,
-      "exit 0",
-    ].join("\n")
-
-    await emitLog(input, {
-      kind: "command",
-      message: compactLine(codexCommand),
-    })
-    let codexThreadId = codexThreadIdToResume
-    const stdoutLogger = createStdoutLogger(
-      input.onLog,
-      input.onContentDelta,
-      (threadId) => {
-        codexThreadId = threadId
-      }
-    )
-    const result = redactAuthPathOutput(
-      await runDaytonaCommand(sandbox, command, {
-        cwd: paths.home,
-        env: codexShellEnv(paths, input.sandboxPreset?.secrets, gitAuth?.env),
-        onStderr: (data) => {
-          const trimmed = compactLine(data)
-          if (trimmed) void input.onLog?.({ kind: "stderr", message: trimmed })
-        },
-        onStdout: (data) => stdoutLogger.chunk(data),
-        signal: input.signal,
-      }),
-      paths
-    )
-    stdoutLogger.flush()
-    await stopDesktopAgentRecording()
-
-    const [, runArtifacts] = await Promise.all([
-      Promise.all([
-        emitLog(input, {
-          detail: String(result.exitCode),
-          kind: result.exitCode === 0 ? "setup" : "stderr",
-          message: `Codex exited with code ${result.exitCode}`,
-        }),
-        emitLog(input, {
-          kind: "command",
-          message: "git diff --binary base",
-        }),
-      ]),
-      Promise.all([
-        readLastMessage(sandbox, paths),
-        readDaytonaTextFile(sandbox, `${paths.codexHome}/auth.json`),
-      ]).then(async ([lastMessage, updatedAuthJson]) => {
-        await cleanupRunFiles(sandbox, paths, input.signal)
-        await writeCodexAuthMarker(sandbox, paths, updatedAuthJson)
-        return { lastMessage, updatedAuthJson }
-      }),
-    ])
-    const { lastMessage, updatedAuthJson } = runArtifacts
-
-    const target = createSandboxTarget(sandbox, paths, input.signal)
-    const { diff, status } = await withoutCloudcodeEnvLocal(
-      target,
-      {
-        legacyPresetEnvPath: CLOUDCODE_LEGACY_PRESET_ENV_PATH,
-        presetEnvPath: paths.presetEnvPath,
-        repoPath: paths.repoPath,
-      },
-      async () => {
-        const diff = (
-          await runDaytonaCommand(
-            sandbox,
-            [
-              "set -e",
-              `base_ref=$(cat ${shellQuote(paths.baseRefPath)} 2>/dev/null || true)`,
-              'if [ -z "$base_ref" ]; then',
-              `  base_ref=$(git -C ${shellQuote(paths.repoPath)} rev-parse --verify HEAD 2>/dev/null || git -C ${shellQuote(paths.repoPath)} hash-object -t tree /dev/null)`,
-              "fi",
-              `git -C ${shellQuote(paths.repoPath)} add -N . >/dev/null 2>&1 || true`,
-              `git -C ${shellQuote(paths.repoPath)} diff --binary "$base_ref"`,
-            ].join("\n"),
-            {
-              env: repoCommandEnv(paths, gitAuth?.env),
-              signal: input.signal,
-              timeoutMs: 60_000,
-            }
-          )
-        ).stdout
-        const [status] = await Promise.all([
-          runDaytonaCommand(
-            sandbox,
-            `git -C ${shellQuote(paths.repoPath)} status --short --branch`,
-            {
-              env: repoCommandEnv(paths, gitAuth?.env),
-              signal: input.signal,
-              timeoutMs: 60_000,
-            }
-          ).then((result) => result.stdout),
           emitLog(input, {
             kind: "command",
-            message: "git status --short --branch",
+            message: "git diff --binary base",
           }),
-        ])
-        await emitLog(input, {
-          kind: "result",
-          message:
-            result.exitCode === 0
-              ? "Codex run completed"
-              : `Codex exited with code ${result.exitCode}`,
-        })
+        ]),
+        readDaytonaTextFile(sandbox, `${paths.codexHome}/auth.json`).then(
+          async (updatedAuthJson) => {
+            await cleanupRunFiles(sandbox, paths, input.signal)
+            await writeCodexAuthMarker(sandbox, paths, updatedAuthJson)
+            return { updatedAuthJson }
+          }
+        ),
+      ])
+      const { updatedAuthJson } = runArtifacts
 
-        return { diff, status }
-      }
-    )
+      const { diff, status } = await collectRunDiffAndStatus({
+        exitCode: appServerResult.exitCode,
+        gitAuth,
+        input,
+        paths,
+        sandbox,
+      })
 
-    return {
-      branchName,
-      codexThreadId,
-      desktopRecording,
-      diff,
-      exitCode: result.exitCode,
-      lastMessage,
-      repoUrl,
-      sandboxId: sandbox.id,
-      stderr: result.stderr,
-      status,
-      stdout: result.stdout,
-      updatedAuthJson,
-      recoveredSandbox,
-    } satisfies RunCodexInSandboxResult
+      return {
+        branchName,
+        codexThreadId: appServerResult.codexThreadId,
+        desktopRecording,
+        diff,
+        exitCode: appServerResult.exitCode,
+        lastMessage: appServerResult.lastMessage,
+        lastMessageAuthoritative: true,
+        repoUrl,
+        sandboxId: sandbox.id,
+        stderr: appServerResult.stderr,
+        status,
+        stdout: appServerResult.stdout,
+        updatedAuthJson,
+        recoveredSandbox,
+      } satisfies RunCodexInSandboxResult
+    }
   } finally {
     stopDaytonaActivityHeartbeat?.()
     await stopDesktopAgentRecording()

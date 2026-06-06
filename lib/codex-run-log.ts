@@ -158,3 +158,11 @@ export function stripInlineToolMarkers(content: string) {
   CODEX_TOOL_MARKER_REGEX.lastIndex = 0
   return content.replace(CODEX_TOOL_MARKER_REGEX, "").trim()
 }
+
+export function extractInlineToolMarkers(content: string) {
+  CODEX_TOOL_MARKER_REGEX.lastIndex = 0
+  return Array.from(
+    content.matchAll(CODEX_TOOL_MARKER_REGEX),
+    (match) => match[0]
+  )
+}

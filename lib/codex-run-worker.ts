@@ -11,7 +11,10 @@ import type {
   RunCodexInSandboxResult,
   RunCodexLog,
 } from "@/lib/daytona-codex-agent"
-import { stripInlineToolMarkers } from "@/lib/codex-run-log"
+import {
+  extractInlineToolMarkers,
+  stripInlineToolMarkers,
+} from "@/lib/codex-run-log"
 import type { SandboxPresetForRun } from "@/lib/sandbox-presets"
 import { decryptSecret } from "@/lib/secret-crypto"
 
@@ -292,6 +295,10 @@ export function workerRunFinalContent(
     return `${trimmed || "(no output)"}\n\nVideo:\n${videoPath}`
   }
 
+  if (result.lastMessageAuthoritative && lastMessage) {
+    return withVideo(authoritativeLastMessageContent(streamed, lastMessage))
+  }
+
   if (streamed && stripInlineToolMarkers(streamed)) {
     return withVideo(streamed)
   }
@@ -307,4 +314,16 @@ export function workerRunFinalContent(
       result.stderr.trim() ||
       "(no output)"
   )
+}
+
+function authoritativeLastMessageContent(
+  streamed: string,
+  lastMessage: string
+) {
+  const markers = extractInlineToolMarkers(streamed)
+  if (markers.length === 0) return lastMessage
+
+  if (stripInlineToolMarkers(streamed) === lastMessage) return streamed
+
+  return `${markers.join("")}${lastMessage}`.trim()
 }
