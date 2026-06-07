@@ -17,7 +17,7 @@ const snapshot = await daytona.snapshot.create(
     resources: {
       cpu: 2,
       memory: 4,
-      disk: 10,
+      disk: 8,
     },
   },
   {

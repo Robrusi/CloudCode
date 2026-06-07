@@ -12,7 +12,7 @@ import {
   type FileDiffMetadata,
   type FileDiffOptions,
 } from "@pierre/diffs"
-import { ImageIcon, Loader2, X } from "lucide-react"
+import { ImageIcon, Loader2, RefreshCw, X } from "lucide-react"
 import NextImage from "next/image"
 import { useTheme } from "next-themes"
 import {
@@ -226,6 +226,7 @@ export function FileEditorPanel({
   // Panel width persists across mounts so the user's preferred size sticks
   // when they switch files.
   const [width, setWidth] = useState<number>(DEFAULT_PANEL_WIDTH)
+  const [refreshNonce, setRefreshNonce] = useState(0)
   const dragStartRef = useRef<{ x: number; w: number } | null>(null)
 
   function handleResizeStart(e: ReactMouseEvent<HTMLButtonElement>) {
@@ -314,6 +315,7 @@ export function FileEditorPanel({
             key={`${sandboxId}:${activePath}`}
             sandboxId={sandboxId}
             path={activePath}
+            refreshNonce={refreshNonce}
           />
         ) : null}
         <SegmentedControl<FileViewMode>
@@ -341,6 +343,14 @@ export function FileEditorPanel({
           </span>
         ) : null}
         <IconButton
+          onClick={() => setRefreshNonce((value) => value + 1)}
+          aria-label="Refresh file"
+          title="Refresh file"
+          disabled={!sandboxId || mode === "diff"}
+        >
+          <RefreshCw className="size-3.5" />
+        </IconButton>
+        <IconButton
           onClick={onClose}
           aria-label="Close file"
           className="-mr-[7px]"
@@ -359,6 +369,7 @@ export function FileEditorPanel({
           diffKey={activeDiffKey}
           mode={mode}
           onOpenFile={onOpenFile}
+          refreshNonce={refreshNonce}
           sandboxId={sandboxId}
           path={activePath}
         />
@@ -373,6 +384,7 @@ function FileViewer({
   diffKey,
   mode,
   onOpenFile,
+  refreshNonce,
   sandboxId,
   path,
 }: {
@@ -381,6 +393,7 @@ function FileViewer({
   diffKey: string
   mode: FileViewMode
   onOpenFile?: (path: string) => void
+  refreshNonce: number
   sandboxId: string | null
   path: string
 }) {
@@ -389,6 +402,7 @@ function FileViewer({
   const [content, setContent] = useState<string | null>(null)
   const [loading, setLoading] = useState(!imagePreview)
   const [error, setError] = useState<string | null>(null)
+  const handledRefreshNonceRef = useRef(refreshNonce)
 
   const { resolvedTheme } = useTheme()
   const themeType: ThemeTypes = resolvedTheme === "dark" ? "dark" : "light"
@@ -399,9 +413,19 @@ function FileViewer({
     }
     let cancelled = false
     void (async () => {
-      const cached = cacheScope
-        ? await readCachedTextFile(cacheScope, path)
-        : null
+      const forceFresh = refreshNonce !== handledRefreshNonceRef.current
+      if (forceFresh) {
+        handledRefreshNonceRef.current = refreshNonce
+      }
+      if (forceFresh) {
+        setLoading(true)
+        setError(null)
+      }
+
+      const cached =
+        !forceFresh && cacheScope
+          ? await readCachedTextFile(cacheScope, path)
+          : null
       if (cancelled) return
 
       if (cached) {
@@ -443,7 +467,9 @@ function FileViewer({
 
       const changedInCurrentDiff = Boolean(fileDiff)
       const cacheIsCurrent =
-        cached && (!changedInCurrentDiff || cached.diffKey === diffKey)
+        cached &&
+        !forceFresh &&
+        (!changedInCurrentDiff || cached.diffKey === diffKey)
       if (cacheIsCurrent) return
 
       if (!sandboxId) {
@@ -457,6 +483,7 @@ function FileViewer({
       try {
         const fresh = await fetchSandboxTextFileIntoCache({
           diffKey,
+          force: forceFresh,
           path,
           sandboxId,
           scope: cacheScope ?? `sandbox:${sandboxId}`,
@@ -475,7 +502,16 @@ function FileViewer({
     return () => {
       cancelled = true
     }
-  }, [cacheScope, diffKey, fileDiff, imagePreview, mode, sandboxId, path])
+  }, [
+    cacheScope,
+    diffKey,
+    fileDiff,
+    imagePreview,
+    mode,
+    refreshNonce,
+    sandboxId,
+    path,
+  ])
 
   const language = useMemo(() => getPierreLanguageFromPath(path), [path])
 
@@ -561,7 +597,13 @@ function FileViewer({
       )
     }
 
-    return <ImageViewer sandboxId={sandboxId} path={path} />
+    return (
+      <ImageViewer
+        sandboxId={sandboxId}
+        path={path}
+        refreshNonce={refreshNonce}
+      />
+    )
   }
 
   if (mode === "diff") {
@@ -657,9 +699,11 @@ function FileViewer({
 function ImageDimensionsLabel({
   sandboxId,
   path,
+  refreshNonce,
 }: {
   sandboxId: string | null
   path: string
+  refreshNonce: number
 }) {
   const [dimensions, setDimensions] = useState<{
     width: number
@@ -668,6 +712,7 @@ function ImageDimensionsLabel({
 
   useEffect(() => {
     let cancelled = false
+    setDimensions(null)
     const image = new window.Image()
     image.onload = () => {
       if (cancelled) return
@@ -682,6 +727,7 @@ function ImageDimensionsLabel({
     const params = new URLSearchParams({
       path,
       format: "raw",
+      refresh: String(refreshNonce),
       ...(sandboxId ? { sandboxId } : {}),
     })
     image.src = `/api/sandbox/files/read?${params}`
@@ -691,7 +737,7 @@ function ImageDimensionsLabel({
       image.onload = null
       image.onerror = null
     }
-  }, [path, sandboxId])
+  }, [path, refreshNonce, sandboxId])
 
   if (!dimensions) return null
 
@@ -705,9 +751,11 @@ function ImageDimensionsLabel({
 function ImageViewer({
   sandboxId,
   path,
+  refreshNonce,
 }: {
   sandboxId: string | null
   path: string
+  refreshNonce: number
 }) {
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState(false)
@@ -716,10 +764,16 @@ function ImageViewer({
     const params = new URLSearchParams({
       path,
       format: "raw",
+      refresh: String(refreshNonce),
       ...(sandboxId ? { sandboxId } : {}),
     })
     return `/api/sandbox/files/read?${params}`
-  }, [path, sandboxId])
+  }, [path, refreshNonce, sandboxId])
+
+  useEffect(() => {
+    setLoaded(false)
+    setError(false)
+  }, [src])
 
   if (error) {
     return (

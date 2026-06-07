@@ -5,7 +5,7 @@ import type {
   FileTreeRowDecorationRenderer,
   GitStatusEntry,
 } from "@pierre/trees"
-import { Columns2, Loader2, Rows2, X } from "lucide-react"
+import { Columns2, Loader2, RefreshCw, Rows2, X } from "lucide-react"
 import { useTheme } from "next-themes"
 import {
   type CSSProperties,
@@ -341,61 +341,64 @@ export function FileBrowser({
     })
   }, [activeMode, activePath, model, view])
 
-  const fetchList = useCallback(async () => {
-    if (!sandboxId) return
-    const sourceKey = cacheScope ?? `sandbox:${sandboxId}`
-    let cached = fileListCache.get(sourceKey)
-    if (!cached && cacheScope) {
-      const stored = await readCachedFileList(cacheScope)
-      if (stored) {
-        cached = {
-          entries: stored.entries,
-          truncated: stored.truncated,
+  const fetchList = useCallback(
+    async ({ force = false } = {}) => {
+      if (!sandboxId) return
+      const sourceKey = cacheScope ?? `sandbox:${sandboxId}`
+      let cached = force ? undefined : fileListCache.get(sourceKey)
+      if (!force && !cached && cacheScope) {
+        const stored = await readCachedFileList(cacheScope)
+        if (stored) {
+          cached = {
+            entries: stored.entries,
+            truncated: stored.truncated,
+          }
+          fileListCache.set(sourceKey, cached)
         }
-        fileListCache.set(sourceKey, cached)
       }
-    }
-    if (cached) {
-      setEntries(cached.entries)
-      setTruncated(cached.truncated)
-    }
-    setLoading(!cached)
-    setError(null)
-    try {
-      const res = await fetch(
-        `/api/sandbox/files/list?${new URLSearchParams({
-          sandboxId,
-        })}`,
-        { cache: "no-store" }
-      )
-      const data: ListResponse = await res.json()
-      if (!res.ok) {
-        throw new Error(data.error ?? `Request failed (${res.status})`)
+      if (cached) {
+        setEntries(cached.entries)
+        setTruncated(cached.truncated)
       }
-      const nextEntries = data.entries ?? []
-      const nextTruncated = Boolean(data.truncated)
-      fileListCache.set(sourceKey, {
-        entries: nextEntries,
-        truncated: nextTruncated,
-      })
-      if (cacheScope) {
-        void writeCachedFileList(cacheScope, {
+      setLoading(force || !cached)
+      setError(null)
+      try {
+        const res = await fetch(
+          `/api/sandbox/files/list?${new URLSearchParams({
+            sandboxId,
+          })}`,
+          { cache: "no-store" }
+        )
+        const data: ListResponse = await res.json()
+        if (!res.ok) {
+          throw new Error(data.error ?? `Request failed (${res.status})`)
+        }
+        const nextEntries = data.entries ?? []
+        const nextTruncated = Boolean(data.truncated)
+        fileListCache.set(sourceKey, {
           entries: nextEntries,
-          sandboxId,
           truncated: nextTruncated,
         })
+        if (cacheScope) {
+          void writeCachedFileList(cacheScope, {
+            entries: nextEntries,
+            sandboxId,
+            truncated: nextTruncated,
+          })
+        }
+        setEntries(nextEntries)
+        setTruncated(nextTruncated)
+      } catch (err) {
+        if (!cached) {
+          setError(err instanceof Error ? err.message : "Failed to load files")
+          setEntries((current) => (force && current.length > 0 ? current : []))
+        }
+      } finally {
+        setLoading(false)
       }
-      setEntries(nextEntries)
-      setTruncated(nextTruncated)
-    } catch (err) {
-      if (!cached) {
-        setError(err instanceof Error ? err.message : "Failed to load files")
-        setEntries([])
-      }
-    } finally {
-      setLoading(false)
-    }
-  }, [cacheScope, sandboxId])
+    },
+    [cacheScope, sandboxId]
+  )
 
   useEffect(() => {
     if (!open || !cacheScope) return
@@ -447,35 +450,43 @@ export function FileBrowser({
         {loading ? (
           <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
         ) : null}
-        {view === "diffs" && diffStyle && onDiffStyleChange ? (
-          <SegmentedControl<"unified" | "split">
-            value={diffStyle}
-            onChange={onDiffStyleChange}
-            label="Diff style"
-            className="ml-auto hidden md:inline-flex"
-            options={[
-              {
-                value: "unified",
-                ariaLabel: "Unified",
-                title: "Unified",
-                icon: <Rows2 className="size-3.5" strokeWidth={2} />,
-              },
-              {
-                value: "split",
-                ariaLabel: "Split",
-                title: "Split",
-                icon: <Columns2 className="size-3.5" strokeWidth={2} />,
-              },
-            ]}
-          />
-        ) : null}
-        <IconButton
-          onClick={onClose}
-          aria-label="Close file browser"
-          className="ml-auto"
-        >
-          <X />
-        </IconButton>
+        <div className="ml-auto flex items-center gap-1">
+          {view === "diffs" && diffStyle && onDiffStyleChange ? (
+            <SegmentedControl<"unified" | "split">
+              value={diffStyle}
+              onChange={onDiffStyleChange}
+              label="Diff style"
+              className="hidden md:inline-flex"
+              options={[
+                {
+                  value: "unified",
+                  ariaLabel: "Unified",
+                  title: "Unified",
+                  icon: <Rows2 className="size-3.5" strokeWidth={2} />,
+                },
+                {
+                  value: "split",
+                  ariaLabel: "Split",
+                  title: "Split",
+                  icon: <Columns2 className="size-3.5" strokeWidth={2} />,
+                },
+              ]}
+            />
+          ) : null}
+          {view === "files" ? (
+            <IconButton
+              onClick={() => void fetchList({ force: true })}
+              aria-label="Refresh files"
+              title="Refresh files"
+              disabled={!sandboxId || loading}
+            >
+              <RefreshCw className="size-3.5" />
+            </IconButton>
+          ) : null}
+          <IconButton onClick={onClose} aria-label="Close file browser">
+            <X />
+          </IconButton>
+        </div>
       </header>
 
       <div className="flex h-[3.25rem] shrink-0 items-stretch border-b border-border/60">
@@ -510,13 +521,17 @@ export function FileBrowser({
           <EmptyState
             message={error}
             actionLabel="Retry"
-            onAction={fetchList}
+            onAction={() => void fetchList({ force: true })}
           />
         ) : filePaths.length === 0 && !loading ? (
           <EmptyState
             message={view === "diffs" ? "No changed files." : "No files yet."}
             actionLabel={view === "diffs" ? undefined : "Refresh"}
-            onAction={view === "diffs" ? undefined : fetchList}
+            onAction={
+              view === "diffs"
+                ? undefined
+                : () => void fetchList({ force: true })
+            }
           />
         ) : (
           <FileTreeWrapper model={model} />

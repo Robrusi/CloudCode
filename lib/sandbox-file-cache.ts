@@ -172,19 +172,25 @@ export async function writeCachedTextFile(
 
 export async function fetchSandboxTextFileIntoCache({
   diffKey,
+  force = false,
   path,
   sandboxId,
   scope,
 }: {
   diffKey?: string
+  force?: boolean
   path: string
   sandboxId: string
   scope: string
 }) {
   const cached = await readCachedTextFile(scope, path)
-  if (cached && (!diffKey || cached.diffKey === diffKey)) return cached
+  if (!force && cached && (!diffKey || cached.diffKey === diffKey)) {
+    return cached
+  }
 
-  const key = `${scope}\0${path}\0${sandboxId}\0${diffKey ?? ""}`
+  const key = `${scope}\0${path}\0${sandboxId}\0${diffKey ?? ""}\0${
+    force ? "force" : "cached"
+  }`
   const inFlight = inFlightFileFetches.get(key)
   if (inFlight) return await inFlight
 

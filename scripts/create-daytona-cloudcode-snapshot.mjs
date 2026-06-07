@@ -443,7 +443,7 @@ const createParams = {
     ),
     disk: intEnv(
       "DAYTONA_CLOUDCODE_SNAPSHOT_DISK",
-      intEnv("DAYTONA_SANDBOX_DISK", 6)
+      intEnv("DAYTONA_SANDBOX_DISK", 8)
     ),
     memory: intEnv(
       "DAYTONA_CLOUDCODE_SNAPSHOT_MEMORY",

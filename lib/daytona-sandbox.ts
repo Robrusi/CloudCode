@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import { Daytona, type Sandbox } from "@daytona/sdk"
 
 const DAYTONA_TERMINAL_PORT = 22222
+const DEFAULT_SSH_ACCESS_MINUTES = 60
 const DEFAULT_DAYTONA_HOME =
   process.env.DAYTONA_SANDBOX_HOME?.trim() || "/home/daytona"
 
@@ -11,7 +12,7 @@ const DEFAULT_AUTO_ARCHIVE_MINUTES = 7 * 24 * 60
 const DEFAULT_AUTO_DELETE_MINUTES = 30 * 24 * 60
 const DEFAULT_CREATE_TIMEOUT_SECONDS = 480
 const DEFAULT_SANDBOX_CPU = 2
-const DEFAULT_SANDBOX_DISK = 6
+const DEFAULT_SANDBOX_DISK = 8
 const DEFAULT_SANDBOX_MEMORY = 4
 const DEFAULT_DAYTONA_SNAPSHOT = "cloudcode-batteries-included"
 const DEFAULT_DAYTONA_IMAGE = "daytonaio/sandbox:0.8.0"
@@ -772,4 +773,30 @@ export async function getDaytonaTerminalUrl(sandboxId: string) {
   const sandbox = await getStartedDaytonaSandbox(sandboxId)
   const signed = await sandbox.getSignedPreviewUrl(DAYTONA_TERMINAL_PORT, 3600)
   return signed.url
+}
+
+export type DaytonaSshAccess = {
+  accessId: string
+  token: string
+  sshCommand: string
+  expiresAt: string
+}
+
+export async function createDaytonaSshAccess(
+  sandboxId: string,
+  expiresInMinutes = DEFAULT_SSH_ACCESS_MINUTES
+): Promise<DaytonaSshAccess> {
+  const sandbox = await getStartedDaytonaSandbox(sandboxId)
+  const access = await sandbox.createSshAccess(expiresInMinutes)
+  return {
+    accessId: access.id,
+    token: access.token,
+    sshCommand: access.sshCommand,
+    expiresAt: new Date(access.expiresAt).toISOString(),
+  }
+}
+
+export async function revokeDaytonaSshAccess(sandboxId: string, token: string) {
+  const sandbox = await getStartedDaytonaSandbox(sandboxId)
+  await sandbox.revokeSshAccess(token)
 }

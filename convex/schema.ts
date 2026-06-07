@@ -129,6 +129,20 @@ export default defineSchema({
     .index("by_trigger_run", ["triggerRunId"])
     .index("by_user_updated", ["userId", "updatedAt"]),
 
+  sshAccessTokens: defineTable({
+    accessId: v.string(),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+    label: v.string(),
+    sandboxId: v.string(),
+    sshCommand: v.string(),
+    token: v.string(),
+    updatedAt: v.number(),
+    userId: v.id("users"),
+  })
+    .index("by_sandbox", ["sandboxId"])
+    .index("by_user_sandbox", ["userId", "sandboxId"]),
+
   githubAppInstallations: defineTable({
     accountId: v.optional(v.string()),
     accountLogin: v.string(),

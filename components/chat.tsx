@@ -9,6 +9,7 @@ import {
   Folder,
   FolderOpen,
   GitBranch,
+  KeyRound,
   Loader2,
   Monitor,
   PanelLeft,
@@ -108,6 +109,11 @@ const SandboxDesktopPanel = dynamic(
     import("@/components/sandbox-desktop").then(
       (mod) => mod.SandboxDesktopPanel
     ),
+  { ssr: false }
+)
+
+const SshPanel = dynamic(
+  () => import("@/components/ssh-panel").then((mod) => mod.SshPanel),
   { ssr: false }
 )
 
@@ -504,6 +510,7 @@ function ChatInner() {
   const [filesOpen, setFilesOpen] = useState(false)
   const [githubOpen, setGithubOpen] = useState(false)
   const [desktopOpen, setDesktopOpen] = useState(false)
+  const [sshOpen, setSshOpen] = useState(false)
   const [contextOpen, setContextOpen] = useState(false)
   const [terminalOpen, setTerminalOpen] = useState(() =>
     typeof window === "undefined"
@@ -1423,6 +1430,7 @@ function ChatInner() {
     setFilesOpen(false)
     setGithubOpen(false)
     setDesktopOpen(false)
+    setSshOpen(false)
     setContextOpen(false)
     setNotesOpen(false)
     setTerminalOpen(false)
@@ -1444,6 +1452,7 @@ function ChatInner() {
     setFilesOpen(false)
     setGithubOpen(false)
     setDesktopOpen(false)
+    setSshOpen(false)
     setContextOpen(false)
     setNotesOpen(false)
     setTerminalOpen(false)
@@ -1458,6 +1467,7 @@ function ChatInner() {
     setFilesOpen(false)
     setGithubOpen(false)
     setDesktopOpen(false)
+    setSshOpen(false)
     setContextOpen(false)
     setNotesOpen(false)
     setTerminalOpen(false)
@@ -1502,6 +1512,7 @@ function ChatInner() {
           setFilesOpen(false)
           setGithubOpen(false)
           setDesktopOpen(false)
+          setSshOpen(false)
           setTerminalOpen(false)
         }
       } catch (error) {
@@ -1804,6 +1815,7 @@ function ChatInner() {
 
   function pauseActiveSandbox() {
     setDesktopOpen(false)
+    setSshOpen(false)
     void runSandboxAction("pause", "/api/sandbox/pause", "stopped")
   }
 
@@ -1828,6 +1840,7 @@ function ChatInner() {
     closeBrowserTerminalSession(sandboxId)
     setTerminalOpen(false)
     setDesktopOpen(false)
+    setSshOpen(false)
 
     void (async () => {
       try {
@@ -1887,6 +1900,7 @@ function ChatInner() {
       sandboxState: "deleted",
     })
     setDesktopOpen(false)
+    setSshOpen(false)
 
     if (activeRunPending) return
 
@@ -2121,6 +2135,7 @@ function ChatInner() {
               if (!v) {
                 setGithubOpen(false)
                 setDesktopOpen(false)
+                setSshOpen(false)
                 setContextOpen(false)
               }
               return !v
@@ -2133,6 +2148,7 @@ function ChatInner() {
               if (!v) {
                 setFilesOpen(false)
                 setDesktopOpen(false)
+                setSshOpen(false)
                 setContextOpen(false)
               }
               return !v
@@ -2145,6 +2161,20 @@ function ChatInner() {
               if (!v) {
                 setFilesOpen(false)
                 setGithubOpen(false)
+                setSshOpen(false)
+                setContextOpen(false)
+              }
+              return !v
+            })
+          }
+          sshOpen={sshOpen}
+          canOpenSsh={view !== "settings" && Boolean(activeSandboxId)}
+          onToggleSsh={() =>
+            setSshOpen((v) => {
+              if (!v) {
+                setFilesOpen(false)
+                setGithubOpen(false)
+                setDesktopOpen(false)
                 setContextOpen(false)
               }
               return !v
@@ -2158,6 +2188,7 @@ function ChatInner() {
                 setFilesOpen(false)
                 setGithubOpen(false)
                 setDesktopOpen(false)
+                setSshOpen(false)
               }
               return !v
             })
@@ -2341,6 +2372,11 @@ function ChatInner() {
         sandboxId={activeSandboxId}
         onClose={() => setDesktopOpen(false)}
       />
+      <SshPanel
+        open={sshOpen && Boolean(activeSandboxId)}
+        sandboxId={activeSandboxId}
+        onClose={() => setSshOpen(false)}
+      />
       <ChatContextPanel
         open={contextOpen && Boolean(active)}
         environment={{
@@ -2493,6 +2529,9 @@ function TopBar({
   desktopOpen,
   canOpenDesktop,
   onToggleDesktop,
+  sshOpen,
+  canOpenSsh,
+  onToggleSsh,
   contextOpen,
   canOpenContext,
   onToggleContext,
@@ -2523,6 +2562,9 @@ function TopBar({
   desktopOpen: boolean
   canOpenDesktop: boolean
   onToggleDesktop: () => void
+  sshOpen: boolean
+  canOpenSsh: boolean
+  onToggleSsh: () => void
   contextOpen: boolean
   canOpenContext: boolean
   onToggleContext: () => void
@@ -2629,6 +2671,9 @@ function TopBar({
               desktopOpen={desktopOpen}
               canOpenDesktop={canOpenDesktop}
               onToggleDesktop={onToggleDesktop}
+              sshOpen={sshOpen}
+              canOpenSsh={canOpenSsh}
+              onToggleSsh={onToggleSsh}
             />
           </div>
         ) : null}
@@ -2649,6 +2694,9 @@ function TopBarToolsMenu({
   desktopOpen,
   canOpenDesktop,
   onToggleDesktop,
+  sshOpen,
+  canOpenSsh,
+  onToggleSsh,
 }: {
   className?: string
   sandboxId: string | null
@@ -2661,6 +2709,9 @@ function TopBarToolsMenu({
   desktopOpen: boolean
   canOpenDesktop: boolean
   onToggleDesktop: () => void
+  sshOpen: boolean
+  canOpenSsh: boolean
+  onToggleSsh: () => void
 }) {
   const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(
     null
@@ -2686,7 +2737,7 @@ function TopBarToolsMenu({
     })
   }
 
-  const anyOpen = terminalOpen || githubOpen || desktopOpen
+  const anyOpen = terminalOpen || githubOpen || desktopOpen || sshOpen
   const items = [
     {
       key: "terminal",
@@ -2703,6 +2754,14 @@ function TopBarToolsMenu({
       active: desktopOpen,
       disabled: !canOpenDesktop,
       onSelect: onToggleDesktop,
+    },
+    {
+      key: "ssh",
+      label: sshOpen ? "Hide SSH" : "SSH",
+      icon: <KeyRound className="size-4" />,
+      active: sshOpen,
+      disabled: !canOpenSsh,
+      onSelect: onToggleSsh,
     },
     {
       key: "github",

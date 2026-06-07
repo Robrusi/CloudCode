@@ -3,6 +3,7 @@ import { v } from "convex/values"
 import { mutation, query } from "./_generated/server"
 import type { Doc, Id } from "./_generated/dataModel"
 import type { MutationCtx, QueryCtx } from "./_generated/server"
+import { sandboxAccessForUser } from "./lib/sandboxAccess"
 import { ensureCurrentUser, getCurrentUser } from "./lib/users"
 import { requireWorkerSecret } from "./lib/workerAuth"
 
@@ -61,28 +62,6 @@ type StoredRunLog = {
   kind: "setup" | "command" | "reasoning" | "stdout" | "stderr" | "result"
   message: string
   time: number
-}
-
-async function sandboxAccessForUser(
-  ctx: QueryCtx,
-  sandboxId: string,
-  userId: Id<"users">
-) {
-  const runs = await ctx.db
-    .query("codexRuns")
-    .withIndex("by_sandbox", (q) => q.eq("sandboxId", sandboxId))
-    .take(10)
-  const run = runs.find((candidate) => candidate.userId === userId)
-  if (run) return { repoUrl: run.repoUrl }
-
-  const threads = await ctx.db
-    .query("threads")
-    .withIndex("by_sandbox", (q) => q.eq("sandboxId", sandboxId))
-    .take(10)
-  const thread = threads.find((candidate) => candidate.userId === userId)
-  if (thread) return { repoUrl: thread.repoUrl }
-
-  return null
 }
 
 async function requireCodexAuth(
