@@ -52,7 +52,12 @@ const fileListCache = new Map<
 
 function applyLiveDiffToEntries(
   entries: readonly FileEntry[],
-  changedFiles: readonly DiffFileStat[]
+  changedFiles: readonly DiffFileStat[],
+  {
+    includeMissingChangedFiles,
+  }: {
+    includeMissingChangedFiles: boolean
+  }
 ): FileEntry[] {
   const byPath = new Map(entries.map((entry) => [entry.path, entry]))
 
@@ -63,6 +68,10 @@ function applyLiveDiffToEntries(
 
     if (file.type === "deleted") {
       byPath.delete(file.path)
+      continue
+    }
+
+    if (!includeMissingChangedFiles && !byPath.has(file.path)) {
       continue
     }
 
@@ -151,6 +160,7 @@ export function FileBrowser({
   onOpenAllDiffs?: () => void
 }) {
   const [entries, setEntries] = useState<FileEntry[]>([])
+  const [entriesAuthoritative, setEntriesAuthoritative] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [truncated, setTruncated] = useState(false)
@@ -167,8 +177,11 @@ export function FileBrowser({
 
   const diffStats = useMemo(() => getDiffStats(diff), [diff])
   const liveEntries = useMemo(
-    () => applyLiveDiffToEntries(entries, diffStats.files),
-    [diffStats.files, entries]
+    () =>
+      applyLiveDiffToEntries(entries, diffStats.files, {
+        includeMissingChangedFiles: !entriesAuthoritative,
+      }),
+    [diffStats.files, entries, entriesAuthoritative]
   )
 
   const sandboxFilePaths = useMemo(() => {
@@ -358,6 +371,7 @@ export function FileBrowser({
       }
       if (cached) {
         setEntries(cached.entries)
+        setEntriesAuthoritative(false)
         setTruncated(cached.truncated)
       }
       setLoading(force || !cached)
@@ -387,10 +401,12 @@ export function FileBrowser({
           })
         }
         setEntries(nextEntries)
+        setEntriesAuthoritative(true)
         setTruncated(nextTruncated)
       } catch (err) {
         if (!cached) {
           setError(err instanceof Error ? err.message : "Failed to load files")
+          if (!force) setEntriesAuthoritative(false)
           setEntries((current) => (force && current.length > 0 ? current : []))
         }
       } finally {
@@ -410,6 +426,7 @@ export function FileBrowser({
         truncated: cached.truncated,
       })
       setEntries(cached.entries)
+      setEntriesAuthoritative(false)
       setTruncated(cached.truncated)
       setError(null)
     })
