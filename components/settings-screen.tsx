@@ -9,8 +9,10 @@ import {
   ClipboardPaste,
   CornerDownRight,
   ExternalLink,
+  Globe,
   KeyRound,
   Layers3,
+  Loader2,
   Pencil,
   Plus,
   RefreshCw,
@@ -18,6 +20,7 @@ import {
   ShieldCheck,
   Terminal,
   Trash2,
+  Wrench,
   X,
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
@@ -1103,10 +1106,10 @@ function McpSettings({
 
       <div className={card}>
         {loading ? (
-          <div className={cardRow}>
-            <Server className="size-5 shrink-0 text-muted-foreground" />
-            <div className="min-w-0 flex-1 text-sm text-muted-foreground">
-              Loading MCP connections...
+          <div className="flex flex-col items-center justify-center gap-3 px-6 py-12 text-center">
+            <Loader2 className="size-5 animate-spin text-muted-foreground" />
+            <div className="text-sm text-muted-foreground">
+              Loading MCP connections…
             </div>
           </div>
         ) : loadError ? (
@@ -1130,43 +1133,88 @@ function McpSettings({
             </button>
           </div>
         ) : servers.length ? (
-          servers.map((server) => (
+          servers.map((server) => {
+            const active = selected?.id === server.id
+            const TransportIcon = server.transport === "http" ? Globe : Terminal
+            const subtitle =
+              server.transport === "stdio"
+                ? [server.command, ...(server.args ?? [])]
+                    .filter(Boolean)
+                    .join(" ") || "stdio server"
+                : server.url || "HTTP server"
+            return (
+              <button
+                key={server.id}
+                type="button"
+                onClick={() => {
+                  setSelectedId(server.id)
+                  setCreatingCustom(false)
+                }}
+                aria-pressed={active}
+                className={cn(
+                  cardRow,
+                  "group w-full border-b border-border/60 text-left transition-colors last:border-0 hover:bg-muted",
+                  active ? "bg-muted text-foreground" : "text-foreground/80"
+                )}
+              >
+                <TransportIcon className="size-5 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium text-foreground/90">
+                    {server.name}
+                  </div>
+                  <div className="truncate font-[family-name:var(--font-mono)] text-xs text-muted-foreground">
+                    {subtitle}
+                  </div>
+                </div>
+                {server.tools.length ? (
+                  <span
+                    className={metaPill}
+                    title={`${server.tools.length} tool${server.tools.length === 1 ? "" : "s"}`}
+                  >
+                    <Wrench className="size-3" />
+                    {server.tools.length}
+                  </span>
+                ) : null}
+                {server.secrets.length ? (
+                  <span
+                    className={metaPill}
+                    title={`${server.secrets.length} secret${server.secrets.length === 1 ? "" : "s"}`}
+                  >
+                    <KeyRound className="size-3" />
+                    {server.secrets.length}
+                  </span>
+                ) : null}
+                <span className={metaPill}>
+                  {server.transport === "http" ? "HTTP" : "STDIO"}
+                </span>
+                <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
+              </button>
+            )
+          })
+        ) : (
+          <div className="flex flex-col items-center justify-center gap-3 px-6 py-10 text-center">
+            <Server className="size-5 text-muted-foreground" />
+            <div>
+              <div className="text-sm font-medium text-foreground/85">
+                No MCP servers connected
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Connect a custom MCP server to give Codex extra tools over STDIO
+                or HTTP.
+              </p>
+            </div>
             <button
-              key={server.id}
               type="button"
               onClick={() => {
-                setSelectedId(server.id)
-                setCreatingCustom(false)
+                resetCustomForm()
+                setSelectedId(null)
+                setCreatingCustom(true)
               }}
-              className={cn(
-                cardRow,
-                "w-full border-b border-border/60 text-left transition-colors last:border-0 hover:bg-muted",
-                selected?.id === server.id && "bg-muted"
-              )}
+              className={navAction}
             >
-              <Server className="size-5 shrink-0 text-muted-foreground" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium text-foreground/85">
-                  {server.name}
-                </div>
-                <div className="truncate text-xs text-muted-foreground">
-                  {server.transport === "stdio"
-                    ? [server.command, ...(server.args ?? [])]
-                        .filter(Boolean)
-                        .join(" ")
-                    : server.url}
-                </div>
-              </div>
-              <span className={metaPill}>{server.transport}</span>
-              <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+              <Plus className="size-3.5" />
+              Custom MCP
             </button>
-          ))
-        ) : (
-          <div className={cardRow}>
-            <Server className="size-5 shrink-0 text-muted-foreground" />
-            <div className="min-w-0 flex-1 text-sm text-muted-foreground">
-              No custom MCP servers connected.
-            </div>
           </div>
         )}
       </div>
@@ -1406,12 +1454,16 @@ function McpSettings({
       {selected ? (
         <div className={cn("mt-3", card)}>
           <div className={cn(cardRow, "border-b border-border/60")}>
-            <Server className="size-5 shrink-0 text-muted-foreground" />
+            {selected.transport === "http" ? (
+              <Globe className="size-5 shrink-0 text-muted-foreground" />
+            ) : (
+              <Terminal className="size-5 shrink-0 text-muted-foreground" />
+            )}
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium text-foreground/85">
+              <div className="truncate text-sm font-medium text-foreground/90">
                 {selected.name}
               </div>
-              <div className="truncate text-xs text-muted-foreground">
+              <div className="truncate font-[family-name:var(--font-mono)] text-xs text-muted-foreground">
                 {selected.transport === "http"
                   ? selected.url
                   : [selected.command, ...(selected.args ?? [])]
@@ -1420,9 +1472,7 @@ function McpSettings({
               </div>
             </div>
             <span className={metaPill}>
-              {selected.transport === "http" && selected.bearerTokenEnvVar
-                ? "Bearer env"
-                : selected.transport}
+              {selected.transport === "http" ? "HTTP" : "STDIO"}
             </span>
             <button
               type="button"
@@ -1435,17 +1485,78 @@ function McpSettings({
           </div>
 
           <div className="grid gap-5 p-4">
+            <div className="rounded-xl bg-muted/30 p-3">
+              <dl className="grid gap-2 text-xs">
+                <McpSummaryRow
+                  label="Transport"
+                  value={
+                    selected.transport === "http" ? "Streamable HTTP" : "STDIO"
+                  }
+                />
+                {selected.transport === "stdio" ? (
+                  <>
+                    {selected.command ? (
+                      <McpSummaryRow
+                        label="Command"
+                        mono
+                        value={[selected.command, ...(selected.args ?? [])]
+                          .filter(Boolean)
+                          .join(" ")}
+                      />
+                    ) : null}
+                    {selected.cwd ? (
+                      <McpSummaryRow
+                        label="Directory"
+                        mono
+                        value={selected.cwd}
+                      />
+                    ) : null}
+                    {selected.envVars?.length ? (
+                      <McpSummaryRow
+                        label="Env passthrough"
+                        mono
+                        value={selected.envVars.join(", ")}
+                      />
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    {selected.url ? (
+                      <McpSummaryRow label="URL" mono value={selected.url} />
+                    ) : null}
+                    {selected.bearerTokenEnvVar ? (
+                      <McpSummaryRow
+                        label="Bearer env"
+                        mono
+                        value={selected.bearerTokenEnvVar}
+                      />
+                    ) : null}
+                  </>
+                )}
+              </dl>
+              {selected.secrets.length ? (
+                <div className="mt-2.5 flex flex-wrap gap-1.5 border-t border-border/60 pt-2.5">
+                  {selected.secrets.map((secret) => (
+                    <span key={secret.id} className={metaPill}>
+                      <KeyRound className="size-3" />
+                      {secret.name}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
             {selected.tools.length ? (
-              <div>
-                <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground/80">
+              <div className="grid gap-2">
+                <div className="flex items-center gap-2 px-0.5 text-xs font-medium text-foreground/80">
                   <ShieldCheck className="size-3.5 text-muted-foreground" />
                   Tool policy
                 </div>
-                <div className="-mx-4 border-y border-border/60">
+                <div>
                   {selected.tools.map((tool) => (
                     <div
                       key={tool.id}
-                      className="grid gap-2 border-b border-border/60 px-4 py-2.5 last:border-0 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+                      className="grid gap-2 border-b border-border/60 py-3 first:pt-1.5 last:border-0 last:pb-0 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
                     >
                       <div className="min-w-0">
                         <div className="truncate text-sm font-medium text-foreground/85">
@@ -1470,9 +1581,10 @@ function McpSettings({
                 </div>
               </div>
             ) : (
-              <p className="text-xs text-muted-foreground">
-                Codex has not reported tools for this MCP server yet.
-              </p>
+              <div className="flex items-center gap-2 px-0.5 text-xs text-muted-foreground">
+                <ShieldCheck className="size-3.5 shrink-0" />
+                Codex has not reported tools for this server yet.
+              </div>
             )}
 
             {error ? (
@@ -1503,6 +1615,30 @@ function McpSettings({
         </div>
       ) : null}
     </section>
+  )
+}
+
+function McpSummaryRow({
+  label,
+  value,
+  mono,
+}: {
+  label: string
+  value: string
+  mono?: boolean
+}) {
+  return (
+    <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-2">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd
+        className={cn(
+          "min-w-0 break-words text-foreground/85",
+          mono && "font-[family-name:var(--font-mono)]"
+        )}
+      >
+        {value}
+      </dd>
+    </div>
   )
 }
 
@@ -1599,8 +1735,9 @@ function McpPairListEditor({
           <div className="truncate rounded-lg border border-border bg-background px-3 py-2 font-[family-name:var(--font-mono)] text-xs text-foreground/85">
             {item.name}
           </div>
-          <div className="truncate rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
-            Saved
+          <div className="flex items-center gap-1.5 truncate rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+            <KeyRound className="size-3 shrink-0" />
+            ••••••••
           </div>
           <button
             type="button"
