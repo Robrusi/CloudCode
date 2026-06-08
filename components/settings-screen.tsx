@@ -8,7 +8,6 @@ import {
   Circle,
   ClipboardPaste,
   CornerDownRight,
-  ExternalLink,
   Globe,
   KeyRound,
   Layers3,
@@ -25,6 +24,7 @@ import {
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 
+import { IconButton } from "@/components/ui/icon-button"
 import { SegmentedControl } from "@/components/ui/segmented-control"
 import { Switch } from "@/components/ui/switch"
 import { cardSurfaceClass, popoverSurfaceClass } from "@/components/ui/surface"
@@ -929,6 +929,7 @@ function McpSettings({
   servers: McpServerRecord[]
 }) {
   const updateToolPolicy = useMutation(api.mcpServers.updateToolPolicy)
+  const setServerEnabled = useMutation(api.mcpServers.setEnabled)
   const [selectedId, setSelectedId] = useState<Id<"mcpServers"> | null>(null)
   const [creatingCustom, setCreatingCustom] = useState(false)
   const [transport, setTransport] = useState<"stdio" | "http">("stdio")
@@ -937,19 +938,14 @@ function McpSettings({
   const [url, setUrl] = useState("")
   const [bearerTokenEnvVar, setBearerTokenEnvVar] = useState("")
   const [cwd, setCwd] = useState("")
-  const [argDraft, setArgDraft] = useState("")
   const [args, setArgs] = useState<string[]>([])
-  const [envDraft, setEnvDraft] = useState({ name: "", value: "" })
   const [envVars, setEnvVars] = useState<
     Array<{ name: string; value: string }>
   >([])
-  const [passthroughDraft, setPassthroughDraft] = useState("")
   const [passthroughVars, setPassthroughVars] = useState<string[]>([])
-  const [headerDraft, setHeaderDraft] = useState({ name: "", value: "" })
   const [headers, setHeaders] = useState<
     Array<{ name: string; value: string }>
   >([])
-  const [envHeaderDraft, setEnvHeaderDraft] = useState({ name: "", value: "" })
   const [envHeaders, setEnvHeaders] = useState<
     Array<{ name: string; value: string }>
   >([])
@@ -965,60 +961,36 @@ function McpSettings({
     setUrl("")
     setBearerTokenEnvVar("")
     setCwd("")
-    setArgDraft("")
     setArgs([])
-    setEnvDraft({ name: "", value: "" })
     setEnvVars([])
-    setPassthroughDraft("")
     setPassthroughVars([])
-    setHeaderDraft({ name: "", value: "" })
     setHeaders([])
-    setEnvHeaderDraft({ name: "", value: "" })
     setEnvHeaders([])
     setSaving(false)
     setError("")
-  }
-
-  function addValue(
-    value: string,
-    setter: (values: string[]) => void,
-    values: string[],
-    clear: () => void
-  ) {
-    const trimmed = value.trim()
-    if (!trimmed) return
-    setter([...values, trimmed])
-    clear()
-  }
-
-  function addPair(
-    pair: { name: string; value: string },
-    setter: (values: Array<{ name: string; value: string }>) => void,
-    values: Array<{ name: string; value: string }>,
-    clear: () => void
-  ) {
-    const key = pair.name.trim()
-    const value = pair.value.trim()
-    if (!key || !value) return
-    setter([...values, { name: key, value }])
-    clear()
   }
 
   async function saveCustomServer() {
     setSaving(true)
     setError("")
     try {
+      const cleanList = (values: string[]) =>
+        values.map((value) => value.trim()).filter(Boolean)
+      const cleanPairs = (values: Array<{ name: string; value: string }>) =>
+        values
+          .map((pair) => ({ name: pair.name.trim(), value: pair.value.trim() }))
+          .filter((pair) => pair.name && pair.value)
       const response = await fetch("/api/mcp/custom", {
         body: JSON.stringify({
-          args,
+          args: cleanList(args),
           bearerTokenEnvVar,
           command,
           cwd,
-          envHttpHeaders: envHeaders,
-          envVars: passthroughVars,
-          httpHeaders: headers,
+          envHttpHeaders: cleanPairs(envHeaders),
+          envVars: cleanList(passthroughVars),
+          httpHeaders: cleanPairs(headers),
           name,
-          secrets: envVars,
+          secrets: cleanPairs(envVars),
           transport,
           url,
         }),
@@ -1086,9 +1058,21 @@ function McpSettings({
     }
   }
 
+  async function toggleEnabled(serverId: Id<"mcpServers">, enabled: boolean) {
+    setError("")
+    try {
+      await setServerEnabled({ enabled, serverId })
+      await onReload()
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Unable to update MCP server."
+      )
+    }
+  }
+
   return (
-    <section className="mt-8 space-y-2">
-      <div className="flex items-center justify-between px-1">
+    <section className="mt-8 flex flex-col gap-2">
+      <div className="order-1 flex items-center justify-between px-1">
         <h2 className={sectionLabel}>MCP Connections</h2>
         <button
           type="button"
@@ -1104,7 +1088,7 @@ function McpSettings({
         </button>
       </div>
 
-      <div className={card}>
+      <div className={cn("order-3", card)}>
         {loading ? (
           <div className="flex flex-col items-center justify-center gap-3 px-6 py-12 text-center">
             <Loader2 className="size-5 animate-spin text-muted-foreground" />
@@ -1143,52 +1127,239 @@ function McpSettings({
                     .join(" ") || "stdio server"
                 : server.url || "HTTP server"
             return (
-              <button
+              <div
                 key={server.id}
-                type="button"
-                onClick={() => {
-                  setSelectedId(server.id)
-                  setCreatingCustom(false)
-                }}
-                aria-pressed={active}
-                className={cn(
-                  cardRow,
-                  "group w-full border-b border-border/60 text-left transition-colors last:border-0 hover:bg-muted",
-                  active ? "bg-muted text-foreground" : "text-foreground/80"
-                )}
+                className="border-b border-border/60 last:border-0"
               >
-                <TransportIcon className="size-5 shrink-0 text-muted-foreground" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium text-foreground/90">
-                    {server.name}
-                  </div>
-                  <div className="truncate font-[family-name:var(--font-mono)] text-xs text-muted-foreground">
-                    {subtitle}
-                  </div>
-                </div>
-                {server.tools.length ? (
-                  <span
-                    className={metaPill}
-                    title={`${server.tools.length} tool${server.tools.length === 1 ? "" : "s"}`}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCreatingCustom(false)
+                    setSelectedId(active ? null : server.id)
+                  }}
+                  aria-expanded={active}
+                  className={cn(
+                    cardRow,
+                    "group w-full text-left transition-colors hover:bg-muted",
+                    active ? "bg-muted text-foreground" : "text-foreground/80"
+                  )}
+                >
+                  <TransportIcon
+                    className={cn(
+                      "size-5 shrink-0 text-muted-foreground",
+                      !server.enabled && "opacity-50"
+                    )}
+                  />
+                  <div
+                    className={cn(
+                      "min-w-0 flex-1",
+                      !server.enabled && "opacity-50"
+                    )}
                   >
-                    <Wrench className="size-3" />
-                    {server.tools.length}
+                    <div className="truncate text-sm font-medium text-foreground/90">
+                      {server.name}
+                    </div>
+                    <div className="truncate font-[family-name:var(--font-mono)] text-xs text-muted-foreground">
+                      {subtitle}
+                    </div>
+                  </div>
+                  {!server.enabled ? (
+                    <span className={metaPill}>Off</span>
+                  ) : null}
+                  {server.tools.length ? (
+                    <span
+                      className={metaPill}
+                      title={`${server.tools.length} tool${server.tools.length === 1 ? "" : "s"}`}
+                    >
+                      <Wrench className="size-3" />
+                      {server.tools.length}
+                    </span>
+                  ) : null}
+                  {server.secrets.length ? (
+                    <span
+                      className={metaPill}
+                      title={`${server.secrets.length} secret${server.secrets.length === 1 ? "" : "s"}`}
+                    >
+                      <KeyRound className="size-3" />
+                      {server.secrets.length}
+                    </span>
+                  ) : null}
+                  <span className={metaPill}>
+                    {server.transport === "http" ? "HTTP" : "STDIO"}
                   </span>
+                  <ChevronRight
+                    className={cn(
+                      "size-3.5 shrink-0 transition-transform",
+                      active
+                        ? "rotate-90 text-muted-foreground"
+                        : "text-muted-foreground/50 group-hover:text-muted-foreground"
+                    )}
+                  />
+                </button>
+
+                {active ? (
+                  <div className="border-t border-border/60 px-3.5 pt-4 pb-3.5">
+                    <div className="grid gap-5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium text-foreground/85">
+                            Available to Codex
+                          </div>
+                          <p className={fieldHint}>
+                            When off, this server is excluded from new Codex
+                            runs.
+                          </p>
+                        </div>
+                        <Switch
+                          aria-label="Available to Codex"
+                          checked={server.enabled}
+                          onCheckedChange={(enabled) =>
+                            void toggleEnabled(server.id, enabled)
+                          }
+                        />
+                      </div>
+
+                      <div className="rounded-xl bg-muted/30 p-3">
+                        <dl className="grid gap-2 text-xs">
+                          <McpSummaryRow
+                            label="Transport"
+                            value={
+                              server.transport === "http"
+                                ? "Streamable HTTP"
+                                : "STDIO"
+                            }
+                          />
+                          {server.transport === "stdio" ? (
+                            <>
+                              {server.command ? (
+                                <McpSummaryRow
+                                  label="Command"
+                                  mono
+                                  value={[
+                                    server.command,
+                                    ...(server.args ?? []),
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" ")}
+                                />
+                              ) : null}
+                              {server.cwd ? (
+                                <McpSummaryRow
+                                  label="Directory"
+                                  mono
+                                  value={server.cwd}
+                                />
+                              ) : null}
+                              {server.envVars?.length ? (
+                                <McpSummaryRow
+                                  label="Env passthrough"
+                                  mono
+                                  value={server.envVars.join(", ")}
+                                />
+                              ) : null}
+                            </>
+                          ) : (
+                            <>
+                              {server.url ? (
+                                <McpSummaryRow
+                                  label="URL"
+                                  mono
+                                  value={server.url}
+                                />
+                              ) : null}
+                              {server.bearerTokenEnvVar ? (
+                                <McpSummaryRow
+                                  label="Bearer env"
+                                  mono
+                                  value={server.bearerTokenEnvVar}
+                                />
+                              ) : null}
+                            </>
+                          )}
+                        </dl>
+                        {server.secrets.length ? (
+                          <div className="mt-2.5 flex flex-wrap gap-1.5 border-t border-border/60 pt-2.5">
+                            {server.secrets.map((secret) => (
+                              <span key={secret.id} className={metaPill}>
+                                <KeyRound className="size-3" />
+                                {secret.name}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      {server.tools.length ? (
+                        <div className="grid gap-1">
+                          <div className="flex items-center gap-2 px-0.5 text-xs font-medium text-foreground/80">
+                            <ShieldCheck className="size-3.5 text-muted-foreground" />
+                            Tool policy
+                          </div>
+                          <div>
+                            {server.tools.map((tool) => (
+                              <div
+                                key={tool.id}
+                                className="grid gap-2 border-b border-border/60 py-3 first:pt-1.5 last:border-0 last:pb-0 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+                              >
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-medium text-foreground/85">
+                                    {tool.title || tool.name}
+                                  </div>
+                                  <div className="truncate font-[family-name:var(--font-mono)] text-[11px] text-muted-foreground">
+                                    {tool.name}
+                                  </div>
+                                </div>
+                                <SegmentedControl
+                                  label={`Policy for ${tool.name}`}
+                                  value={tool.policy}
+                                  onChange={(policy) =>
+                                    void setPolicy(tool.id, policy)
+                                  }
+                                  options={[
+                                    { label: "Auto", value: "auto" },
+                                    { label: "Ask", value: "prompt" },
+                                    { label: "Never", value: "never" },
+                                  ]}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 px-0.5 text-xs text-muted-foreground">
+                          <ShieldCheck className="size-3.5 shrink-0" />
+                          Codex has not reported tools for this server yet.
+                        </div>
+                      )}
+
+                      {error ? (
+                        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                          {error}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="mt-4 flex items-center justify-between gap-2 border-t border-border/60 pt-3.5">
+                      <button
+                        type="button"
+                        onClick={deleteSelected}
+                        disabled={saving}
+                        className={navDestructive}
+                      >
+                        <Trash2 className="size-3.5" />
+                        Remove
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedId(null)}
+                        className={navAction}
+                      >
+                        Done
+                      </button>
+                    </div>
+                  </div>
                 ) : null}
-                {server.secrets.length ? (
-                  <span
-                    className={metaPill}
-                    title={`${server.secrets.length} secret${server.secrets.length === 1 ? "" : "s"}`}
-                  >
-                    <KeyRound className="size-3" />
-                    {server.secrets.length}
-                  </span>
-                ) : null}
-                <span className={metaPill}>
-                  {server.transport === "http" ? "HTTP" : "STDIO"}
-                </span>
-                <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
-              </button>
+              </div>
             )
           })
         ) : (
@@ -1220,21 +1391,16 @@ function McpSettings({
       </div>
 
       {creatingCustom ? (
-        <div className={cn("mt-3", card)}>
+        <div className={cn("order-2", card)}>
           <div className={cn(cardRow, "border-b border-border/60")}>
             <Server className="size-5 shrink-0 text-muted-foreground" />
             <div className="min-w-0 flex-1">
               <div className="text-sm font-medium text-foreground/85">
                 Connect to a custom MCP
               </div>
-              <a
-                href="https://developers.openai.com/codex/mcp"
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-              >
-                Docs <ExternalLink className="size-3" />
-              </a>
+              <div className="text-xs text-muted-foreground">
+                STDIO or streamable HTTP
+              </div>
             </div>
             <button
               type="button"
@@ -1286,61 +1452,28 @@ function McpSettings({
 
                 <McpStringListEditor
                   addLabel="Add argument"
-                  draft={argDraft}
                   items={args}
                   label="Arguments"
                   placeholder="--project"
-                  onAdd={() =>
-                    addValue(argDraft, setArgs, args, () => setArgDraft(""))
-                  }
-                  onDraftChange={setArgDraft}
-                  onRemove={(index) =>
-                    setArgs(args.filter((_, itemIndex) => itemIndex !== index))
-                  }
+                  onChange={setArgs}
                 />
 
                 <McpPairListEditor
                   addLabel="Add environment variable"
-                  draft={envDraft}
                   items={envVars}
                   label="Environment variables"
                   leftPlaceholder="Key"
                   rightPlaceholder="Value"
-                  onAdd={() =>
-                    addPair(envDraft, setEnvVars, envVars, () =>
-                      setEnvDraft({ name: "", value: "" })
-                    )
-                  }
-                  onDraftChange={setEnvDraft}
-                  onRemove={(index) =>
-                    setEnvVars(
-                      envVars.filter((_, itemIndex) => itemIndex !== index)
-                    )
-                  }
+                  secret
+                  onChange={setEnvVars}
                 />
 
                 <McpStringListEditor
                   addLabel="Add variable"
-                  draft={passthroughDraft}
                   items={passthroughVars}
                   label="Environment variable passthrough"
                   placeholder="GITHUB_TOKEN"
-                  onAdd={() =>
-                    addValue(
-                      passthroughDraft,
-                      setPassthroughVars,
-                      passthroughVars,
-                      () => setPassthroughDraft("")
-                    )
-                  }
-                  onDraftChange={setPassthroughDraft}
-                  onRemove={(index) =>
-                    setPassthroughVars(
-                      passthroughVars.filter(
-                        (_, itemIndex) => itemIndex !== index
-                      )
-                    )
-                  }
+                  onChange={setPassthroughVars}
                 />
 
                 <label className={fieldLabel}>
@@ -1380,41 +1513,20 @@ function McpSettings({
                 </label>
                 <McpPairListEditor
                   addLabel="Add header"
-                  draft={headerDraft}
                   items={headers}
                   label="Headers"
                   leftPlaceholder="Key"
                   rightPlaceholder="Value"
-                  onAdd={() =>
-                    addPair(headerDraft, setHeaders, headers, () =>
-                      setHeaderDraft({ name: "", value: "" })
-                    )
-                  }
-                  onDraftChange={setHeaderDraft}
-                  onRemove={(index) =>
-                    setHeaders(
-                      headers.filter((_, itemIndex) => itemIndex !== index)
-                    )
-                  }
+                  secret
+                  onChange={setHeaders}
                 />
                 <McpPairListEditor
                   addLabel="Add variable"
-                  draft={envHeaderDraft}
                   items={envHeaders}
                   label="Headers from environment variables"
                   leftPlaceholder="Header"
                   rightPlaceholder="Env var"
-                  onAdd={() =>
-                    addPair(envHeaderDraft, setEnvHeaders, envHeaders, () =>
-                      setEnvHeaderDraft({ name: "", value: "" })
-                    )
-                  }
-                  onDraftChange={setEnvHeaderDraft}
-                  onRemove={(index) =>
-                    setEnvHeaders(
-                      envHeaders.filter((_, itemIndex) => itemIndex !== index)
-                    )
-                  }
+                  onChange={setEnvHeaders}
                 />
               </>
             )}
@@ -1450,170 +1562,6 @@ function McpSettings({
           </div>
         </div>
       ) : null}
-
-      {selected ? (
-        <div className={cn("mt-3", card)}>
-          <div className={cn(cardRow, "border-b border-border/60")}>
-            {selected.transport === "http" ? (
-              <Globe className="size-5 shrink-0 text-muted-foreground" />
-            ) : (
-              <Terminal className="size-5 shrink-0 text-muted-foreground" />
-            )}
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium text-foreground/90">
-                {selected.name}
-              </div>
-              <div className="truncate font-[family-name:var(--font-mono)] text-xs text-muted-foreground">
-                {selected.transport === "http"
-                  ? selected.url
-                  : [selected.command, ...(selected.args ?? [])]
-                      .filter(Boolean)
-                      .join(" ")}
-              </div>
-            </div>
-            <span className={metaPill}>
-              {selected.transport === "http" ? "HTTP" : "STDIO"}
-            </span>
-            <button
-              type="button"
-              onClick={() => setSelectedId(null)}
-              aria-label="Close MCP details"
-              className={iconBtn}
-            >
-              <X className="size-3.5" />
-            </button>
-          </div>
-
-          <div className="grid gap-5 p-4">
-            <div className="rounded-xl bg-muted/30 p-3">
-              <dl className="grid gap-2 text-xs">
-                <McpSummaryRow
-                  label="Transport"
-                  value={
-                    selected.transport === "http" ? "Streamable HTTP" : "STDIO"
-                  }
-                />
-                {selected.transport === "stdio" ? (
-                  <>
-                    {selected.command ? (
-                      <McpSummaryRow
-                        label="Command"
-                        mono
-                        value={[selected.command, ...(selected.args ?? [])]
-                          .filter(Boolean)
-                          .join(" ")}
-                      />
-                    ) : null}
-                    {selected.cwd ? (
-                      <McpSummaryRow
-                        label="Directory"
-                        mono
-                        value={selected.cwd}
-                      />
-                    ) : null}
-                    {selected.envVars?.length ? (
-                      <McpSummaryRow
-                        label="Env passthrough"
-                        mono
-                        value={selected.envVars.join(", ")}
-                      />
-                    ) : null}
-                  </>
-                ) : (
-                  <>
-                    {selected.url ? (
-                      <McpSummaryRow label="URL" mono value={selected.url} />
-                    ) : null}
-                    {selected.bearerTokenEnvVar ? (
-                      <McpSummaryRow
-                        label="Bearer env"
-                        mono
-                        value={selected.bearerTokenEnvVar}
-                      />
-                    ) : null}
-                  </>
-                )}
-              </dl>
-              {selected.secrets.length ? (
-                <div className="mt-2.5 flex flex-wrap gap-1.5 border-t border-border/60 pt-2.5">
-                  {selected.secrets.map((secret) => (
-                    <span key={secret.id} className={metaPill}>
-                      <KeyRound className="size-3" />
-                      {secret.name}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-
-            {selected.tools.length ? (
-              <div className="grid gap-2">
-                <div className="flex items-center gap-2 px-0.5 text-xs font-medium text-foreground/80">
-                  <ShieldCheck className="size-3.5 text-muted-foreground" />
-                  Tool policy
-                </div>
-                <div>
-                  {selected.tools.map((tool) => (
-                    <div
-                      key={tool.id}
-                      className="grid gap-2 border-b border-border/60 py-3 first:pt-1.5 last:border-0 last:pb-0 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-medium text-foreground/85">
-                          {tool.title || tool.name}
-                        </div>
-                        <div className="truncate font-[family-name:var(--font-mono)] text-[11px] text-muted-foreground">
-                          {tool.name}
-                        </div>
-                      </div>
-                      <SegmentedControl
-                        label={`Policy for ${tool.name}`}
-                        value={tool.policy}
-                        onChange={(policy) => void setPolicy(tool.id, policy)}
-                        options={[
-                          { label: "Auto", value: "auto" },
-                          { label: "Ask", value: "prompt" },
-                          { label: "Never", value: "never" },
-                        ]}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 px-0.5 text-xs text-muted-foreground">
-                <ShieldCheck className="size-3.5 shrink-0" />
-                Codex has not reported tools for this server yet.
-              </div>
-            )}
-
-            {error ? (
-              <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                {error}
-              </div>
-            ) : null}
-          </div>
-
-          <div className="flex items-center justify-between gap-2 border-t border-border/60 px-3.5 py-2.5">
-            <button
-              type="button"
-              onClick={deleteSelected}
-              disabled={saving}
-              className={navDestructive}
-            >
-              <Trash2 className="size-3.5" />
-              Remove
-            </button>
-            <button
-              type="button"
-              onClick={() => setSelectedId(null)}
-              className={navAction}
-            >
-              Done
-            </button>
-          </div>
-        </div>
-      ) : null}
     </section>
   )
 }
@@ -1642,60 +1590,85 @@ function McpSummaryRow({
   )
 }
 
+function McpRemoveRowButton({
+  hidden,
+  label,
+  onRemove,
+}: {
+  hidden: boolean
+  label: string
+  onRemove: () => void
+}) {
+  return (
+    <IconButton
+      type="button"
+      onClick={onRemove}
+      disabled={hidden}
+      tabIndex={hidden ? -1 : undefined}
+      aria-hidden={hidden}
+      aria-label={label}
+      className={cn(
+        "hover:bg-destructive/10 hover:text-destructive",
+        hidden && "pointer-events-none invisible"
+      )}
+    >
+      <Trash2 className="size-3.5" />
+    </IconButton>
+  )
+}
+
 function McpStringListEditor({
   addLabel,
-  draft,
   items,
   label,
   placeholder,
-  onAdd,
-  onDraftChange,
-  onRemove,
+  onChange,
 }: {
   addLabel: string
-  draft: string
   items: string[]
   label: string
   placeholder: string
-  onAdd: () => void
-  onDraftChange: (value: string) => void
-  onRemove: (index: number) => void
+  onChange: (items: string[]) => void
 }) {
+  const rows = items.length ? items : [""]
+  const canRemove = items.length > 0
   return (
     <div className="grid gap-2">
       <div className="text-xs font-medium text-foreground/80">{label}</div>
-      {items.map((item, index) => (
-        <div key={`${item}:${index}`} className="flex items-center gap-2">
-          <div className="min-w-0 flex-1 truncate rounded-lg border border-border bg-background px-3 py-2 font-[family-name:var(--font-mono)] text-xs text-foreground/85">
-            {item}
-          </div>
-          <button
-            type="button"
-            onClick={() => onRemove(index)}
-            className={cn(iconBtn, "hover:text-destructive")}
-            aria-label={`Remove ${item}`}
-          >
-            <Trash2 className="size-3.5" />
-          </button>
+      {rows.map((item, index) => (
+        <div key={index} className="flex items-center gap-2">
+          <input
+            aria-label={`${label} ${index + 1}`}
+            value={item}
+            onChange={(event) => {
+              const next = rows.slice()
+              next[index] = event.target.value
+              onChange(next)
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault()
+                onChange([...rows, ""])
+              }
+            }}
+            placeholder={placeholder}
+            className={cn(
+              inputClass,
+              "font-[family-name:var(--font-mono)] text-xs"
+            )}
+          />
+          <McpRemoveRowButton
+            hidden={!canRemove}
+            label={`Remove ${label} ${index + 1}`}
+            onRemove={() => onChange(rows.filter((_, i) => i !== index))}
+          />
         </div>
       ))}
-      <input
-        aria-label={label}
-        value={draft}
-        onChange={(event) => onDraftChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault()
-            onAdd()
-          }
-        }}
-        placeholder={placeholder}
-        className={cn(
-          inputClass,
-          "font-[family-name:var(--font-mono)] text-xs"
-        )}
-      />
-      <button type="button" onClick={onAdd} className={navAction}>
+      <button
+        type="button"
+        onClick={() => onChange([...items, ""])}
+        className={navAction}
+      >
         <Plus className="size-3.5" />
         {addLabel}
       </button>
@@ -1705,81 +1678,78 @@ function McpStringListEditor({
 
 function McpPairListEditor({
   addLabel,
-  draft,
   items,
   label,
   leftPlaceholder,
   rightPlaceholder,
-  onAdd,
-  onDraftChange,
-  onRemove,
+  secret,
+  onChange,
 }: {
   addLabel: string
-  draft: { name: string; value: string }
   items: Array<{ name: string; value: string }>
   label: string
   leftPlaceholder: string
   rightPlaceholder: string
-  onAdd: () => void
-  onDraftChange: (value: { name: string; value: string }) => void
-  onRemove: (index: number) => void
+  secret?: boolean
+  onChange: (items: Array<{ name: string; value: string }>) => void
 }) {
+  const rows = items.length ? items : [{ name: "", value: "" }]
+  const canRemove = items.length > 0
   return (
     <div className="grid gap-2">
       <div className="text-xs font-medium text-foreground/80">{label}</div>
-      {items.map((item, index) => (
-        <div
-          key={`${item.name}:${index}`}
-          className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-2"
-        >
-          <div className="truncate rounded-lg border border-border bg-background px-3 py-2 font-[family-name:var(--font-mono)] text-xs text-foreground/85">
-            {item.name}
-          </div>
-          <div className="flex items-center gap-1.5 truncate rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
-            <KeyRound className="size-3 shrink-0" />
-            ••••••••
-          </div>
-          <button
-            type="button"
-            onClick={() => onRemove(index)}
-            className={cn(iconBtn, "hover:text-destructive")}
-            aria-label={`Remove ${item.name}`}
+      {rows.map((item, index) => {
+        const update = (field: "name" | "value", value: string) => {
+          const next = rows.slice()
+          next[index] = { ...next[index], [field]: value }
+          onChange(next)
+        }
+        return (
+          <div
+            key={index}
+            className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-2"
           >
-            <Trash2 className="size-3.5" />
-          </button>
-        </div>
-      ))}
-      <div className="grid gap-2 sm:grid-cols-2">
-        <input
-          aria-label={`${label} name`}
-          value={draft.name}
-          onChange={(event) =>
-            onDraftChange({ ...draft, name: event.target.value })
-          }
-          placeholder={leftPlaceholder}
-          className={cn(
-            inputClass,
-            "font-[family-name:var(--font-mono)] text-xs"
-          )}
-        />
-        <input
-          aria-label={`${label} value`}
-          value={draft.value}
-          onChange={(event) =>
-            onDraftChange({ ...draft, value: event.target.value })
-          }
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault()
-              onAdd()
-            }
-          }}
-          placeholder={rightPlaceholder}
-          type="password"
-          className={cn(inputClass, "text-xs")}
-        />
-      </div>
-      <button type="button" onClick={onAdd} className={navAction}>
+            <input
+              aria-label={`${label} name ${index + 1}`}
+              value={item.name}
+              onChange={(event) => update("name", event.target.value)}
+              placeholder={leftPlaceholder}
+              className={cn(
+                inputClass,
+                "font-[family-name:var(--font-mono)] text-xs"
+              )}
+            />
+            <input
+              aria-label={`${label} value ${index + 1}`}
+              value={item.value}
+              onChange={(event) => update("value", event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault()
+                  onChange([...rows, { name: "", value: "" }])
+                }
+              }}
+              placeholder={rightPlaceholder}
+              type={secret ? "password" : undefined}
+              className={cn(
+                inputClass,
+                "text-xs",
+                !secret && "font-[family-name:var(--font-mono)]"
+              )}
+            />
+            <McpRemoveRowButton
+              hidden={!canRemove}
+              label={`Remove ${label} ${index + 1}`}
+              onRemove={() => onChange(rows.filter((_, i) => i !== index))}
+            />
+          </div>
+        )
+      })}
+      <button
+        type="button"
+        onClick={() => onChange([...items, { name: "", value: "" }])}
+        className={navAction}
+      >
         <Plus className="size-3.5" />
         {addLabel}
       </button>
@@ -2016,11 +1986,298 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
     }
   }
 
-  const isEditing = selected !== null || creating
+  const presetFields = (
+    <>
+      <div className="grid gap-4 p-4">
+        <label className={fieldLabel}>
+          Name
+          <input
+            aria-label="Preset name"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Node 22 workspace"
+            className={cn(inputClass, "font-normal")}
+          />
+        </label>
+
+        {selectedIsAuto ? (
+          <div className="space-y-1.5">
+            <div className="text-xs font-medium text-foreground/80">
+              Automatic cloudcode.yaml environments
+            </div>
+            <p className={fieldHint}>
+              When this preset runs against a repo, Cloudcode uses the
+              repo&apos;s cloudcode.yaml first. If the repo does not have one,
+              it uses the saved Convex cloudcode.yaml for the live sandbox.
+            </p>
+            {selected?.environments?.length ? (
+              <div className="-mx-4 mt-3 border-y border-border/60">
+                {selected.environments.map((environment) => (
+                  <div
+                    key={environment.id}
+                    className="flex items-center gap-2 border-b border-border/60 px-4 py-2 last:border-0"
+                  >
+                    <span className="min-w-0 flex-1 truncate text-xs text-foreground/80">
+                      {environment.repoUrl.replace(/^https?:\/\//, "")}
+                    </span>
+                    <span className={metaPill}>{environment.status}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <>
+            <div
+              className={cn(
+                "flex items-start justify-between gap-3 px-3 py-2.5",
+                cardSurfaceClass
+              )}
+            >
+              <div className="min-w-0">
+                <div className="text-xs font-medium text-foreground/80">
+                  Auto environment
+                </div>
+                <p className={fieldHint}>
+                  Use the repo&apos;s cloudcode.yaml for each live chat sandbox,
+                  falling back to the saved Convex cloudcode.yaml when the repo
+                  does not include one. The scripts and secrets below run after
+                  the environment is ready.
+                </p>
+              </div>
+              <Switch
+                aria-label="Auto environment"
+                className="mt-0.5"
+                checked={autoEnvironment}
+                onCheckedChange={setAutoEnvironment}
+              />
+            </div>
+
+            {autoEnvironment && selected?.environments?.length ? (
+              <div className="-mx-4 border-y border-border/60">
+                {selected.environments.map((environment) => (
+                  <div
+                    key={environment.id}
+                    className="flex items-center gap-2 border-b border-border/60 px-4 py-2 last:border-0"
+                  >
+                    <span className="min-w-0 flex-1 truncate text-xs text-foreground/80">
+                      {environment.repoUrl.replace(/^https?:\/\//, "")}
+                    </span>
+                    <span className={metaPill}>{environment.status}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            <label className={fieldLabel}>
+              PATH setup script
+              <textarea
+                aria-label="PATH setup script"
+                value={pathInstallScript}
+                onChange={(event) => setPathInstallScript(event.target.value)}
+                placeholder={
+                  "curl -fsSL https://vite.plus | bash\nnpm install -g vercel"
+                }
+                spellCheck={false}
+                className={cn(textareaClass, "min-h-24 font-normal")}
+              />
+              <span className={fieldHint}>
+                Runs from the sandbox home before repo setup. Use it for CLIs
+                and language tools that should be available on PATH.
+              </span>
+            </label>
+
+            <label className={fieldLabel}>
+              Repo install script
+              <textarea
+                aria-label="Repo install script"
+                value={installScript}
+                onChange={(event) => setInstallScript(event.target.value)}
+                placeholder={"pnpm install\npnpm test -- --runInBand"}
+                spellCheck={false}
+                className={cn(textareaClass, "min-h-28 font-normal")}
+              />
+              <span className={fieldHint}>
+                Runs from the cloned repo root before Codex starts. Leave blank
+                when the base environment already has everything.
+              </span>
+            </label>
+
+            <div className="border-t border-border/60 pt-4">
+              <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground/80">
+                <KeyRound className="size-3.5 text-muted-foreground" />
+                Secrets
+                {selected?.secrets.length ? (
+                  <span className={metaPill}>{selected.secrets.length}</span>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setImportMode((value) => !value)
+                    setError("")
+                  }}
+                  className={cn(navAction, "ml-auto h-7 px-2.5")}
+                >
+                  <ClipboardPaste className="size-3.5" />
+                  {importMode ? "Add manually" : "Paste .env"}
+                </button>
+              </div>
+
+              {selected?.secrets.length ? (
+                <div className="-mx-4 mb-3 border-y border-border/60">
+                  {selected.secrets.map((secret) => (
+                    <div
+                      key={secret.id}
+                      className="flex items-center gap-2 border-b border-border/60 px-4 py-2 last:border-0"
+                    >
+                      <span className="min-w-0 flex-1 truncate font-[family-name:var(--font-mono)] text-xs text-foreground/85">
+                        {secret.name}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => deleteSecret(secret.id)}
+                        disabled={saving}
+                        aria-label={`Delete ${secret.name}`}
+                        title={`Delete ${secret.name}`}
+                        className={cn(iconBtn, "hover:text-destructive")}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : selected ? (
+                <p className="mb-3 text-xs text-muted-foreground">
+                  No preset secrets.
+                </p>
+              ) : null}
+
+              {importMode ? (
+                <div className="grid gap-2">
+                  <textarea
+                    aria-label="Paste .env file"
+                    value={importText}
+                    onChange={(event) => setImportText(event.target.value)}
+                    placeholder={
+                      "# Paste the contents of your .env file\nSUPABASE_URL=https://xyz.supabase.co\nSUPABASE_SERVICE_ROLE_KEY=ey..."
+                    }
+                    spellCheck={false}
+                    className={cn(textareaClass, "min-h-32")}
+                  />
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={fieldHint}>
+                      {importVars.length > 0
+                        ? `${importVars.length} variable${
+                            importVars.length === 1 ? "" : "s"
+                          } detected${
+                            parsedImport.errors.length
+                              ? ` · ${parsedImport.errors.length} line${
+                                  parsedImport.errors.length === 1 ? "" : "s"
+                                } skipped`
+                              : ""
+                          }`
+                        : importText.trim()
+                          ? "No valid variables found."
+                          : "Paste KEY=value lines from a .env file."}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={importSecrets}
+                      disabled={saving || importVars.length === 0}
+                      className={cn(
+                        navPrimary,
+                        "h-9 shrink-0 justify-center px-4"
+                      )}
+                    >
+                      {saving
+                        ? "Importing"
+                        : importVars.length > 0
+                          ? `Import ${importVars.length}`
+                          : "Import"}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                  <input
+                    aria-label="Secret name"
+                    value={secretName}
+                    onChange={(event) => setSecretName(event.target.value)}
+                    placeholder="SUPABASE_SERVICE_ROLE_KEY"
+                    className={cn(
+                      inputClass,
+                      "font-[family-name:var(--font-mono)] text-xs"
+                    )}
+                    spellCheck={false}
+                  />
+                  <input
+                    aria-label="Secret value"
+                    value={secretValue}
+                    onChange={(event) => setSecretValue(event.target.value)}
+                    placeholder="Value"
+                    type="password"
+                    className={cn(inputClass, "text-xs")}
+                  />
+                  <button
+                    type="button"
+                    onClick={saveSecret}
+                    disabled={saving || !secretName || !secretValue}
+                    className={cn(navPrimary, "h-9 justify-center px-4")}
+                  >
+                    Add
+                  </button>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {error ? (
+          <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {error}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="flex items-center justify-between gap-2 border-t border-border/60 px-3.5 py-2.5">
+        {!selectedIsAuto ? (
+          <button
+            type="button"
+            onClick={deletePreset}
+            disabled={!selected || saving}
+            className={navDestructive}
+          >
+            <Trash2 className="size-3.5" />
+            Delete
+          </button>
+        ) : (
+          <div />
+        )}
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={resetEditor}
+            disabled={saving}
+            className={navAction}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={savePreset}
+            disabled={saving || !name.trim()}
+            className={navPrimary}
+          >
+            {saving ? "Saving" : selected ? "Save preset" : "Create preset"}
+          </button>
+        </div>
+      </div>
+    </>
+  )
 
   return (
-    <section className="mt-8 space-y-2">
-      <div className="flex items-center justify-between px-1">
+    <section className="mt-8 flex flex-col gap-2">
+      <div className="order-1 flex items-center justify-between px-1">
         <h2 className={sectionLabel}>Daytona Presets</h2>
         <button type="button" onClick={startNewPreset} className={navAction}>
           <Plus className="size-3.5" />
@@ -2028,7 +2285,32 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
         </button>
       </div>
 
-      <div className={card}>
+      {creating ? (
+        <div className={cn("order-2", card)}>
+          <div className={cn(cardRow, "border-b border-border/60")}>
+            <Layers3 className="size-5 shrink-0 text-muted-foreground" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-medium text-foreground/85">
+                New preset
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Configure a sandbox preset
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={resetEditor}
+              aria-label="Close editor"
+              className={iconBtn}
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+          {presetFields}
+        </div>
+      ) : null}
+
+      <div className={cn("order-3", card)}>
         {presets.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3 px-6 py-10 text-center">
             <Layers3 className="size-5 text-muted-foreground" />
@@ -2072,375 +2354,77 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                 .join(" · ") || "Cloudcode default environment"
 
             return (
-              <button
+              <div
                 key={preset.id}
-                type="button"
-                onClick={() => selectPreset(preset)}
-                aria-pressed={active}
-                className={cn(
-                  cardRow,
-                  "w-full border-b border-border/60 text-left transition-colors last:border-0 hover:bg-muted",
-                  active ? "bg-muted text-foreground" : "text-foreground/80"
-                )}
+                className="border-b border-border/60 last:border-0"
               >
-                <Layers3 className="size-5 shrink-0 text-muted-foreground" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium text-foreground/85">
-                    {preset.name}
+                <button
+                  type="button"
+                  onClick={() =>
+                    active ? resetEditor() : selectPreset(preset)
+                  }
+                  aria-expanded={active}
+                  className={cn(
+                    cardRow,
+                    "group w-full text-left transition-colors hover:bg-muted",
+                    active ? "bg-muted text-foreground" : "text-foreground/80"
+                  )}
+                >
+                  <Layers3 className="size-5 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-foreground/85">
+                      {preset.name}
+                    </div>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {subtitle}
+                    </div>
                   </div>
-                  <div className="truncate text-xs text-muted-foreground">
-                    {subtitle}
+                  {preset.pathInstallScript ? (
+                    <span
+                      className={metaPill}
+                      title="Runs a PATH setup script from the sandbox home"
+                    >
+                      <Terminal className="size-3" />
+                      PATH
+                    </span>
+                  ) : null}
+                  {preset.installScript ? (
+                    <span
+                      className={metaPill}
+                      title="Runs an install script from the repo root"
+                    >
+                      <Terminal className="size-3" />
+                      script
+                    </span>
+                  ) : null}
+                  {preset.secrets.length ? (
+                    <span
+                      className={metaPill}
+                      title={`${preset.secrets.length} secret${preset.secrets.length === 1 ? "" : "s"}`}
+                    >
+                      <KeyRound className="size-3" />
+                      {preset.secrets.length}
+                    </span>
+                  ) : null}
+                  <ChevronRight
+                    className={cn(
+                      "size-3.5 shrink-0 transition-transform",
+                      active
+                        ? "rotate-90 text-muted-foreground"
+                        : "text-muted-foreground/50 group-hover:text-muted-foreground"
+                    )}
+                  />
+                </button>
+                {active ? (
+                  <div className="border-t border-border/60">
+                    {presetFields}
                   </div>
-                </div>
-                {preset.pathInstallScript ? (
-                  <span
-                    className={metaPill}
-                    title="Runs a PATH setup script from the sandbox home"
-                  >
-                    <Terminal className="size-3" />
-                    PATH
-                  </span>
                 ) : null}
-                {preset.installScript ? (
-                  <span
-                    className={metaPill}
-                    title="Runs an install script from the repo root"
-                  >
-                    <Terminal className="size-3" />
-                    script
-                  </span>
-                ) : null}
-                {preset.secrets.length ? (
-                  <span
-                    className={metaPill}
-                    title={`${preset.secrets.length} secret${preset.secrets.length === 1 ? "" : "s"}`}
-                  >
-                    <KeyRound className="size-3" />
-                    {preset.secrets.length}
-                  </span>
-                ) : null}
-                <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
-              </button>
+              </div>
             )
           })
         )}
       </div>
-
-      {isEditing ? (
-        <div className={cn("mt-3", card)}>
-          <div className={cn(cardRow, "border-b border-border/60")}>
-            <Layers3 className="size-5 shrink-0 text-muted-foreground" />
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium text-foreground/85">
-                {selected ? selected.name : "New preset"}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {selected ? "Edit preset" : "Configure a sandbox preset"}
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={resetEditor}
-              aria-label="Close editor"
-              className={iconBtn}
-            >
-              <X className="size-3.5" />
-            </button>
-          </div>
-
-          <div className="grid gap-4 p-4">
-            <label className={fieldLabel}>
-              Name
-              <input
-                aria-label="Preset name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder="Node 22 workspace"
-                className={cn(inputClass, "font-normal")}
-              />
-            </label>
-
-            {selectedIsAuto ? (
-              <div className="space-y-1.5">
-                <div className="text-xs font-medium text-foreground/80">
-                  Automatic cloudcode.yaml environments
-                </div>
-                <p className={fieldHint}>
-                  When this preset runs against a repo, Cloudcode uses the
-                  repo&apos;s cloudcode.yaml first. If the repo does not have
-                  one, it uses the saved Convex cloudcode.yaml for the live
-                  sandbox.
-                </p>
-                {selected?.environments?.length ? (
-                  <div className="-mx-4 mt-3 border-y border-border/60">
-                    {selected.environments.map((environment) => (
-                      <div
-                        key={environment.id}
-                        className="flex items-center gap-2 border-b border-border/60 px-4 py-2 last:border-0"
-                      >
-                        <span className="min-w-0 flex-1 truncate text-xs text-foreground/80">
-                          {environment.repoUrl.replace(/^https?:\/\//, "")}
-                        </span>
-                        <span className={metaPill}>{environment.status}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <>
-                <div
-                  className={cn(
-                    "flex items-start justify-between gap-3 px-3 py-2.5",
-                    cardSurfaceClass
-                  )}
-                >
-                  <div className="min-w-0">
-                    <div className="text-xs font-medium text-foreground/80">
-                      Auto environment
-                    </div>
-                    <p className={fieldHint}>
-                      Use the repo&apos;s cloudcode.yaml for each live chat
-                      sandbox, falling back to the saved Convex cloudcode.yaml
-                      when the repo does not include one. The scripts and
-                      secrets below run after the environment is ready.
-                    </p>
-                  </div>
-                  <Switch
-                    aria-label="Auto environment"
-                    className="mt-0.5"
-                    checked={autoEnvironment}
-                    onCheckedChange={setAutoEnvironment}
-                  />
-                </div>
-
-                {autoEnvironment && selected?.environments?.length ? (
-                  <div className="-mx-4 border-y border-border/60">
-                    {selected.environments.map((environment) => (
-                      <div
-                        key={environment.id}
-                        className="flex items-center gap-2 border-b border-border/60 px-4 py-2 last:border-0"
-                      >
-                        <span className="min-w-0 flex-1 truncate text-xs text-foreground/80">
-                          {environment.repoUrl.replace(/^https?:\/\//, "")}
-                        </span>
-                        <span className={metaPill}>{environment.status}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-
-                <label className={fieldLabel}>
-                  PATH setup script
-                  <textarea
-                    aria-label="PATH setup script"
-                    value={pathInstallScript}
-                    onChange={(event) =>
-                      setPathInstallScript(event.target.value)
-                    }
-                    placeholder={
-                      "curl -fsSL https://vite.plus | bash\nnpm install -g vercel"
-                    }
-                    spellCheck={false}
-                    className={cn(textareaClass, "min-h-24 font-normal")}
-                  />
-                  <span className={fieldHint}>
-                    Runs from the sandbox home before repo setup. Use it for
-                    CLIs and language tools that should be available on PATH.
-                  </span>
-                </label>
-
-                <label className={fieldLabel}>
-                  Repo install script
-                  <textarea
-                    aria-label="Repo install script"
-                    value={installScript}
-                    onChange={(event) => setInstallScript(event.target.value)}
-                    placeholder={"pnpm install\npnpm test -- --runInBand"}
-                    spellCheck={false}
-                    className={cn(textareaClass, "min-h-28 font-normal")}
-                  />
-                  <span className={fieldHint}>
-                    Runs from the cloned repo root before Codex starts. Leave
-                    blank when the base environment already has everything.
-                  </span>
-                </label>
-
-                <div className="border-t border-border/60 pt-4">
-                  <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground/80">
-                    <KeyRound className="size-3.5 text-muted-foreground" />
-                    Secrets
-                    {selected?.secrets.length ? (
-                      <span className={metaPill}>
-                        {selected.secrets.length}
-                      </span>
-                    ) : null}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setImportMode((value) => !value)
-                        setError("")
-                      }}
-                      className={cn(navAction, "ml-auto h-7 px-2.5")}
-                    >
-                      <ClipboardPaste className="size-3.5" />
-                      {importMode ? "Add manually" : "Paste .env"}
-                    </button>
-                  </div>
-
-                  {selected?.secrets.length ? (
-                    <div className="-mx-4 mb-3 border-y border-border/60">
-                      {selected.secrets.map((secret) => (
-                        <div
-                          key={secret.id}
-                          className="flex items-center gap-2 border-b border-border/60 px-4 py-2 last:border-0"
-                        >
-                          <span className="min-w-0 flex-1 truncate font-[family-name:var(--font-mono)] text-xs text-foreground/85">
-                            {secret.name}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => deleteSecret(secret.id)}
-                            disabled={saving}
-                            aria-label={`Delete ${secret.name}`}
-                            title={`Delete ${secret.name}`}
-                            className={cn(iconBtn, "hover:text-destructive")}
-                          >
-                            <Trash2 className="size-3.5" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  ) : selected ? (
-                    <p className="mb-3 text-xs text-muted-foreground">
-                      No preset secrets.
-                    </p>
-                  ) : null}
-
-                  {importMode ? (
-                    <div className="grid gap-2">
-                      <textarea
-                        aria-label="Paste .env file"
-                        value={importText}
-                        onChange={(event) => setImportText(event.target.value)}
-                        placeholder={
-                          "# Paste the contents of your .env file\nSUPABASE_URL=https://xyz.supabase.co\nSUPABASE_SERVICE_ROLE_KEY=ey..."
-                        }
-                        spellCheck={false}
-                        className={cn(textareaClass, "min-h-32")}
-                      />
-                      <div className="flex items-center justify-between gap-2">
-                        <span className={fieldHint}>
-                          {importVars.length > 0
-                            ? `${importVars.length} variable${
-                                importVars.length === 1 ? "" : "s"
-                              } detected${
-                                parsedImport.errors.length
-                                  ? ` · ${parsedImport.errors.length} line${
-                                      parsedImport.errors.length === 1
-                                        ? ""
-                                        : "s"
-                                    } skipped`
-                                  : ""
-                              }`
-                            : importText.trim()
-                              ? "No valid variables found."
-                              : "Paste KEY=value lines from a .env file."}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={importSecrets}
-                          disabled={saving || importVars.length === 0}
-                          className={cn(
-                            navPrimary,
-                            "h-9 shrink-0 justify-center px-4"
-                          )}
-                        >
-                          {saving
-                            ? "Importing"
-                            : importVars.length > 0
-                              ? `Import ${importVars.length}`
-                              : "Import"}
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
-                      <input
-                        aria-label="Secret name"
-                        value={secretName}
-                        onChange={(event) => setSecretName(event.target.value)}
-                        placeholder="SUPABASE_SERVICE_ROLE_KEY"
-                        className={cn(
-                          inputClass,
-                          "font-[family-name:var(--font-mono)] text-xs"
-                        )}
-                        spellCheck={false}
-                      />
-                      <input
-                        aria-label="Secret value"
-                        value={secretValue}
-                        onChange={(event) => setSecretValue(event.target.value)}
-                        placeholder="Value"
-                        type="password"
-                        className={cn(inputClass, "text-xs")}
-                      />
-                      <button
-                        type="button"
-                        onClick={saveSecret}
-                        disabled={saving || !secretName || !secretValue}
-                        className={cn(navPrimary, "h-9 justify-center px-4")}
-                      >
-                        Add
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-
-            {error ? (
-              <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                {error}
-              </div>
-            ) : null}
-          </div>
-
-          <div className="flex items-center justify-between gap-2 border-t border-border/60 px-3.5 py-2.5">
-            {!selectedIsAuto ? (
-              <button
-                type="button"
-                onClick={deletePreset}
-                disabled={!selected || saving}
-                className={navDestructive}
-              >
-                <Trash2 className="size-3.5" />
-                Delete
-              </button>
-            ) : (
-              <div />
-            )}
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={resetEditor}
-                disabled={saving}
-                className={navAction}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={savePreset}
-                disabled={saving || !name.trim()}
-                className={navPrimary}
-              >
-                {saving ? "Saving" : selected ? "Save preset" : "Create preset"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </section>
   )
 }

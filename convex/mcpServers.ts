@@ -437,6 +437,21 @@ export const updateToolPolicy = mutation({
   },
 })
 
+export const setEnabled = mutation({
+  args: {
+    enabled: v.boolean(),
+    serverId: v.id("mcpServers"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await ensureCurrentUser(ctx)
+    await requireOwnedServer(ctx, args.serverId, userId)
+    await ctx.db.patch(args.serverId, {
+      enabled: args.enabled,
+      updatedAt: Date.now(),
+    })
+  },
+})
+
 export const workerSyncDiscoveredTools = mutation({
   args: {
     runId: v.id("codexRuns"),

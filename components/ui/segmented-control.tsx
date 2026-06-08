@@ -51,7 +51,7 @@ function SegmentedControl<T extends string>({
             className={cn(
               "inline-flex h-6 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30",
               fill && "flex-1",
-              active && "bg-background text-foreground shadow-xs",
+              active && "bg-background text-foreground dark:shadow-xs",
               itemClassName
             )}
           >
