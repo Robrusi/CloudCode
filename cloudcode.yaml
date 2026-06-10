@@ -1,0 +1,11 @@
+global:
+  - name: Install pnpm
+    run: npm install -g pnpm@11.4.0
+repo:
+  - name: Install dependencies
+    run: pnpm install --frozen-lockfile --config.dangerously-allow-all-builds=true
+checks:
+  - name: Check Node.js
+    run: node --version
+  - name: Check pnpm
+    run: pnpm --version
