@@ -1,6 +1,6 @@
 "use client"
 
-import { Show, SignInButton, useUser } from "@clerk/nextjs"
+import { Show, useUser } from "@clerk/nextjs"
 import { useMutation, useQuery } from "convex/react"
 import {
   ArrowUp,
@@ -68,6 +68,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog"
 import { MessageBlock } from "@/components/chat-message"
 import { NotesEditor } from "@/components/notes-editor"
 import { OnboardingChecklist } from "@/components/onboarding-checklist"
+import { SignedOutScreen } from "@/components/signed-out-screen"
 import { Button } from "@/components/ui/button"
 import { IconButton as UiIconButton } from "@/components/ui/icon-button"
 import { MenuItem } from "@/components/ui/menu"
@@ -3245,37 +3246,6 @@ function NotesPanel({
         contentClassName="min-h-0 flex-1 px-4 py-4"
       />
     </section>
-  )
-}
-
-function SignedOutScreen() {
-  return (
-    <div className="fixed inset-x-0 top-0 flex h-[100dvh] overflow-hidden bg-background px-6 text-foreground">
-      <div className="flex min-h-0 flex-1 items-center justify-center">
-        <div className="w-full max-w-sm text-center">
-          <h1
-            className={cn(
-              "text-3xl tracking-tight text-foreground/90",
-              GeistPixelSquare.className
-            )}
-          >
-            Cloudcode
-          </h1>
-          <p className="mt-4 text-sm leading-6 text-muted-foreground">
-            A cloud workspace for Codex. Connect a repository, describe a
-            change, and review the branches it ships from an isolated sandbox.
-          </p>
-          <SignInButton mode="modal">
-            <Button type="button" size="lg" className="mt-6">
-              Sign in
-            </Button>
-          </SignInButton>
-          <p className="mt-4 text-xs leading-5 text-muted-foreground/80">
-            Signing in keeps threads and Codex auth attached to your profile.
-          </p>
-        </div>
-      </div>
-    </div>
   )
 }
 

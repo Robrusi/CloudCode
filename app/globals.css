@@ -181,6 +181,20 @@
   }
 }
 
+/* Signed-out screen entrance. Elements style their resting (final) state and
+   let the animation play backwards from it, so `motion-reduce:animate-none`
+   degrades cleanly. */
+@keyframes login-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* iOS zooms the page when focused editable text is under 16px. Floor every
    editable control at 16px on touch devices so focusing text never triggers a
    zoom. `!important` is required to beat Tailwind's `text-xs`/`text-sm` utility
