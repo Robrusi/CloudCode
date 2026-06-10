@@ -64,13 +64,14 @@ import {
   ThinkingSpeedPill,
 } from "@/components/chat-controls"
 import { DiffList } from "@/components/changed-files"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import { MessageBlock } from "@/components/chat-message"
 import { NotesEditor } from "@/components/notes-editor"
+import { OnboardingChecklist } from "@/components/onboarding-checklist"
 import { Button } from "@/components/ui/button"
 import { IconButton as UiIconButton } from "@/components/ui/icon-button"
 import { MenuItem } from "@/components/ui/menu"
 import { menuPanelClass } from "@/components/ui/menu-styles"
-import { popoverSurfaceClass } from "@/components/ui/surface"
 import type { FileBrowserOpenMode } from "@/components/file-browser"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -472,6 +473,12 @@ function ChatInner() {
     () => (rawPresets ?? []) as SandboxPresetRecord[],
     [rawPresets]
   )
+  const autoSandboxPreset = useMemo(
+    () => sandboxPresets.find((preset) => preset.mode === "auto") ?? null,
+    [sandboxPresets]
+  )
+  const viewer = useQuery(api.users.viewer)
+  const dismissOnboardingMutation = useMutation(api.users.dismissOnboarding)
   const createThread = useMutation(api.chats.createThread)
   const ensureDefaultPresets = useMutation(
     api.sandboxPresets.ensureDefaultPresets
@@ -571,6 +578,15 @@ function ChatInner() {
       : ((localStorage.getItem(PRESET_KEY) as Id<"sandboxPresets"> | null) ??
         "")
   )
+  const draftSandboxPresetLoaded = rawPresets !== undefined
+  const draftSandboxPresetValid =
+    !draftSandboxPresetId ||
+    !draftSandboxPresetLoaded ||
+    sandboxPresets.some((preset) => preset.id === draftSandboxPresetId)
+  const effectiveDraftSandboxPresetId =
+    draftSandboxPresetId && draftSandboxPresetValid
+      ? draftSandboxPresetId
+      : (autoSandboxPreset?.id ?? "")
   const [editingRepo, setEditingRepo] = useState(false)
   const [modelOpen, setModelOpen] = useState(false)
   const [presetOpen, setPresetOpen] = useState(false)
@@ -1013,11 +1029,29 @@ function ChatInner() {
     draftBranchMode === "custom" && !draftBranchName.trim()
       ? "auto"
       : draftBranchMode
-  const sandboxPresetId = active ? active.sandboxPresetId : draftSandboxPresetId
+  const sandboxPresetId = active
+    ? active.sandboxPresetId
+    : effectiveDraftSandboxPresetId
   const speed = draftSpeed
   const thinking = draftThinking
+  const codexConnected = Boolean(
+    authStatus && (authStatus.exists || authStatus.accounts.length > 0)
+  )
+  const githubUserReady = Boolean(githubStatus?.app?.user.connected)
+  const githubAppReady = (githubStatus?.app?.installations.length ?? 0) > 0
+  const githubConnected = Boolean(githubStatus?.connected)
+  // Statuses must be loaded before deciding anything onboarding-related so
+  // fully set up users never see the checklist flash while requests resolve.
+  const onboardingStatusReady = authStatus !== null && githubStatus !== null
+  const onboardingComplete = codexConnected && githubConnected
+  const showOnboarding = Boolean(
+    viewer &&
+    !viewer.onboardingDismissedAt &&
+    onboardingStatusReady &&
+    !onboardingComplete
+  )
   const empty = messages.length === 0
-  const threadScrollable = !isMobile || !empty
+  const threadScrollable = !isMobile || !empty || showOnboarding
   const threadContentVersion = messages
     .map((message) =>
       [
@@ -1199,6 +1233,20 @@ function ChatInner() {
     })
   }, [ensureDefaultPresets, userLoading])
 
+  const dismissOnboarding = useCallback(() => {
+    void dismissOnboardingMutation().catch((error) => {
+      console.warn("Unable to dismiss onboarding.", error)
+    })
+  }, [dismissOnboardingMutation])
+
+  // Once every setup step is verifiably complete, retire onboarding for good
+  // so it never resurfaces after a disconnect or on another device.
+  useEffect(() => {
+    if (!viewer || viewer.onboardingDismissedAt) return
+    if (!onboardingStatusReady || !onboardingComplete) return
+    dismissOnboarding()
+  }, [dismissOnboarding, onboardingComplete, onboardingStatusReady, viewer])
+
   useEffect(() => {
     if (typeof window === "undefined") return
     if (autoPresetDefaultedRef.current) return
@@ -1207,12 +1255,26 @@ function ChatInner() {
       return
     }
 
-    const autoPreset = sandboxPresets.find((preset) => preset.mode === "auto")
-    if (!autoPreset) return
+    if (!autoSandboxPreset) return
     autoPresetDefaultedRef.current = true
-    setDraftSandboxPresetId(autoPreset.id)
-    localStorage.setItem(PRESET_KEY, autoPreset.id)
-  }, [draftSandboxPresetId, sandboxPresets])
+    setDraftSandboxPresetId(autoSandboxPreset.id)
+    localStorage.setItem(PRESET_KEY, autoSandboxPreset.id)
+  }, [autoSandboxPreset, draftSandboxPresetId])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (!draftSandboxPresetId || !draftSandboxPresetLoaded) return
+    if (draftSandboxPresetValid) return
+    if (!autoSandboxPreset) return
+
+    setDraftSandboxPresetId(autoSandboxPreset.id)
+    localStorage.setItem(PRESET_KEY, autoSandboxPreset.id)
+  }, [
+    autoSandboxPreset,
+    draftSandboxPresetId,
+    draftSandboxPresetLoaded,
+    draftSandboxPresetValid,
+  ])
 
   useEffect(
     () => () => {
@@ -1924,7 +1986,8 @@ function ChatInner() {
     )
 
     try {
-      const runSandboxPresetId = active?.sandboxPresetId ?? draftSandboxPresetId
+      const runSandboxPresetId =
+        active?.sandboxPresetId ?? effectiveDraftSandboxPresetId
       if (!chatId) {
         const trimmedBaseBranch = draftBaseBranch.trim()
         const created = await createThread({
@@ -2929,14 +2992,30 @@ function ChatInner() {
                   {empty ? (
                     <div className="flex min-h-full flex-col items-center justify-end pb-[calc(clamp(3rem,18dvh,7.5rem)+env(safe-area-inset-bottom))] md:min-h-0 md:justify-start md:pt-[22vh] md:pb-0">
                       <h1 className="text-center text-2xl font-normal tracking-tight text-balance text-foreground/90 md:text-3xl">
-                        {emptyPromptTitle}
+                        {showOnboarding
+                          ? userFirstName
+                            ? `Let’s set you up, ${userFirstName}`
+                            : "Let’s set you up"
+                          : emptyPromptTitle}
                       </h1>
-                      <div
-                        ref={composerRef}
-                        className="mt-10 flex w-full justify-center md:mt-8"
-                      >
-                        {composerBlock}
-                      </div>
+                      {showOnboarding ? (
+                        <div className="mt-10 flex w-full justify-center md:mt-8">
+                          <OnboardingChecklist
+                            codexConnected={codexConnected}
+                            githubAppReady={githubAppReady}
+                            githubConnected={githubConnected}
+                            githubUserReady={githubUserReady}
+                            onDismiss={dismissOnboarding}
+                          />
+                        </div>
+                      ) : (
+                        <div
+                          ref={composerRef}
+                          className="mt-10 flex w-full justify-center md:mt-8"
+                        >
+                          {composerBlock}
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div className="mx-auto w-full max-w-2xl space-y-6 md:space-y-8">
@@ -3174,17 +3253,26 @@ function SignedOutScreen() {
     <div className="fixed inset-x-0 top-0 flex h-[100dvh] overflow-hidden bg-background px-6 text-foreground">
       <div className="flex min-h-0 flex-1 items-center justify-center">
         <div className="w-full max-w-sm text-center">
-          <h1 className="text-3xl font-medium tracking-tight text-foreground/90">
+          <h1
+            className={cn(
+              "text-3xl tracking-tight text-foreground/90",
+              GeistPixelSquare.className
+            )}
+          >
             Cloudcode
           </h1>
-          <p className="mt-3 text-sm leading-6 text-muted-foreground">
-            Sign in to keep threads and Codex auth attached to your profile.
+          <p className="mt-4 text-sm leading-6 text-muted-foreground">
+            A cloud workspace for Codex. Connect a repository, describe a
+            change, and review the branches it ships from an isolated sandbox.
           </p>
           <SignInButton mode="modal">
             <Button type="button" size="lg" className="mt-6">
               Sign in
             </Button>
           </SignInButton>
+          <p className="mt-4 text-xs leading-5 text-muted-foreground/80">
+            Signing in keeps threads and Codex auth attached to your profile.
+          </p>
         </div>
       </div>
     </div>
@@ -3778,90 +3866,5 @@ function SandboxMenu({
           )
         : null}
     </>
-  )
-}
-
-function ConfirmDialog({
-  title,
-  description,
-  confirmLabel = "Confirm",
-  cancelLabel = "Cancel",
-  destructive,
-  confirmWhite,
-  onConfirm,
-  onCancel,
-}: {
-  title: string
-  description?: string
-  confirmLabel?: string
-  cancelLabel?: string
-  destructive?: boolean
-  confirmWhite?: boolean
-  onConfirm: () => void
-  onCancel: () => void
-}) {
-  useEffect(() => {
-    function handleKeyDown(event: globalThis.KeyboardEvent) {
-      if (event.key === "Escape") onCancel()
-    }
-
-    window.addEventListener("keydown", handleKeyDown)
-    return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [onCancel])
-
-  return (
-    <dialog
-      open
-      className="fixed inset-0 z-50 m-0 flex h-dvh max-h-none w-screen max-w-none items-center justify-center border-0 bg-black/40 p-4 backdrop-blur-sm"
-      onCancel={(e) => {
-        e.preventDefault()
-        onCancel()
-      }}
-      aria-modal="true"
-      aria-label={title}
-      tabIndex={-1}
-    >
-      <button
-        type="button"
-        aria-label="Cancel dialog"
-        tabIndex={-1}
-        className="absolute inset-0 cursor-default border-0 bg-transparent p-0"
-        onClick={onCancel}
-      />
-      <div
-        className={cn(
-          "relative z-10 w-full max-w-sm overflow-hidden p-5",
-          popoverSurfaceClass
-        )}
-      >
-        <div className="text-base font-medium text-foreground">{title}</div>
-        {description ? (
-          <p className="mt-1.5 text-sm text-muted-foreground">{description}</p>
-        ) : null}
-        <div className="mt-5 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-lg border border-border px-3 py-1.5 text-sm text-foreground/80 transition-colors hover:bg-muted"
-          >
-            {cancelLabel}
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            className={cn(
-              "rounded-lg px-3 py-1.5 text-sm transition-colors",
-              destructive
-                ? "text-destructive-foreground bg-destructive hover:bg-destructive/90"
-                : confirmWhite
-                  ? "border border-border text-foreground/80 hover:bg-muted"
-                  : "bg-foreground text-background hover:bg-foreground/90"
-            )}
-          >
-            {confirmLabel}
-          </button>
-        </div>
-      </div>
-    </dialog>
   )
 }

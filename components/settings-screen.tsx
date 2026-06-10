@@ -1,5 +1,6 @@
 "use client"
 
+import { useClerk, useUser } from "@clerk/nextjs"
 import { useAction, useMutation, useQuery } from "convex/react"
 import {
   Check,
@@ -13,6 +14,7 @@ import {
   KeyRound,
   Layers3,
   Loader2,
+  LogOut,
   Pencil,
   Plus,
   RefreshCw,
@@ -24,7 +26,10 @@ import {
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import type { SettingsSectionId } from "@/components/settings-sections"
+import { GitHubIcon, OpenAIIcon } from "@/components/ui/brand-icons"
+import { Button } from "@/components/ui/button"
 import { IconButton } from "@/components/ui/icon-button"
 import { SegmentedControl } from "@/components/ui/segmented-control"
 import { Switch } from "@/components/ui/switch"
@@ -317,15 +322,122 @@ function ConnectionsSettings({
             onCodexAuthChanged={onCodexAuthChanged}
           />
         </div>
-        <div className="pt-7">
+        <div className="py-7">
           <GitHubConnectionRow
             status={githubStatus}
             error={githubAuthError}
             onGitHubAuthChanged={onGitHubAuthChanged}
           />
         </div>
+        <div className="pt-7">
+          <AccountRow />
+        </div>
       </div>
     </SettingsPage>
+  )
+}
+
+function AccountRow() {
+  const clerk = useClerk()
+  const { user } = useUser()
+  const [signingOut, setSigningOut] = useState(false)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState("")
+  const title = user?.fullName || user?.username || "Account"
+
+  async function signOut() {
+    if (signingOut) return
+    setSigningOut(true)
+    try {
+      await clerk.signOut()
+    } catch (error) {
+      console.warn("Unable to sign out.", error)
+      setSigningOut(false)
+    }
+  }
+
+  async function deleteAccount() {
+    if (deleting) return
+    setDeleting(true)
+    setDeleteError("")
+    try {
+      const res = await fetch("/api/account", { method: "DELETE" })
+      const data = (await res.json().catch(() => ({}))) as { error?: string }
+
+      if (!res.ok) {
+        throw new Error(data.error ?? "Unable to delete account.")
+      }
+
+      try {
+        await clerk.signOut()
+      } catch {
+        // The Clerk user is already gone; just leave the app.
+        window.location.assign("/")
+      }
+    } catch (error) {
+      setDeleteError(
+        error instanceof Error ? error.message : "Unable to delete account."
+      )
+      setDeleting(false)
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center gap-3">
+        {user?.imageUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={user.imageUrl}
+            alt=""
+            className="size-5 shrink-0 rounded-full"
+          />
+        ) : (
+          <Circle className="size-5 shrink-0 text-foreground/80" />
+        )}
+        <div className="min-w-0 flex-1 text-sm font-medium text-foreground">
+          {title}
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="text-foreground/80"
+          onClick={() => void signOut()}
+          disabled={signingOut || deleting}
+        >
+          {signingOut ? <Loader2 className="animate-spin" /> : <LogOut />}
+          Log out
+        </Button>
+        <Button
+          type="button"
+          variant="destructive"
+          size="sm"
+          onClick={() => setConfirmingDelete(true)}
+          disabled={signingOut || deleting}
+        >
+          Delete account
+        </Button>
+      </div>
+      {confirmingDelete ? (
+        <ConfirmDialog
+          title="Delete account?"
+          description="This permanently deletes your account and everything associated with it: chats, sandboxes, presets, MCP servers, billing records, and the connected ChatGPT and GitHub credentials. This cannot be undone."
+          confirmLabel="Delete account"
+          confirmationPhrase="Delete account"
+          destructive
+          busy={deleting}
+          error={deleteError}
+          onCancel={() => {
+            if (deleting) return
+            setConfirmingDelete(false)
+            setDeleteError("")
+          }}
+          onConfirm={() => void deleteAccount()}
+        />
+      ) : null}
+    </div>
   )
 }
 
@@ -702,14 +814,7 @@ function ChatGPTConnectionRow({
   return (
     <div>
       <div className="flex items-center gap-3">
-        <svg
-          viewBox="0 0 256 260"
-          preserveAspectRatio="xMidYMid"
-          aria-hidden
-          className="size-5 shrink-0 fill-current text-foreground/80"
-        >
-          <path d="M239.184 106.203a64.716 64.716 0 0 0-5.576-53.103C219.452 28.459 191 15.784 163.213 21.74A65.586 65.586 0 0 0 52.096 45.22a64.716 64.716 0 0 0-43.23 31.36c-14.31 24.602-11.061 55.634 8.033 76.74a64.665 64.665 0 0 0 5.525 53.102c14.174 24.65 42.644 37.324 70.446 31.36a64.72 64.72 0 0 0 48.754 21.744c28.481.025 53.714-18.361 62.414-45.481a64.767 64.767 0 0 0 43.229-31.36c14.137-24.558 10.875-55.423-8.083-76.483Zm-97.56 136.338a48.397 48.397 0 0 1-31.105-11.255l1.535-.87 51.67-29.825a8.595 8.595 0 0 0 4.247-7.367v-72.85l21.845 12.636c.218.111.37.32.409.563v60.367c-.056 26.818-21.783 48.545-48.601 48.601Zm-104.466-44.61a48.345 48.345 0 0 1-5.781-32.589l1.534.921 51.722 29.826a8.339 8.339 0 0 0 8.441 0l63.181-36.425v25.221a.87.87 0 0 1-.358.665l-52.335 30.184c-23.257 13.398-52.97 5.431-66.404-17.803ZM23.549 85.38a48.499 48.499 0 0 1 25.58-21.333v61.39a8.288 8.288 0 0 0 4.195 7.316l62.874 36.272-21.845 12.636a.819.819 0 0 1-.767 0L41.353 151.53c-23.211-13.454-31.171-43.144-17.804-66.405v.256Zm179.466 41.695-63.08-36.63L161.73 77.86a.819.819 0 0 1 .768 0l52.233 30.184a48.6 48.6 0 0 1-7.316 87.635v-61.391a8.544 8.544 0 0 0-4.4-7.213Zm21.742-32.69-1.535-.922-51.619-30.081a8.39 8.39 0 0 0-8.492 0L99.98 99.808V74.587a.716.716 0 0 1 .307-.665l52.233-30.133a48.652 48.652 0 0 1 72.236 50.391v.205ZM88.061 139.097l-21.845-12.585a.87.87 0 0 1-.41-.614V65.685a48.652 48.652 0 0 1 79.757-37.346l-1.535.87-51.67 29.825a8.595 8.595 0 0 0-4.246 7.367l-.051 72.697Zm11.868-25.58 28.138-16.217 28.188 16.218v32.434l-28.086 16.218-28.188-16.218-.052-32.434Z" />
-        </svg>
+        <OpenAIIcon className="size-5 shrink-0 text-foreground/80" />
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium text-foreground">ChatGPT</div>
           <div className="text-xs text-muted-foreground">{detail}</div>
@@ -1085,17 +1190,7 @@ function GitHubConnectionRow({
   return (
     <div>
       <div className="flex items-center gap-3">
-        <svg
-          viewBox="0 0 98 96"
-          aria-hidden
-          className="size-5 shrink-0 fill-current text-foreground/80"
-        >
-          <path
-            fillRule="evenodd"
-            clipRule="evenodd"
-            d="M48.854 0C21.839 0 0 22 0 49.217c0 21.756 13.993 40.172 33.405 46.69 2.427.49 3.316-1.059 3.316-2.362 0-1.141-.08-5.052-.08-9.127-13.59 2.934-16.42-5.867-16.42-5.867-2.184-5.704-5.42-7.17-5.42-7.17-4.448-3.015.324-3.015.324-3.015 4.934.326 7.523 5.052 7.523 5.052 4.367 7.496 11.404 5.378 14.235 4.074.404-3.178 1.699-5.378 3.074-6.6-10.839-1.141-22.243-5.378-22.243-24.283 0-5.378 1.94-9.778 5.014-13.2-.485-1.222-2.184-6.275.486-13.038 0 0 4.125-1.304 13.426 5.052a46.97 46.97 0 0 1 12.214-1.63c4.125 0 8.33.571 12.213 1.63 9.302-6.356 13.427-5.052 13.427-5.052 2.67 6.763.97 11.816.485 13.038 3.155 3.422 5.015 7.822 5.015 13.2 0 18.905-11.404 23.06-22.324 24.283 1.78 1.548 3.316 4.481 3.316 9.126 0 6.6-.08 11.897-.08 13.526 0 1.304.89 2.853 3.316 2.364C83.907 89.389 98 70.973 98 49.217 98 22 76.162 0 48.854 0Z"
-          />
-        </svg>
+        <GitHubIcon className="size-5 shrink-0 text-foreground/80" />
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium text-foreground">GitHub</div>
           <div className="text-xs text-muted-foreground">{detail}</div>

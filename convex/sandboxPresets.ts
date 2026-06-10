@@ -3,6 +3,7 @@ import { v } from "convex/values"
 import { mutation, query } from "./_generated/server"
 import type { Id } from "./_generated/dataModel"
 import type { MutationCtx, QueryCtx } from "./_generated/server"
+import { ensureAutoEnvironmentPreset } from "./lib/sandboxPresets"
 import { ensureCurrentUser, getCurrentUser } from "./lib/users"
 import { requireWorkerSecret } from "./lib/workerAuth"
 
@@ -331,26 +332,7 @@ export const ensureDefaultPresets = mutation({
   args: {},
   handler: async (ctx) => {
     const userId = await ensureCurrentUser(ctx)
-    const existing = await ctx.db
-      .query("sandboxPresets")
-      .withIndex("by_user_mode", (q) =>
-        q.eq("userId", userId).eq("mode", "auto")
-      )
-      .first()
-
-    if (existing) return [existing._id]
-
-    const now = Date.now()
-    const id = await ctx.db.insert("sandboxPresets", {
-      createdAt: now,
-      environmentSlug: "auto",
-      mode: "auto",
-      name: "Auto environment",
-      updatedAt: now,
-      userId,
-    })
-
-    return [id]
+    return [await ensureAutoEnvironmentPreset(ctx, userId)]
   },
 })
 

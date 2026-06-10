@@ -670,7 +670,7 @@ export function PresetPill({
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const selected = presets.find((preset) => preset.id === value)
-  const label = selected?.name ?? activeLabel ?? "Default"
+  const label = selected?.name ?? activeLabel ?? "Auto environment"
 
   useEffect(() => {
     if (!open) return
@@ -708,17 +708,6 @@ export function PresetPill({
           <div className="px-3 pt-1.5 pb-1 text-xs text-muted-foreground">
             Preset
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              onSelect("")
-              setOpen(false)
-            }}
-            className={popoverItem}
-          >
-            <span>Default</span>
-            {!value ? <Check className="size-4 shrink-0" /> : null}
-          </button>
           {presets.map((preset) => (
             <button
               key={preset.id}

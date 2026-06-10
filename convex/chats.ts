@@ -3,6 +3,7 @@ import { v } from "convex/values"
 import { mutation, query } from "./_generated/server"
 import type { MutationCtx, QueryCtx } from "./_generated/server"
 import type { Doc, Id } from "./_generated/dataModel"
+import { resolveOwnedPresetOrAutoDefault } from "./lib/sandboxPresets"
 import { ensureCurrentUser, getCurrentUser } from "./lib/users"
 
 const model = v.union(
@@ -234,21 +235,6 @@ function setTodoStatus(
   }
 }
 
-async function requireOwnedPreset(
-  ctx: MutationCtx,
-  presetId: Id<"sandboxPresets"> | undefined,
-  userId: Id<"users">
-) {
-  if (!presetId) return undefined
-
-  const preset = await ctx.db.get(presetId)
-  if (!preset || preset.userId !== userId) {
-    throw new Error("Preset not found.")
-  }
-
-  return preset._id
-}
-
 async function presetNameForThread(
   ctx: QueryCtx,
   presetId: Id<"sandboxPresets"> | undefined
@@ -350,7 +336,7 @@ export const createThread = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
-    const sandboxPresetId = await requireOwnedPreset(
+    const sandboxPresetId = await resolveOwnedPresetOrAutoDefault(
       ctx,
       args.sandboxPresetId,
       userId
@@ -365,7 +351,7 @@ export const createThread = mutation({
       lastUserMessageAt: now,
       model: args.model,
       repoUrl: args.repoUrl,
-      ...(sandboxPresetId ? { sandboxPresetId } : {}),
+      sandboxPresetId,
       title: args.title,
       updatedAt: now,
       userId,

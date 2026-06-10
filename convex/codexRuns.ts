@@ -4,6 +4,7 @@ import { mutation, query } from "./_generated/server"
 import type { Doc, Id } from "./_generated/dataModel"
 import type { MutationCtx, QueryCtx } from "./_generated/server"
 import { sandboxAccessForUser } from "./lib/sandboxAccess"
+import { resolveOwnedPresetOrAutoDefault } from "./lib/sandboxPresets"
 import { ensureCurrentUser, getCurrentUser } from "./lib/users"
 import { requireWorkerSecret } from "./lib/workerAuth"
 
@@ -170,21 +171,6 @@ async function requireOwnedAssistantMessage(
   }
 
   return message
-}
-
-async function requireOwnedPreset(
-  ctx: MutationCtx,
-  presetId: Id<"sandboxPresets"> | undefined,
-  userId: Id<"users">
-) {
-  if (!presetId) return undefined
-
-  const preset = await ctx.db.get(presetId)
-  if (!preset || preset.userId !== userId) {
-    throw new Error("Preset not found.")
-  }
-
-  return preset._id
 }
 
 async function activeRunForThread(
@@ -422,9 +408,9 @@ export const create = mutation({
       args.threadId,
       userId
     )
-    const sandboxPresetId = await requireOwnedPreset(
+    const sandboxPresetId = await resolveOwnedPresetOrAutoDefault(
       ctx,
-      args.sandboxPresetId,
+      args.sandboxPresetId ?? thread.sandboxPresetId,
       userId
     )
     const auth = await requireCodexAuth(ctx, userId, args.profile, {
@@ -463,7 +449,7 @@ export const create = mutation({
       repoUrl: args.repoUrl,
       ...(args.resumeContext ? { resumeContext: args.resumeContext } : {}),
       ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
-      ...(sandboxPresetId ? { sandboxPresetId } : {}),
+      sandboxPresetId,
       ...(args.sandboxId ? { sandboxState: "running" as const } : {}),
       speed: args.speed,
       status: "queued",

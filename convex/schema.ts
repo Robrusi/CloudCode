@@ -432,6 +432,7 @@ export default defineSchema({
     email: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
     name: v.optional(v.string()),
+    onboardingDismissedAt: v.optional(v.number()),
     subject: v.string(),
     tokenIdentifier: v.string(),
     updatedAt: v.number(),
