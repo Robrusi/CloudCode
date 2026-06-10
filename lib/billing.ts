@@ -3,10 +3,17 @@ export const BILLING_USAGE_UNIT = "micro_usd"
 export const BILLING_MICRO_USD_PER_USD = 1_000_000
 export const BILLING_MICRO_USD_PER_CENT = BILLING_MICRO_USD_PER_USD / 100
 
+export const BILLING_FREE_PLAN_ID = "free"
 export const BILLING_HOBBY_PLAN_ID = "hobby"
 export const BILLING_PLUS_PLAN_ID = "plus"
 
 export const BILLING_PLANS = [
+  {
+    includedMicroUsd: 50_000,
+    name: "Free",
+    planId: BILLING_FREE_PLAN_ID,
+    priceUsd: 0,
+  },
   {
     includedMicroUsd: 6_000_000,
     name: "Hobby",
@@ -175,6 +182,21 @@ export function microUsdHoursLeft(
   return remainingMicroUsd / burnRateMicroUsdPerSecond / 3600
 }
 
+/** Minutes a balance lasts at a given burn rate; 0 when depleted or idle-free. */
+export function microUsdMinutesLeft(
+  remainingMicroUsd: number,
+  burnRateMicroUsdPerSecond: number
+) {
+  if (
+    !Number.isFinite(remainingMicroUsd) ||
+    remainingMicroUsd <= 0 ||
+    burnRateMicroUsdPerSecond <= 0
+  ) {
+    return 0
+  }
+  return remainingMicroUsd / burnRateMicroUsdPerSecond / 60
+}
+
 /**
  * Whole hours of running sandbox time a plan's included allowance buys, using
  * the same reference sandbox as the "hours left" meter so the figures align.
@@ -189,6 +211,38 @@ export function planIncludedHours(includedMicroUsd: number) {
       })
     )
   )
+}
+
+export function planIncludedMinutes(includedMicroUsd: number) {
+  return Math.floor(
+    microUsdMinutesLeft(
+      includedMicroUsd,
+      daytonaBurnRateMicroUsdPerSecond({
+        resources: DAYTONA_REFERENCE_SANDBOX_RESOURCES,
+        state: "running",
+      })
+    )
+  )
+}
+
+export function planIncludedDisplayMinutes(includedMicroUsd: number) {
+  const exactMinutes = microUsdMinutesLeft(
+    includedMicroUsd,
+    daytonaBurnRateMicroUsdPerSecond({
+      resources: DAYTONA_REFERENCE_SANDBOX_RESOURCES,
+      state: "running",
+    })
+  )
+  if (exactMinutes < 5) return Math.max(1, Math.floor(exactMinutes))
+  return Math.max(5, Math.round(exactMinutes / 5) * 5)
+}
+
+export function planIncludedTimeLabel(includedMicroUsd: number) {
+  const hours = planIncludedHours(includedMicroUsd)
+  if (hours >= 1) return `${hours} ${hours === 1 ? "hour" : "hours"}`
+
+  const minutes = planIncludedDisplayMinutes(includedMicroUsd)
+  return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`
 }
 
 export function readDaytonaBillingRatesFromEnv(

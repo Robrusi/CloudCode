@@ -310,6 +310,15 @@ reducer.handleNotification({
   },
 })
 reducer.handleNotification({
+  method: "item/mcpToolCall/progress",
+  params: {
+    itemId: "mcp-1",
+    message: "Calling cloudcode_desktop.desktop_open_browser",
+    threadId: "thread-1",
+    turnId: "turn-1",
+  },
+})
+reducer.handleNotification({
   method: "item/completed",
   params: {
     item: {
@@ -626,8 +635,16 @@ const mcpLog = logs.find(
 )
 assert.ok(mcpLog)
 assert.ok(mcpLog.detail?.includes("opened"))
+assert.ok(mcpLog.detail?.includes('"itemId":"mcp-1"'))
 const mcpMarker = inlineToolMarker(mcpLog)
 assert.ok(mcpMarker)
+assert.ok(mcpMarker.includes("mcp-1"))
+const mcpProgressLog = logs.find(
+  (log) => log.message === "Calling cloudcode_desktop.desktop_open_browser"
+)
+assert.ok(mcpProgressLog)
+assert.ok(mcpProgressLog.detail?.includes('"itemId":"mcp-1"'))
+assert.equal(inlineToolMarker(mcpProgressLog), null)
 
 const authoritativeResult = {
   branchName: "codex/test",

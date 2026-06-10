@@ -1,1 +1,1 @@
-export { default, hobby, infraUsage, plus } from "./autumn/autumn.config"
+export { default, free, hobby, infraUsage, plus } from "./autumn/autumn.config"

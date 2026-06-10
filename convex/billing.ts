@@ -13,6 +13,7 @@ import { getCurrentUser } from "./lib/users"
 import { requireWorkerSecret } from "./lib/workerAuth"
 import {
   BILLING_DAYTONA_CHECKPOINT_MS,
+  BILLING_FREE_PLAN_ID,
   BILLING_INFRA_USAGE_FEATURE_ID,
   BILLING_MINIMUM_START_BALANCE_MICRO_USD,
   BILLING_PLANS,
@@ -22,13 +23,18 @@ import {
   daytonaBurnRateMicroUsdPerSecond,
   daytonaSegmentMicroUsd,
   microUsdHoursLeft,
+  microUsdMinutesLeft,
   type BillingPlanId,
   type BillingUsageSource,
   type DaytonaBillingResources,
   type DaytonaBillingState,
 } from "../lib/billing"
 
-const billingPlanId = v.union(v.literal("hobby"), v.literal("plus"))
+const billingPlanId = v.union(
+  v.literal("free"),
+  v.literal("hobby"),
+  v.literal("plus")
+)
 const billingUsageSource = v.union(
   v.literal("trigger"),
   v.literal("daytona"),
@@ -82,10 +88,104 @@ type ActivePlanInfo = {
   canceling: boolean
   currentPeriodEnd: number | null
   planId: BillingPlanId | null
+  scheduledPlanId: BillingPlanId | null
   status: string | null
 }
 
+type AutumnPlanSubscription = {
+  addOn?: boolean
+  canceledAt?: number | null
+  currentPeriodEnd?: number | null
+  id?: string
+  planId: string
+  status?: string
+}
+
 const KNOWN_PLAN_IDS = new Set<string>(BILLING_PLANS.map((plan) => plan.planId))
+const PLAN_RANK_BY_ID = new Map<string, number>(
+  BILLING_PLANS.map((plan) => [plan.planId, plan.priceUsd])
+)
+
+function highestRankedSubscription<
+  T extends {
+    planId: string
+  },
+>(subscriptions: T[]) {
+  let selected: T | undefined
+  let selectedRank = -1
+  for (const subscription of subscriptions) {
+    const rank = PLAN_RANK_BY_ID.get(subscription.planId) ?? 0
+    if (!selected || rank > selectedRank) {
+      selected = subscription
+      selectedRank = rank
+    }
+  }
+  return selected
+}
+
+function basePlanSubscriptions(customer: {
+  subscriptions?: AutumnPlanSubscription[]
+}) {
+  return (customer.subscriptions ?? []).filter(
+    (subscription) =>
+      !subscription.addOn && KNOWN_PLAN_IDS.has(subscription.planId)
+  )
+}
+
+function activeBasePlanSubscription(customer: {
+  subscriptions?: AutumnPlanSubscription[]
+}) {
+  return highestRankedSubscription(
+    basePlanSubscriptions(customer).filter((entry) => entry.status === "active")
+  )
+}
+
+function scheduledBasePlanSubscription(customer: {
+  subscriptions?: AutumnPlanSubscription[]
+}) {
+  return highestRankedSubscription(
+    basePlanSubscriptions(customer).filter(
+      (entry) => entry.status === "scheduled"
+    )
+  )
+}
+
+async function livePlanInfoWithUsage(
+  ctx: ActionCtx,
+  {
+    customer,
+    userId,
+  }: {
+    customer: {
+      balances?: Record<
+        string,
+        {
+          granted?: number
+          nextResetAt?: number | null
+          remaining?: number
+          unlimited?: boolean
+        }
+      >
+      subscriptions?: AutumnPlanSubscription[]
+    }
+    userId: Id<"users">
+  }
+): Promise<ActivePlanInfo & { usage: UsageHoursInfo | null }> {
+  const plan = resolveActivePlan(customer)
+
+  await ctx.runMutation(internal.billing.setCustomerPlan, {
+    planId: plan.planId ?? undefined,
+    status: plan.status ?? undefined,
+    userId,
+  })
+
+  const summary = (await ctx.runQuery(internal.billing.pendingUsageForUser, {
+    userId,
+  })) as LocalUsageSummary
+  const usage = computeUsageHours(customer, summary.pendingMicroUsd)
+
+  return { ...plan, usage }
+}
 
 /**
  * Derives the customer's current base plan from the live Autumn subscriptions.
@@ -93,27 +193,22 @@ const KNOWN_PLAN_IDS = new Set<string>(BILLING_PLANS.map((plan) => plan.planId))
  * hosted-checkout subscriptions must be read back from Autumn to be reflected.
  */
 function resolveActivePlan(customer: {
-  subscriptions?: Array<{
-    addOn?: boolean
-    canceledAt?: number | null
-    currentPeriodEnd?: number | null
-    planId: string
-    status?: string
-  }>
+  subscriptions?: AutumnPlanSubscription[]
 }): ActivePlanInfo {
-  const subscriptions = customer.subscriptions ?? []
-  const candidates = subscriptions.filter(
-    (subscription) =>
-      !subscription.addOn && KNOWN_PLAN_IDS.has(subscription.planId)
-  )
+  const candidates = basePlanSubscriptions(customer)
   const subscription =
-    candidates.find((entry) => entry.status === "active") ?? candidates[0]
+    activeBasePlanSubscription(customer) ??
+    highestRankedSubscription(candidates)
+  const scheduledSubscription = scheduledBasePlanSubscription(customer)
 
   if (!subscription) {
     return {
       canceling: false,
       currentPeriodEnd: null,
       planId: null,
+      scheduledPlanId: scheduledSubscription
+        ? (scheduledSubscription.planId as BillingPlanId)
+        : null,
       status: null,
     }
   }
@@ -122,6 +217,9 @@ function resolveActivePlan(customer: {
     canceling: subscription.canceledAt != null,
     currentPeriodEnd: subscription.currentPeriodEnd ?? null,
     planId: subscription.planId as BillingPlanId,
+    scheduledPlanId: scheduledSubscription
+      ? (scheduledSubscription.planId as BillingPlanId)
+      : null,
     status: subscription.status ?? null,
   }
 }
@@ -131,13 +229,15 @@ type UsageHoursInfo = {
   fractionRemaining: number
   nextResetAt: number | null
   runningHoursLeft: number
+  runningMinutesLeft: number
   stoppedHoursLeft: number
+  stoppedMinutesLeft: number
   unlimited: boolean
 }
 
 /**
  * Projects the customer's authoritative Autumn infra balance into a coarse
- * "hours left" estimate, hiding the raw allowance from the browser. The local
+ * "time left" estimate, hiding the raw allowance from the browser. The local
  * pending/failed usage (not yet settled on Autumn) is subtracted first.
  */
 function computeUsageHours(
@@ -186,8 +286,14 @@ function computeUsageHours(
     runningHoursLeft: Math.floor(
       microUsdHoursLeft(remainingMicroUsd, runningBurn)
     ),
+    runningMinutesLeft: Math.floor(
+      microUsdMinutesLeft(remainingMicroUsd, runningBurn)
+    ),
     stoppedHoursLeft: Math.floor(
       microUsdHoursLeft(remainingMicroUsd, stoppedBurn)
+    ),
+    stoppedMinutesLeft: Math.floor(
+      microUsdMinutesLeft(remainingMicroUsd, stoppedBurn)
     ),
     unlimited,
   }
@@ -293,20 +399,51 @@ async function autumnClient() {
   return new Autumn({ secretKey, timeoutMs: 15_000 })
 }
 
-async function ensureAutumnCustomer(ctx: ActionCtx, user: BillingUser) {
-  const customerId = autumnCustomerId(user._id)
-  const autumn = await autumnClient()
-  const customer = await autumn.customers.getOrCreate({
-    customerId,
+function autumnCustomerParams(user: BillingUser) {
+  return {
+    autoEnablePlanId: BILLING_FREE_PLAN_ID,
+    customerId: autumnCustomerId(user._id),
     email: user.email,
     fingerprint: user.subject || user.tokenIdentifier,
     metadata: { convexUserId: user._id },
     name: user.name,
-  })
+  }
+}
+
+async function ensureAutumnCustomer(ctx: ActionCtx, user: BillingUser) {
+  const customerId = autumnCustomerId(user._id)
+  const autumn = await autumnClient()
+  let customer = await autumn.customers.getOrCreate(autumnCustomerParams(user))
+  let plan = resolveActivePlan(customer)
+
+  if (!activeBasePlanSubscription(customer)) {
+    const response = await autumn.billing.attach({
+      customerId,
+      planId: BILLING_FREE_PLAN_ID,
+      redirectMode: "never",
+    })
+    customer = await autumn.customers.getOrCreate(autumnCustomerParams(user))
+    plan = resolveActivePlan(customer)
+
+    await ctx.runMutation(internal.billing.upsertCustomerRecord, {
+      autumnCustomerId: customerId,
+      email: user.email,
+      name: user.name,
+      planId: plan.planId ?? BILLING_FREE_PLAN_ID,
+      status:
+        plan.status ?? (response.paymentUrl ? "checkout_required" : "active"),
+      userId: user._id,
+    })
+
+    return { autumn, customer, customerId }
+  }
+
   await ctx.runMutation(internal.billing.upsertCustomerRecord, {
     autumnCustomerId: customerId,
     email: user.email,
     name: user.name,
+    planId: plan.planId ?? BILLING_FREE_PLAN_ID,
+    status: plan.status ?? undefined,
     userId: user._id,
   })
   return { autumn, customer, customerId }
@@ -504,16 +641,22 @@ export const attachCurrentUserPlan = action({
     const response = await autumn.billing.attach({
       customerId,
       planId: args.planId,
-      redirectMode: "always",
+      redirectMode: args.planId === BILLING_FREE_PLAN_ID ? "never" : "always",
       successUrl: args.successUrl,
     })
+    const customer = await autumn.customers.getOrCreate(
+      autumnCustomerParams(user)
+    )
+    const plan = resolveActivePlan(customer)
 
     await ctx.runMutation(internal.billing.upsertCustomerRecord, {
       autumnCustomerId: customerId,
       email: user.email,
       name: user.name,
-      ...(response.paymentUrl ? {} : { planId: args.planId }),
-      status: response.paymentUrl ? "checkout_required" : "active",
+      ...(response.paymentUrl ? {} : { planId: plan.planId ?? args.planId }),
+      status: response.paymentUrl
+        ? "checkout_required"
+        : (plan.status ?? "active"),
       userId: user._id,
     })
 
@@ -522,6 +665,7 @@ export const attachCurrentUserPlan = action({
       customerId,
       planId: args.planId,
       returnUrl: args.returnUrl,
+      scheduledPlanId: plan.scheduledPlanId,
     }
   },
 })
@@ -538,20 +682,59 @@ export const refreshCurrentUserPlan = action({
     if (!user) throw new Error("Not authenticated.")
 
     const { customer } = await ensureAutumnCustomer(ctx, user)
-    const plan = resolveActivePlan(customer)
-
-    await ctx.runMutation(internal.billing.setCustomerPlan, {
-      planId: plan.planId ?? undefined,
-      status: plan.status ?? undefined,
+    return await livePlanInfoWithUsage(ctx, {
+      customer,
       userId: user._id,
     })
+  },
+})
 
-    const summary = (await ctx.runQuery(internal.billing.pendingUsageForUser, {
+export const cancelCurrentUserScheduledPlan = action({
+  args: {},
+  handler: async (
+    ctx
+  ): Promise<ActivePlanInfo & { usage: UsageHoursInfo | null }> => {
+    const user = (await ctx.runQuery(
+      api.users.viewer,
+      {}
+    )) as BillingUser | null
+    if (!user) throw new Error("Not authenticated.")
+
+    const { autumn, customer, customerId } = await ensureAutumnCustomer(
+      ctx,
+      user
+    )
+    const scheduled = scheduledBasePlanSubscription(customer)
+    const active = activeBasePlanSubscription(customer)
+
+    if (scheduled) {
+      await autumn.billing.update({
+        cancelAction: "cancel_immediately",
+        customerId,
+        noBillingChanges: true,
+        planId: scheduled.planId,
+        ...(scheduled.id ? { subscriptionId: scheduled.id } : {}),
+      })
+    }
+
+    if (active?.canceledAt) {
+      await autumn.billing.update({
+        cancelAction: "uncancel",
+        customerId,
+        noBillingChanges: true,
+        planId: active.planId,
+        ...(active.id ? { subscriptionId: active.id } : {}),
+      })
+    }
+
+    const refreshedCustomer = await autumn.customers.getOrCreate(
+      autumnCustomerParams(user)
+    )
+
+    return await livePlanInfoWithUsage(ctx, {
+      customer: refreshedCustomer,
       userId: user._id,
-    })) as LocalUsageSummary
-    const usage = computeUsageHours(customer, summary.pendingMicroUsd)
-
-    return { ...plan, usage }
+    })
   },
 })
 

@@ -150,7 +150,7 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           error:
-            "Add a Hobby or Plus subscription, or wait for your included usage to reset.",
+            "Upgrade to Hobby or Plus, or wait for your included usage to reset.",
         },
         { status: 402 }
       )

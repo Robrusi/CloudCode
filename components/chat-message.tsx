@@ -647,6 +647,7 @@ type ParsedLogDetail = {
   }>
   command?: string
   exitCode?: number
+  itemId?: string
   kind?: string
   name?: string
   output?: string
@@ -692,6 +693,7 @@ function withToolDetailRenderKey(
 function toolDetailKey(detail: ParsedLogDetail) {
   return [
     detail.kind,
+    detail.itemId,
     detail.name,
     detail.status,
     detail.exitCode,
@@ -753,6 +755,93 @@ function isTerminalCommandDetail(detail: ParsedLogDetail): boolean {
     status === "cancelled" ||
     status === "canceled"
   )
+}
+
+function isToolCallDetail(detail: ParsedLogDetail): boolean {
+  return detail.kind === "tool_call"
+}
+
+function toolCallIdentity(detail: ParsedLogDetail): string | null {
+  if (!isToolCallDetail(detail)) return null
+
+  const itemId = detail.itemId?.trim()
+  if (itemId) return `item:${itemId}`
+
+  const name = detail.name?.trim()
+  if (name) return `name:${name}`
+
+  return null
+}
+
+function hasToolCallPayload(detail: ParsedLogDetail): boolean {
+  return Boolean(
+    detail.text?.trim() || detail.output?.trim() || detail.recording
+  )
+}
+
+function isStartLikeToolCallDetail(detail: ParsedLogDetail): boolean {
+  const status = normalizedStatus(detail)
+  return (
+    isToolCallDetail(detail) &&
+    (status === "in_progress" ||
+      status === "running" ||
+      status === "started" ||
+      status === "pending" ||
+      status === "executing") &&
+    !hasToolCallPayload(detail)
+  )
+}
+
+function shouldMergeToolCallDetails(
+  previous: ParsedLogDetail | undefined,
+  next: ParsedLogDetail
+): previous is ParsedLogDetail {
+  if (!previous || !isToolCallDetail(previous) || !isToolCallDetail(next)) {
+    return false
+  }
+
+  const previousIdentity = toolCallIdentity(previous)
+  const nextIdentity = toolCallIdentity(next)
+  if (
+    previousIdentity?.startsWith("item:") &&
+    previousIdentity === nextIdentity
+  ) {
+    return true
+  }
+
+  if (previousIdentity && nextIdentity && previousIdentity === nextIdentity) {
+    return (
+      isStartLikeToolCallDetail(previous) || isStartLikeToolCallDetail(next)
+    )
+  }
+
+  if (previousIdentity && nextIdentity) return false
+
+  return isStartLikeToolCallDetail(previous) || isStartLikeToolCallDetail(next)
+}
+
+function mergeToolCallDetails(
+  previous: ParsedLogDetail,
+  next: ParsedLogDetail
+): ParsedLogDetail {
+  const preferNext =
+    hasToolCallPayload(next) ||
+    (!hasToolCallPayload(previous) && !isStartLikeToolCallDetail(next))
+  const primary = preferNext ? next : previous
+  const fallback = preferNext ? previous : next
+
+  return {
+    ...fallback,
+    ...primary,
+    itemId: primary.itemId ?? fallback.itemId,
+    kind: "tool_call",
+    name: primary.name ?? fallback.name,
+    output: primary.output ?? fallback.output,
+    recording: primary.recording ?? fallback.recording,
+    renderKey: primary.renderKey ?? fallback.renderKey,
+    status: primary.status ?? fallback.status,
+    text: primary.text ?? fallback.text,
+  }
 }
 
 function commandDetailCompleteness(detail: ParsedLogDetail): number {
@@ -817,6 +906,8 @@ function coalesceToolDetails(details: ParsedLogDetail[]): ParsedLogDetail[] {
     const previous = coalesced.at(-1)
     if (shouldMergeCommandDetails(previous, detail)) {
       coalesced[coalesced.length - 1] = mergeCommandDetails(previous, detail)
+    } else if (shouldMergeToolCallDetails(previous, detail)) {
+      coalesced[coalesced.length - 1] = mergeToolCallDetails(previous, detail)
     } else {
       coalesced.push(detail)
     }

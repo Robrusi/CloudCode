@@ -36,6 +36,7 @@ type ToolMarkerDetail = {
   changes?: ToolMarkerFileChange[]
   command?: string
   exitCode?: number
+  itemId?: string
   kind?: string
   name?: string
   output?: string
@@ -101,6 +102,15 @@ function compactToolDetail(value: ToolMarkerDetail): ToolMarkerDetail | null {
   }
 
   if (value.kind === "tool_call") {
+    if (
+      !value.name?.trim() &&
+      !value.text?.trim() &&
+      !value.recording &&
+      !value.output?.trim()
+    ) {
+      return null
+    }
+
     const isPatch =
       typeof value.text === "string" &&
       /\*\*\* Begin Patch|\*\*\* (Add|Update|Delete) File:/.test(value.text)
@@ -129,6 +139,7 @@ function compactToolDetail(value: ToolMarkerDetail): ToolMarkerDetail | null {
           }
         : undefined
     return {
+      itemId: truncateMarkerText(value.itemId, MAX_MARKER_TEXT_LENGTH),
       kind: value.kind,
       name: truncateMarkerText(value.name, MAX_MARKER_TEXT_LENGTH),
       recording,

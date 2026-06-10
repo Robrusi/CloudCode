@@ -870,7 +870,11 @@ export function createCodexAppServerTurnReducer({
         const message = stringValue(params?.message)
         if (message) {
           void onLog?.({
-            detail: logDetail({ kind: "tool_call", status: "inProgress" }),
+            detail: logDetail({
+              itemId: stringValue(params?.itemId),
+              kind: "tool_call",
+              status: "inProgress",
+            }),
             kind: "command",
             message: compactLine(message),
           })
@@ -1174,6 +1178,7 @@ function emitItemLog(
     void onLog?.({
       detail: logDetail({
         error: stringValue(error?.message),
+        itemId: item.id,
         kind: "tool_call",
         name,
         pluginId: item.pluginId,
@@ -1191,6 +1196,7 @@ function emitItemLog(
     const name = [item.namespace, item.tool].filter(Boolean).join(".") || "Tool"
     void onLog?.({
       detail: logDetail({
+        itemId: item.id,
         kind: "tool_call",
         name,
         status: item.status ?? phase,

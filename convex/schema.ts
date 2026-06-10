@@ -59,7 +59,11 @@ const codexRunStatus = v.union(
   v.literal("failed"),
   v.literal("canceled")
 )
-const billingPlanId = v.union(v.literal("hobby"), v.literal("plus"))
+const billingPlanId = v.union(
+  v.literal("free"),
+  v.literal("hobby"),
+  v.literal("plus")
+)
 const billingUsageSource = v.union(
   v.literal("trigger"),
   v.literal("daytona"),

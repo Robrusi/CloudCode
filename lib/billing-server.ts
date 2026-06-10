@@ -19,7 +19,7 @@ import type {
 
 export class BillingRequiredError extends Error {
   constructor() {
-    super("A Hobby or Plus subscription with remaining usage is required.")
+    super("A plan with remaining usage is required.")
     this.name = "BillingRequiredError"
   }
 }

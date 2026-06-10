@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ChevronRight,
   Circle,
+  Clock,
   ClipboardPaste,
   CornerDownRight,
   CreditCard,
@@ -43,7 +44,7 @@ import type {
 import {
   BILLING_PLANS,
   type BillingPlanId,
-  planIncludedHours,
+  planIncludedTimeLabel,
 } from "@/lib/billing"
 import { dedupeEnvVars, parseDotenv } from "@/lib/dotenv-parse"
 import { cn } from "@/lib/utils"
@@ -446,20 +447,76 @@ type UsageHoursInfo = {
   fractionRemaining: number
   nextResetAt: number | null
   runningHoursLeft: number
+  runningMinutesLeft: number
   stoppedHoursLeft: number
+  stoppedMinutesLeft: number
   unlimited: boolean
+}
+
+function formatSandboxTimeLeft(usage: UsageHoursInfo) {
+  if (usage.depleted) return "0 minutes"
+  if (usage.runningHoursLeft >= 1) {
+    return `${usage.runningHoursLeft} ${usage.runningHoursLeft === 1 ? "hour" : "hours"}`
+  }
+  if (usage.runningMinutesLeft >= 1) {
+    return `${usage.runningMinutesLeft} ${usage.runningMinutesLeft === 1 ? "minute" : "minutes"}`
+  }
+  return "<1 minute"
+}
+
+function formatPlanPrice(priceUsd: number) {
+  return priceUsd === 0 ? "Free" : `$${priceUsd}/mo`
+}
+
+function billingPlanRank(planId: string | null | undefined) {
+  return BILLING_PLANS.find((plan) => plan.planId === planId)?.priceUsd ?? 0
+}
+
+function formatPlanDetail({
+  canceling,
+  currentPeriodEnd,
+  currentPlanId,
+  scheduledPlanId,
+}: {
+  canceling: boolean
+  currentPeriodEnd: number | null
+  currentPlanId: string | null | undefined
+  scheduledPlanId: BillingPlanId | null
+}) {
+  if (scheduledPlanId && scheduledPlanId !== currentPlanId) {
+    const verb =
+      billingPlanRank(scheduledPlanId) < billingPlanRank(currentPlanId)
+        ? "Downgrades"
+        : "Changes"
+    return `${verb} to ${billingPlanName(scheduledPlanId)} next billing cycle`
+  }
+
+  if (canceling && currentPeriodEnd) {
+    return `Cancels ${formatBillingDate(currentPeriodEnd)}`
+  }
+
+  if (currentPeriodEnd) {
+    return `Renews ${formatBillingDate(currentPeriodEnd)}`
+  }
+
+  return "Your current plan"
 }
 
 function BillingSettings() {
   const billing = useQuery(api.billing.viewer)
   const attachPlan = useAction(api.billing.attachCurrentUserPlan)
+  const cancelScheduledPlan = useAction(
+    api.billing.cancelCurrentUserScheduledPlan
+  )
   const refreshPlan = useAction(api.billing.refreshCurrentUserPlan)
   const [busyPlanId, setBusyPlanId] = useState<BillingPlanId | null>(null)
+  const [cancelingScheduledPlan, setCancelingScheduledPlan] = useState(false)
   const [error, setError] = useState("")
   const [syncing, setSyncing] = useState(true)
   const [planDetail, setPlanDetail] = useState<{
     canceling: boolean
     currentPeriodEnd: number | null
+    scheduledPlanId: BillingPlanId | null
   } | null>(null)
   const [usage, setUsage] = useState<UsageHoursInfo | null>(null)
   const currentPlanId = billing?.customer?.planId
@@ -476,6 +533,7 @@ function BillingSettings() {
         setPlanDetail({
           canceling: plan.canceling,
           currentPeriodEnd: plan.currentPeriodEnd,
+          scheduledPlanId: plan.scheduledPlanId,
         })
         setUsage(plan.usage)
       })
@@ -514,12 +572,36 @@ function BillingSettings() {
       setPlanDetail({
         canceling: plan.canceling,
         currentPeriodEnd: plan.currentPeriodEnd,
+        scheduledPlanId: plan.scheduledPlanId,
       })
       setUsage(plan.usage)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to start checkout.")
     } finally {
       setBusyPlanId(null)
+    }
+  }
+
+  async function cancelPlanChange() {
+    if (busyPlanId || cancelingScheduledPlan) return
+
+    setCancelingScheduledPlan(true)
+    setError("")
+
+    try {
+      const plan = await cancelScheduledPlan({})
+      setPlanDetail({
+        canceling: plan.canceling,
+        currentPeriodEnd: plan.currentPeriodEnd,
+        scheduledPlanId: plan.scheduledPlanId,
+      })
+      setUsage(plan.usage)
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Unable to cancel plan change."
+      )
+    } finally {
+      setCancelingScheduledPlan(false)
     }
   }
 
@@ -542,11 +624,12 @@ function BillingSettings() {
                   {billingPlanName(currentPlanId)}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  {planDetail?.canceling && planDetail.currentPeriodEnd
-                    ? `Cancels ${formatBillingDate(planDetail.currentPeriodEnd)}`
-                    : planDetail?.currentPeriodEnd
-                      ? `Renews ${formatBillingDate(planDetail.currentPeriodEnd)}`
-                      : "Your current plan"}
+                  {formatPlanDetail({
+                    canceling: Boolean(planDetail?.canceling),
+                    currentPeriodEnd: planDetail?.currentPeriodEnd ?? null,
+                    currentPlanId,
+                    scheduledPlanId: planDetail?.scheduledPlanId ?? null,
+                  })}
                 </div>
               </>
             ) : (
@@ -576,11 +659,7 @@ function BillingSettings() {
                 ) : (
                   <>
                     <span className="font-medium text-foreground tabular-nums">
-                      {usage.depleted
-                        ? "0 hours"
-                        : usage.runningHoursLeft < 1
-                          ? "<1 hour"
-                          : `${usage.runningHoursLeft} ${usage.runningHoursLeft === 1 ? "hour" : "hours"}`}
+                      {formatSandboxTimeLeft(usage)}
                     </span>{" "}
                     of sandbox time left
                   </>
@@ -622,6 +701,7 @@ function BillingSettings() {
           {BILLING_PLANS.map((plan) => {
             const busy = busyPlanId === plan.planId
             const active = currentPlanId === plan.planId
+            const scheduled = planDetail?.scheduledPlanId === plan.planId
 
             return (
               <div key={plan.planId} className="flex items-center gap-3 py-3.5">
@@ -630,8 +710,8 @@ function BillingSettings() {
                     {plan.name}
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    ${plan.priceUsd}/mo ·{" "}
-                    {planIncludedHours(plan.includedMicroUsd)} hours of usage
+                    {formatPlanPrice(plan.priceUsd)} ·{" "}
+                    {planIncludedTimeLabel(plan.includedMicroUsd)} of usage
                   </div>
                 </div>
                 {active ? (
@@ -639,6 +719,26 @@ function BillingSettings() {
                     <Check className="size-3.5" />
                     Current plan
                   </span>
+                ) : scheduled ? (
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className={cn(statusBadge, statusIdle)}>
+                      <Clock className="size-3.5" />
+                      Next cycle
+                    </span>
+                    <button
+                      type="button"
+                      disabled={Boolean(busyPlanId) || cancelingScheduledPlan}
+                      onClick={() => void cancelPlanChange()}
+                      className={navDestructive}
+                    >
+                      {cancelingScheduledPlan ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <X className="size-3.5" />
+                      )}
+                      Cancel
+                    </button>
+                  </div>
                 ) : (
                   <button
                     type="button"
