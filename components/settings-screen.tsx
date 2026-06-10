@@ -1300,6 +1300,7 @@ function GitHubConnectionRow({
           ) : null}
           {userReady ? (
             <form action="/api/github/app/install" method="get">
+              <input type="hidden" name="configure" value="1" />
               <button
                 type="submit"
                 disabled={disconnecting}
@@ -1363,6 +1364,7 @@ function GitHubConnectionRow({
                   {account.installed ? "Connected" : "Not connected"}
                 </span>
                 <form action="/api/github/app/install" method="get">
+                  <input type="hidden" name="configure" value="1" />
                   {targetId ? (
                     <input type="hidden" name="targetId" value={targetId} />
                   ) : null}
@@ -2168,6 +2170,7 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
   const createPreset = useMutation(api.sandboxPresets.create)
   const updatePreset = useMutation(api.sandboxPresets.update)
   const removePreset = useMutation(api.sandboxPresets.remove)
+  const removeEnvironment = useMutation(api.sandboxPresets.removeEnvironment)
   const [selectedId, setSelectedId] = useState<Id<"sandboxPresets"> | null>(
     null
   )
@@ -2267,6 +2270,25 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
       resetEditor()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to delete preset.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function deleteEnvironment(
+    environmentId: Id<"sandboxPresetEnvironments">
+  ) {
+    if (saving) return
+    setSaving(true)
+    setError("")
+    try {
+      await removeEnvironment({ environmentId })
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to delete cloudcode.yaml environment."
+      )
     } finally {
       setSaving(false)
     }
@@ -2428,6 +2450,16 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                       {environment.repoUrl.replace(/^https?:\/\//, "")}
                     </span>
                     <span className={metaPill}>{environment.status}</span>
+                    <button
+                      type="button"
+                      onClick={() => deleteEnvironment(environment.id)}
+                      disabled={saving}
+                      aria-label={`Delete cloudcode.yaml for ${environment.repoUrl}`}
+                      title="Delete saved cloudcode.yaml"
+                      className={cn(iconBtn, "hover:text-destructive")}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
                   </div>
                 ))}
               </div>
@@ -2466,6 +2498,16 @@ function PresetSettings({ presets }: { presets: SandboxPresetRecord[] }) {
                       {environment.repoUrl.replace(/^https?:\/\//, "")}
                     </span>
                     <span className={metaPill}>{environment.status}</span>
+                    <button
+                      type="button"
+                      onClick={() => deleteEnvironment(environment.id)}
+                      disabled={saving}
+                      aria-label={`Delete cloudcode.yaml for ${environment.repoUrl}`}
+                      title="Delete saved cloudcode.yaml"
+                      className={cn(iconBtn, "hover:text-destructive")}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
                   </div>
                 ))}
               </div>

@@ -40,6 +40,8 @@ export async function GET(request: NextRequest) {
   try {
     const url = new URL(request.url)
     const targetId = getTargetId(url)
+    const configure =
+      targetId !== undefined || url.searchParams.get("configure") === "1"
     await getConvexAuthToken()
 
     if (!isGitHubAppConfigured()) {
@@ -67,13 +69,20 @@ export async function GET(request: NextRequest) {
       : await syncCurrentGitHubAppUserInstallations()
           .then((synced) => synced)
           .catch(() => getCurrentGitHubAppInstallations())
+
+    if (!configure && installations.length > 0) {
+      return NextResponse.redirect(new URL("/?view=settings", url.origin))
+    }
+
     const response = NextResponse.redirect(
       createGitHubAppInstallUrl({
-        selectTarget: !targetId && installations.length > 0,
+        selectTarget: configure && !targetId && installations.length > 0,
         state,
         targetId:
           targetId ??
-          (installations.length > 0 ? undefined : user.githubUserId),
+          (configure && installations.length > 0
+            ? undefined
+            : user.githubUserId),
       })
     )
     response.cookies.set(GITHUB_APP_STATE_COOKIE, state, {

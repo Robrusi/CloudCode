@@ -40,8 +40,21 @@ function clearStateCookie(response: NextResponse) {
   }
 }
 
-async function redirectAfterInstall(url: URL, next?: string) {
+async function redirectAfterInstall(
+  url: URL,
+  {
+    installationCount,
+    next,
+  }: {
+    installationCount: number
+    next?: string
+  }
+) {
   if (next === "install") {
+    if (installationCount > 0) {
+      return NextResponse.redirect(new URL("/?view=settings", url.origin))
+    }
+
     return NextResponse.redirect(new URL("/api/github/app/install", url.origin))
   }
 
@@ -88,9 +101,14 @@ export async function GET(request: NextRequest) {
         const installation = await verifyGitHubAppInstallation(installationId)
         await saveGitHubAppInstallation(installation)
       }
-      await syncCurrentGitHubAppUserInstallations().catch(() => [])
+      const installations = await syncCurrentGitHubAppUserInstallations().catch(
+        () => []
+      )
 
-      const response = await redirectAfterInstall(url, next)
+      const response = await redirectAfterInstall(url, {
+        installationCount: installations.length,
+        next,
+      })
       clearStateCookie(response)
       return response
     }
@@ -103,9 +121,14 @@ export async function GET(request: NextRequest) {
 
     const installation = await verifyGitHubAppInstallation(installationId)
     await saveGitHubAppInstallation(installation)
-    await syncCurrentGitHubAppUserInstallations().catch(() => [])
+    const installations = await syncCurrentGitHubAppUserInstallations().catch(
+      () => []
+    )
 
-    const response = await redirectAfterInstall(url, next)
+    const response = await redirectAfterInstall(url, {
+      installationCount: Math.max(1, installations.length),
+      next,
+    })
     clearStateCookie(response)
     return response
   } catch (error) {

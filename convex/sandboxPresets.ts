@@ -811,6 +811,28 @@ export const remove = mutation({
   },
 })
 
+export const removeEnvironment = mutation({
+  args: {
+    environmentId: v.id("sandboxPresetEnvironments"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await ensureCurrentUser(ctx)
+    const environment = await ctx.db.get(args.environmentId)
+    if (!environment || environment.userId !== userId) {
+      throw new Error("Environment not found.")
+    }
+
+    const builds = await ctx.db
+      .query("sandboxPresetBuilds")
+      .withIndex("by_environment_updated", (q) =>
+        q.eq("environmentId", environment._id)
+      )
+      .collect()
+    await Promise.all(builds.map((build) => ctx.db.delete(build._id)))
+    await ctx.db.delete(environment._id)
+  },
+})
+
 export const upsertSecret = mutation({
   args: {
     name: v.string(),

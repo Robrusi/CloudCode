@@ -68,14 +68,18 @@ export async function GET(request: NextRequest) {
       const installation = await verifyGitHubAppInstallation(installationId)
       await saveGitHubAppInstallation(installation)
     }
-    await syncCurrentGitHubAppUserInstallations().catch(() => [])
+    const installations = await syncCurrentGitHubAppUserInstallations().catch(
+      () => []
+    )
 
     const redirectPath =
-      next === "install"
-        ? "/api/github/app/install"
-        : next === "settings"
-          ? "/?view=settings"
-          : "/"
+      next === "install" && installations.length > 0
+        ? "/?view=settings"
+        : next === "install"
+          ? "/api/github/app/install"
+          : next === "settings"
+            ? "/?view=settings"
+            : "/"
     const response = NextResponse.redirect(new URL(redirectPath, url.origin))
     clearUserAuthCookies(response)
     return response
