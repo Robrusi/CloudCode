@@ -102,6 +102,86 @@ export const saveInstallation = mutation({
   },
 })
 
+export const replaceInstallations = mutation({
+  args: {
+    installations: v.array(
+      v.object({
+        accountId: v.optional(v.string()),
+        accountLogin: v.string(),
+        accountType: v.optional(v.string()),
+        htmlUrl: v.optional(v.string()),
+        installationId: v.string(),
+        repositorySelection: v.optional(v.string()),
+        updatedAt: v.string(),
+      })
+    ),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const userId = await ensureCurrentUser(ctx)
+    const currentInstallations = [
+      ...new Map(
+        args.installations.map((installation) => [
+          installation.installationId,
+          installation,
+        ])
+      ).values(),
+    ]
+    const currentIds = new Set(
+      currentInstallations.map((installation) => installation.installationId)
+    )
+    const installations = await ctx.db
+      .query("githubAppInstallations")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect()
+    const existingByInstallationId = new Map(
+      installations.map((installation) => [
+        installation.installationId,
+        installation,
+      ])
+    )
+    const retainedRowIds = new Set<(typeof installations)[number]["_id"]>()
+
+    for (const input of currentInstallations) {
+      const installation = {
+        accountId: input.accountId,
+        accountLogin: input.accountLogin,
+        accountType: input.accountType,
+        htmlUrl: input.htmlUrl,
+        installationId: input.installationId,
+        repositorySelection: input.repositorySelection,
+        updatedAt: input.updatedAt,
+        userId,
+      }
+      const existing = existingByInstallationId.get(input.installationId)
+
+      if (existing) {
+        retainedRowIds.add(existing._id)
+        await ctx.db.patch(existing._id, installation)
+      } else {
+        await ctx.db.insert("githubAppInstallations", installation)
+      }
+    }
+
+    const stale = installations.filter(
+      (installation) =>
+        !currentIds.has(installation.installationId) ||
+        !retainedRowIds.has(installation._id)
+    )
+    for (const installation of stale) {
+      await ctx.db.delete(installation._id)
+    }
+
+    return {
+      installations: currentInstallations
+        .map(toInstallation)
+        .sort((a, b) => a.accountLogin.localeCompare(b.accountLogin)),
+      deletedInstallations: stale.length,
+    }
+  },
+})
+
 export const userStatus = query({
   args: {},
   handler: async (ctx) => {

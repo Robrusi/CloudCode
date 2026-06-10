@@ -36,12 +36,22 @@ function getTargetId(url: URL) {
   return targetId
 }
 
+function getIntent(url: URL) {
+  const intent = url.searchParams.get("intent")?.trim()
+  if (!intent) return undefined
+  if (intent !== "add-org") {
+    throw new Error("Invalid GitHub App install intent.")
+  }
+  return intent
+}
+
 export async function GET(request: NextRequest) {
   try {
     const url = new URL(request.url)
     const targetId = getTargetId(url)
-    const configure =
-      targetId !== undefined || url.searchParams.get("configure") === "1"
+    const intent = getIntent(url)
+    const addOrg = intent === "add-org"
+    const configure = addOrg || targetId !== undefined
     await getConvexAuthToken()
 
     if (!isGitHubAppConfigured()) {
@@ -64,7 +74,7 @@ export async function GET(request: NextRequest) {
     }
 
     const state = createGitHubAppState()
-    const installations = targetId
+    const installations = configure
       ? []
       : await syncCurrentGitHubAppUserInstallations()
           .then((synced) => synced)
@@ -76,13 +86,9 @@ export async function GET(request: NextRequest) {
 
     const response = NextResponse.redirect(
       createGitHubAppInstallUrl({
-        selectTarget: configure && !targetId && installations.length > 0,
+        selectTarget: addOrg,
         state,
-        targetId:
-          targetId ??
-          (configure && installations.length > 0
-            ? undefined
-            : user.githubUserId),
+        targetId: targetId ?? (addOrg ? undefined : user.githubUserId),
       })
     )
     response.cookies.set(GITHUB_APP_STATE_COOKIE, state, {

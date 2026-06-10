@@ -761,6 +761,27 @@ export async function getCurrentGitHubAppInstallations() {
   )) satisfies StoredGitHubAppInstallation[]
 }
 
+async function replaceCurrentGitHubAppInstallations(
+  installations: StoredGitHubAppInstallation[]
+) {
+  const client = await getClient()
+  return (await client.mutation(api.githubApp.replaceInstallations, {
+    installations: installations.map((installation) => ({
+      accountId: installation.accountId,
+      accountLogin: installation.accountLogin,
+      accountType: installation.accountType,
+      htmlUrl: installation.htmlUrl,
+      installationId: installation.installationId,
+      repositorySelection: installation.repositorySelection,
+      updatedAt: installation.updatedAt,
+    })),
+    workerSecret: getWorkerSecret(),
+  })) satisfies {
+    deletedInstallations: number
+    installations: StoredGitHubAppInstallation[]
+  }
+}
+
 export async function syncCurrentGitHubAppUserInstallations() {
   if (!isGitHubAppConfigured() || !isGitHubAppUserAuthConfigured()) {
     return []
@@ -770,18 +791,7 @@ export async function syncCurrentGitHubAppUserInstallations() {
   if (!userAuth) return []
 
   const installations = await listGitHubAppUserInstallations(userAuth.token)
-  await Promise.all(
-    installations.map((installation) =>
-      saveGitHubAppInstallation({
-        accountId: installation.accountId,
-        accountLogin: installation.accountLogin,
-        accountType: installation.accountType,
-        htmlUrl: installation.htmlUrl,
-        installationId: installation.installationId,
-        repositorySelection: installation.repositorySelection,
-      })
-    )
-  )
+  await replaceCurrentGitHubAppInstallations(installations)
 
   return installations
 }
@@ -841,25 +851,6 @@ async function listGitHubAppUserInstallations(token: string) {
   }
 
   return installations.sort((a, b) =>
-    a.accountLogin.localeCompare(b.accountLogin)
-  )
-}
-
-function mergeGitHubAppInstallations(
-  ...sources: StoredGitHubAppInstallation[][]
-) {
-  const installations = new Map<string, StoredGitHubAppInstallation>()
-
-  for (const source of sources) {
-    for (const installation of source) {
-      installations.set(installation.installationId, {
-        ...installations.get(installation.installationId),
-        ...installation,
-      })
-    }
-  }
-
-  return [...installations.values()].sort((a, b) =>
     a.accountLogin.localeCompare(b.accountLogin)
   )
 }
@@ -1094,14 +1085,10 @@ export async function listCurrentGitHubAppRepositories() {
     throw new Error("Authorize your GitHub user before listing repositories.")
   }
 
-  const storedInstallations = await getCurrentGitHubAppInstallations()
-  const userInstallations = await syncCurrentGitHubAppUserInstallations().catch(
-    () => []
-  )
-  const installations = mergeGitHubAppInstallations(
-    storedInstallations,
-    userInstallations
-  )
+  const syncedInstallations =
+    await syncCurrentGitHubAppUserInstallations().catch(() => null)
+  const installations =
+    syncedInstallations ?? (await getCurrentGitHubAppInstallations())
 
   if (installations.length === 0) {
     throw new Error(
@@ -1153,10 +1140,10 @@ export async function getCurrentGitHubAppStatus(): Promise<GitHubAppStatus> {
           return []
         }),
       ])
-      installations = mergeGitHubAppInstallations(
-        storedInstallations,
-        nextInstallations
-      )
+      if (installationConfigured) {
+        await replaceCurrentGitHubAppInstallations(nextInstallations)
+      }
+      installations = nextInstallations
       organizations = nextOrganizations
     }
   }
@@ -1270,10 +1257,10 @@ async function createGitHubAppRepoCredential({
   const repoInstallation = await installationForRepo(repoUrl)
   if (!repoInstallation) return null
 
-  const installations = mergeGitHubAppInstallations(
-    await getCurrentGitHubAppInstallations(),
-    await syncCurrentGitHubAppUserInstallations().catch(() => [])
-  )
+  const syncedInstallations =
+    await syncCurrentGitHubAppUserInstallations().catch(() => null)
+  const installations =
+    syncedInstallations ?? (await getCurrentGitHubAppInstallations())
   const allowed = installations.some(
     (installation) =>
       installation.installationId === repoInstallation.installationId

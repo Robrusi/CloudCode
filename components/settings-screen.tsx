@@ -1300,7 +1300,7 @@ function GitHubConnectionRow({
           ) : null}
           {userReady ? (
             <form action="/api/github/app/install" method="get">
-              <input type="hidden" name="configure" value="1" />
+              <input type="hidden" name="intent" value="add-org" />
               <button
                 type="submit"
                 disabled={disconnecting}
@@ -1364,7 +1364,6 @@ function GitHubConnectionRow({
                   {account.installed ? "Connected" : "Not connected"}
                 </span>
                 <form action="/api/github/app/install" method="get">
-                  <input type="hidden" name="configure" value="1" />
                   {targetId ? (
                     <input type="hidden" name="targetId" value={targetId} />
                   ) : null}
@@ -1376,6 +1375,19 @@ function GitHubConnectionRow({
                     {account.installed ? "Update repos" : "Select repos"}
                   </button>
                 </form>
+                {account.installed && account.htmlUrl ? (
+                  <a
+                    href={account.htmlUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={cn(
+                      navDestructive,
+                      disconnecting ? "pointer-events-none opacity-50" : ""
+                    )}
+                  >
+                    Remove
+                  </a>
+                ) : null}
               </div>
             )
           })}
