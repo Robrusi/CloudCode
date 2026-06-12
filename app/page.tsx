@@ -1,6 +1,6 @@
 import type { Metadata } from "next"
 
-import { Chat } from "@/components/chat"
+import { Chat } from "@/components/chat/view"
 
 export const metadata: Metadata = {
   title: "Cloudcode",

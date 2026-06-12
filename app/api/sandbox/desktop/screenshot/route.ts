@@ -3,12 +3,12 @@ import {
   observeCurrentUserDaytonaBillingInfo,
   pauseCurrentUserSandboxForBilling,
   requireCurrentUserInfraAccess,
-} from "@/lib/billing-server"
-import { takeDaytonaDesktopScreenshot } from "@/lib/daytona-desktop"
-import { jsonError, searchStringParam } from "@/lib/api-route"
-import { readDaytonaSandboxInfo } from "@/lib/daytona-sandbox"
-import { requireSameOrigin } from "@/lib/request-security"
-import { requireCurrentUserSandbox } from "@/lib/sandbox-authorization"
+} from "@/lib/billing/server"
+import { takeDaytonaDesktopScreenshot } from "@/lib/daytona/desktop"
+import { jsonError, searchStringParam } from "@/lib/http/api-route"
+import { readDaytonaSandboxInfo } from "@/lib/daytona/sandbox"
+import { requireSameOrigin } from "@/lib/http/request-security"
+import { requireCurrentUserSandbox } from "@/lib/sandbox/authorization"
 
 export const runtime = "nodejs"
 export const maxDuration = 300

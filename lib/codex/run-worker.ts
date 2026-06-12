@@ -1,0 +1,422 @@
+import { ConvexHttpClient } from "convex/browser"
+
+import { api } from "@/convex/_generated/api"
+import type { Id } from "@/convex/_generated/dataModel"
+import { requireConvexUrl } from "@/lib/convex/env"
+import { getWorkerSecret } from "@/lib/security/worker-secret"
+import {
+  buildCodexAuthJson,
+  saveCodexAuthJsonForWorker,
+} from "@/lib/codex/auth"
+import type {
+  RunCodexInSandboxInput,
+  RunCodexInSandboxResult,
+} from "@/lib/daytona/codex-agent-types"
+import type { McpServerInput } from "@/lib/daytona/codex-runtime"
+import type { CodexRunLog as RunCodexLog } from "@/lib/codex/run-log"
+import type { McpDiscoveredServer } from "@/lib/mcp/discovery"
+import {
+  extractInlineToolMarkers,
+  stripInlineToolMarkers,
+} from "@/lib/codex/run-log"
+import type { ChatImageAttachment } from "@/lib/chat/attachments"
+import type { SandboxPresetForRun } from "@/lib/sandbox/presets"
+import { decryptSecret } from "@/lib/security/secret-crypto"
+import type {
+  BillingUsageSource,
+  DaytonaBillingResources,
+  DaytonaBillingState,
+} from "@/lib/billing/model"
+
+const WORKER_CONVEX_URL_ERROR =
+  "Set NEXT_PUBLIC_CONVEX_URL before running Trigger tasks."
+
+export type WorkerRunPayload = {
+  runId: Id<"codexRuns">
+}
+
+type WorkerRunRecord = {
+  assistantMessageId: Id<"messages">
+  baseBranch?: string
+  branchMode?: RunCodexInSandboxInput["branchMode"]
+  branchName?: string
+  codexThreadId?: string
+  githubToken?: string
+  githubUserEmail?: string
+  githubUserName?: string
+  githubUsername?: string
+  imageAttachments?: ChatImageAttachment[]
+  model: string
+  notesAccessToken?: string
+  previousDiff?: string
+  profile?: string
+  prompt: string
+  reasoningEffort: RunCodexInSandboxInput["reasoningEffort"]
+  repoUrl: string
+  resumeContext?: string
+  sandboxId?: string
+  sandboxPresetId?: Id<"sandboxPresets">
+  speed: RunCodexInSandboxInput["speed"]
+  threadId: Id<"threads">
+  userId: Id<"users">
+}
+
+type WorkerAuthRecord = Parameters<typeof buildCodexAuthJson>[0]
+
+type WorkerPresetRecord = Omit<SandboxPresetForRun, "secrets"> & {
+  secrets: Array<{ name: string; value: string }>
+}
+
+type WorkerMcpServerRecord = Omit<McpServerInput, "secrets"> & {
+  secrets: Array<{
+    kind: "env" | "httpHeader" | "envHttpHeader"
+    name: string
+    value: string
+  }>
+}
+
+type WorkerRunInputResponse =
+  | { canceled: true }
+  | {
+      auth: WorkerAuthRecord
+      canceled: false
+      mcpServers?: WorkerMcpServerRecord[]
+      run: WorkerRunRecord
+      sandboxPreset?: WorkerPresetRecord
+    }
+
+export class WorkerRunCanceledError extends Error {
+  constructor() {
+    super("Codex run was canceled.")
+    this.name = "WorkerRunCanceledError"
+  }
+}
+
+export type LoadedWorkerRun = {
+  authJson: string
+  input: Omit<
+    RunCodexInSandboxInput,
+    "mcpServers" | "onContentDelta" | "onLog" | "sandboxPreset" | "signal"
+  > & {
+    mcpServers?: McpServerInput[]
+    sandboxPreset?: SandboxPresetForRun
+  }
+  profile?: string
+  userId: Id<"users">
+}
+
+export function isWorkerRunCanceledError(
+  error: unknown
+): error is WorkerRunCanceledError {
+  return error instanceof WorkerRunCanceledError
+}
+
+function throwIfCanceled(response: unknown) {
+  if (
+    response &&
+    typeof response === "object" &&
+    "canceled" in response &&
+    response.canceled === true
+  ) {
+    throw new WorkerRunCanceledError()
+  }
+}
+
+export { getWorkerSecret }
+
+export function workerConvexClient() {
+  return new ConvexHttpClient(requireConvexUrl(WORKER_CONVEX_URL_ERROR))
+}
+
+export type WorkerConvexClient = ReturnType<typeof workerConvexClient>
+
+function decryptPreset(
+  preset: WorkerPresetRecord | undefined
+): SandboxPresetForRun | undefined {
+  if (!preset) return undefined
+
+  return {
+    ...preset,
+    secrets: preset.secrets.map((secret) => ({
+      name: secret.name,
+      value: decryptSecret(secret.value),
+    })),
+  }
+}
+
+function decryptMcpServers(
+  servers: WorkerMcpServerRecord[] | undefined
+): McpServerInput[] | undefined {
+  if (!servers?.length) return undefined
+
+  return servers.map((server) => ({
+    ...server,
+    secrets: server.secrets.map((secret) => ({
+      kind: secret.kind,
+      name: secret.name,
+      value: decryptSecret(secret.value),
+    })),
+  }))
+}
+
+export async function startAndLoadWorkerRun(
+  client: ConvexHttpClient,
+  runId: Id<"codexRuns">,
+  triggerRunId: string
+): Promise<LoadedWorkerRun | null> {
+  const response = (await client.mutation(
+    api.codexRuns.workerStartAndGetInput,
+    {
+      runId,
+      triggerRunId,
+      workerSecret: getWorkerSecret(),
+    }
+  )) as WorkerRunInputResponse
+
+  if (response.canceled) return null
+
+  const sandboxPreset = decryptPreset(response.sandboxPreset)
+  const mcpServers = decryptMcpServers(response.mcpServers)
+  const authJson = buildCodexAuthJson(response.auth)
+
+  return {
+    authJson,
+    input: {
+      authJson,
+      baseBranch: response.run.baseBranch,
+      branchMode: response.run.branchMode,
+      branchName: response.run.branchName,
+      codexThreadId: response.run.codexThreadId,
+      githubToken: response.run.githubToken
+        ? decryptSecret(response.run.githubToken)
+        : undefined,
+      githubUserEmail: response.run.githubUserEmail,
+      githubUserName: response.run.githubUserName,
+      githubUsername: response.run.githubUsername,
+      imageAttachments: response.run.imageAttachments,
+      model: response.run.model,
+      convexUrl: requireConvexUrl(WORKER_CONVEX_URL_ERROR),
+      mcpServers,
+      notesAccessToken: response.run.notesAccessToken,
+      previousDiff: response.run.previousDiff,
+      prompt: response.run.prompt,
+      reasoningEffort: response.run.reasoningEffort,
+      repoUrl: response.run.repoUrl,
+      resumeContext: response.run.resumeContext,
+      runId: runId as string,
+      sandboxId: response.run.sandboxId,
+      sandboxPreset,
+      speed: response.run.speed,
+      threadId: response.run.threadId as string,
+      userId: response.run.userId as string,
+    },
+    profile: response.run.profile,
+    userId: response.run.userId,
+  }
+}
+
+export async function appendWorkerRunLogs(
+  client: ConvexHttpClient,
+  runId: Id<"codexRuns">,
+  logs: Array<RunCodexLog & { time: number }>
+) {
+  const response = await client.mutation(api.codexRuns.workerAppendLogs, {
+    logs,
+    runId,
+    workerSecret: getWorkerSecret(),
+  })
+  throwIfCanceled(response)
+  return response
+}
+
+export async function updateWorkerRunContent(
+  client: ConvexHttpClient,
+  runId: Id<"codexRuns">,
+  content: string
+) {
+  const response = await client.mutation(api.codexRuns.workerUpdateContent, {
+    content,
+    runId,
+    workerSecret: getWorkerSecret(),
+  })
+  throwIfCanceled(response)
+  return response
+}
+
+export async function syncWorkerMcpServerTools(
+  client: ConvexHttpClient,
+  runId: Id<"codexRuns">,
+  servers: McpDiscoveredServer[]
+) {
+  if (!servers.length) return { synced: 0 }
+  return await client.mutation(api.mcpServers.workerSyncDiscoveredTools, {
+    runId,
+    servers,
+    workerSecret: getWorkerSecret(),
+  })
+}
+
+export async function completeWorkerRun(
+  client: ConvexHttpClient,
+  runId: Id<"codexRuns">,
+  content: string,
+  result: RunCodexInSandboxResult
+) {
+  const response = await client.mutation(api.codexRuns.workerComplete, {
+    branchName: result.branchName,
+    codexThreadId: result.codexThreadId,
+    content,
+    diff: result.diff,
+    exitCode: result.exitCode,
+    runId,
+    sandboxId: result.sandboxId,
+    statusText: result.status,
+    workerSecret: getWorkerSecret(),
+  })
+  throwIfCanceled(response)
+  return response
+}
+
+export async function failWorkerRun(
+  client: ConvexHttpClient,
+  runId: Id<"codexRuns">,
+  error: string,
+  sandboxId?: string
+) {
+  return await client.mutation(api.codexRuns.workerFail, {
+    error,
+    runId,
+    sandboxId,
+    workerSecret: getWorkerSecret(),
+  })
+}
+
+export async function cancelWorkerRun(
+  client: ConvexHttpClient,
+  runId: Id<"codexRuns">,
+  sandboxId?: string
+) {
+  return await client.mutation(api.codexRuns.workerCancel, {
+    runId,
+    sandboxId,
+    workerSecret: getWorkerSecret(),
+  })
+}
+
+export async function saveWorkerAuthJson(
+  userId: Id<"users">,
+  profile: string | undefined,
+  authJson: string
+) {
+  return await saveCodexAuthJsonForWorker({
+    authJson,
+    profile,
+    userId,
+    workerSecret: getWorkerSecret(),
+  })
+}
+
+export async function recordWorkerBillingUsage(
+  client: ConvexHttpClient,
+  args: {
+    amountMicroUsd: number
+    idempotencyKey: string
+    metadata?: unknown
+    resourceId?: string
+    source: BillingUsageSource
+    userId: Id<"users">
+  }
+) {
+  return await client.action(api.billing.recordWorkerUsage, {
+    ...args,
+    workerSecret: getWorkerSecret(),
+  })
+}
+
+export async function observeWorkerDaytonaSandbox(
+  client: ConvexHttpClient,
+  args: {
+    observedAt: number
+    resources: DaytonaBillingResources
+    sandboxId: string
+    source: "observed" | "webhook"
+    state: DaytonaBillingState
+    userId: Id<"users">
+  }
+) {
+  return await client.action(api.billing.observeDaytonaSandboxForWorker, {
+    cpu: args.resources.cpu,
+    diskGiB: args.resources.diskGiB,
+    memoryGiB: args.resources.memoryGiB,
+    observedAt: args.observedAt,
+    sandboxId: args.sandboxId,
+    source: args.source,
+    state: args.state,
+    userId: args.userId,
+    workerSecret: getWorkerSecret(),
+  })
+}
+
+export function workerRunFinalContent(
+  streamedContent: string,
+  result: RunCodexInSandboxResult
+) {
+  const streamed = streamedContent.trim()
+  const lastMessage = result.lastMessage.trim()
+  const videoPath =
+    result.desktopRecording?.filePath ||
+    (result.desktopRecording?.id
+      ? `/root/.daytona/recordings/${result.desktopRecording.id}.mp4`
+      : "")
+
+  const withVideo = (content: string) => {
+    const trimmed = content.trim()
+    if (!videoPath) return trimmed
+    if (trimmed.includes(videoPath)) return trimmed
+    return `${trimmed || "(no output)"}\n\nVideo:\n${videoPath}`
+  }
+
+  if (result.lastMessageAuthoritative && lastMessage) {
+    return withVideo(authoritativeLastMessageContent(streamed, lastMessage))
+  }
+
+  if (streamed && stripInlineToolMarkers(streamed)) {
+    return withVideo(streamed)
+  }
+
+  if (streamed && lastMessage) {
+    return withVideo(`${streamed}\n\n${lastMessage}`)
+  }
+
+  return withVideo(
+    streamed ||
+      lastMessage ||
+      result.stdout.trim() ||
+      result.stderr.trim() ||
+      "(no output)"
+  )
+}
+
+function authoritativeLastMessageContent(
+  streamed: string,
+  lastMessage: string
+) {
+  const markers = extractInlineToolMarkers(streamed)
+  const visibleStreamed = stripInlineToolMarkers(streamed)
+  if (!visibleStreamed) {
+    return `${markers.join("")}${lastMessage}`.trim()
+  }
+
+  if (
+    visibleStreamed === lastMessage ||
+    visibleStreamed.endsWith(lastMessage)
+  ) {
+    return streamed
+  }
+
+  if (lastMessage.startsWith(visibleStreamed)) {
+    return `${markers.join("")}${lastMessage}`.trim()
+  }
+
+  return `${streamed.trimEnd()}\n\n${lastMessage}`.trim()
+}

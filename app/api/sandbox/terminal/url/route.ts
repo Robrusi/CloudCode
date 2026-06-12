@@ -3,19 +3,19 @@ import { NextResponse } from "next/server"
 import {
   BillingRequiredError,
   getStartedCurrentUserDaytonaSandbox,
-} from "@/lib/billing-server"
-import { jsonError, searchStringParam } from "@/lib/api-route"
+} from "@/lib/billing/server"
+import { jsonError, searchStringParam } from "@/lib/http/api-route"
 import {
   getDaytonaTerminalUrl,
   resolveDaytonaPaths,
-} from "@/lib/daytona-sandbox"
-import { maybeGetCurrentGitHubRepoCredential } from "@/lib/github-auth"
-import { requireSameOrigin } from "@/lib/request-security"
-import { requireCurrentUserSandbox } from "@/lib/sandbox-authorization"
+} from "@/lib/daytona/sandbox"
+import { maybeGetCurrentGitHubRepoCredential } from "@/lib/github/auth"
+import { requireSameOrigin } from "@/lib/http/request-security"
+import { requireCurrentUserSandbox } from "@/lib/sandbox/authorization"
 import {
   configureSandboxGitHubRemote,
   setupSandboxGitHubAuth,
-} from "@/lib/sandbox-github-auth"
+} from "@/lib/sandbox/github-auth"
 
 export const runtime = "nodejs"
 

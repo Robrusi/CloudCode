@@ -9,17 +9,17 @@ import {
 } from "./_generated/server"
 import { getCurrentUser } from "./lib/users"
 import { requireWorkerSecret } from "./lib/workerAuth"
-import { BILLING_FREE_PLAN_ID, type UsageHoursInfo } from "../lib/billing"
+import { BILLING_FREE_PLAN_ID, type UsageHoursInfo } from "@/lib/billing/model"
 import {
   applySandboxObservationMutation,
   localUsageSummary,
-} from "./billing-sandbox-segments"
+} from "./billingSandboxSegments"
 import {
   activeBasePlanSubscription,
   resolveActivePlan,
   scheduledBasePlanSubscription,
   type ActivePlanInfo,
-} from "./billing-plan"
+} from "./billingPlan"
 import {
   autumnCustomerId,
   autumnCustomerParams,
@@ -29,14 +29,14 @@ import {
   recordUsageEvent,
   trackUsageEvent,
   type BillingUser,
-} from "./billing-autumn"
+} from "./billingAutumn"
 import {
   enqueueUsageEventInMutation,
   usageEventResult,
   type SegmentUsageResult,
   type TrackUsageResult,
   type UsageEventResult,
-} from "./billing-usage-events"
+} from "./billingUsageEvents"
 
 const billingPlanId = v.union(
   v.literal("free"),

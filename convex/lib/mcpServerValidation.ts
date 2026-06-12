@@ -1,4 +1,4 @@
-import { splitMcpLaunchCommand, type McpTransport } from "../../lib/mcp-config"
+import { splitMcpLaunchCommand, type McpTransport } from "@/lib/mcp/config"
 import { cleanEnvNameWithMessage } from "./envNameValidation"
 
 const MCP_SERVER_NAME_RE = /^[A-Za-z0-9_-]+$/

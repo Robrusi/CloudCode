@@ -5,15 +5,15 @@ import { useMemo, useRef } from "react"
 import {
   cachedStateFromLiveRun,
   hasCachedRunKey,
-} from "@/components/chat-run-state"
-import { EMPTY_MESSAGES } from "@/components/chat-storage"
+} from "@/components/chat/run-state"
+import { EMPTY_MESSAGES } from "@/components/chat/storage"
 import type {
   CachedRunState,
   ChatRecord,
   LiveRunRecord,
   Message,
   OptimisticRun,
-} from "@/components/chat-types"
+} from "@/components/chat/types"
 import type { Id } from "@/convex/_generated/dataModel"
 import { useChatLiveRunReveal } from "@/hooks/use-chat-live-run-reveal"
 

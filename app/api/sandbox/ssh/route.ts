@@ -2,19 +2,19 @@ import { NextResponse } from "next/server"
 
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import { currentUserConvexHttpClient } from "@/lib/convex-http"
+import { currentUserConvexHttpClient } from "@/lib/convex/http"
 import {
   createDaytonaSshAccess,
   revokeDaytonaSshAccess,
-} from "@/lib/daytona-sandbox"
+} from "@/lib/daytona/sandbox"
 import {
   jsonError,
   jsonStringField,
   readJsonRecord,
   searchStringParam,
-} from "@/lib/api-route"
-import { requireSameOrigin } from "@/lib/request-security"
-import { requireCurrentUserSandbox } from "@/lib/sandbox-authorization"
+} from "@/lib/http/api-route"
+import { requireSameOrigin } from "@/lib/http/request-security"
+import { requireCurrentUserSandbox } from "@/lib/sandbox/authorization"
 
 export const runtime = "nodejs"
 export const maxDuration = 300

@@ -1,0 +1,146 @@
+"use client"
+
+import { FileDiff, FolderGit2, GitBranch, Maximize2 } from "lucide-react"
+import { type ReactNode } from "react"
+
+import { NotesEditor } from "@/components/markdown/notes-editor"
+import { ResizableSidePanel } from "@/components/layout/resizable-side-panel"
+import { IconButton } from "@/components/ui/icon-button"
+import { cn } from "@/lib/shared/utils"
+
+type ChatEnvironment = {
+  additions: number
+  baseBranch: string
+  branch: string | null
+  changedFileCount: number
+  deletions: number
+  repoName: string | null
+}
+
+export function ChatContextPanel({
+  open,
+  environment,
+  notes,
+  notesThreadId,
+  onClose,
+  onSaveNotes,
+  onOpenChanges,
+  onOpenNotesFullscreen,
+}: {
+  open: boolean
+  environment: ChatEnvironment
+  notes: string
+  notesThreadId: string | null
+  onClose: () => void
+  onSaveNotes: (notes: string) => void
+  onOpenChanges: () => void
+  onOpenNotesFullscreen: () => void
+}) {
+  return (
+    <ResizableSidePanel
+      open={open}
+      title="Context"
+      onClose={onClose}
+      closeLabel="Close context panel"
+      resizeLabel="Resize context panel"
+      storageKey="cloudcode:contextPanelWidth"
+      defaultWidth={304}
+      minWidth={240}
+      maxWidth={560}
+    >
+      <div className="flex min-h-0 w-full flex-1 flex-col px-3 pt-4 pb-5">
+        <div className="mb-6 shrink-0 space-y-2.5 px-1">
+          <EnvRow
+            icon={<FolderGit2 className="size-3.5" />}
+            label="Repository"
+            value={environment.repoName ?? "Not set"}
+          />
+          <EnvRow
+            icon={<GitBranch className="size-3.5" />}
+            label="Branch"
+            value={environment.branch ?? (environment.baseBranch || "Default")}
+          />
+          <EnvRow
+            icon={<FileDiff className="size-3.5" />}
+            label="Changes"
+            value={
+              environment.changedFileCount > 0 ? (
+                <button
+                  type="button"
+                  onClick={onOpenChanges}
+                  className="rounded-sm text-foreground underline-offset-2 transition-colors hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                >
+                  {environment.changedFileCount}{" "}
+                  {environment.changedFileCount === 1 ? "file" : "files"}
+                  <span aria-hidden className="text-muted-foreground/50">
+                    {" · "}
+                  </span>
+                  <span className="text-success">+{environment.additions}</span>{" "}
+                  <span className="text-destructive">
+                    −{environment.deletions}
+                  </span>
+                </button>
+              ) : (
+                "No changes yet"
+              )
+            }
+            muted={environment.changedFileCount === 0}
+          />
+        </div>
+
+        <section className="flex min-h-0 flex-1 flex-col">
+          <div className="flex items-center gap-2 px-1 pb-2">
+            <h3 className="text-[11px] font-semibold tracking-wide text-muted-foreground/70 uppercase">
+              Notes
+            </h3>
+            <IconButton
+              size="xs"
+              onClick={onOpenNotesFullscreen}
+              aria-label="Open notes fullscreen"
+              title="Open notes fullscreen"
+              className="-my-1 ml-auto"
+            >
+              <Maximize2 className="size-3.5" />
+            </IconButton>
+          </div>
+          <NotesEditor
+            notes={notes}
+            notesThreadId={notesThreadId}
+            onSave={onSaveNotes}
+          />
+        </section>
+      </div>
+    </ResizableSidePanel>
+  )
+}
+
+function EnvRow({
+  icon,
+  label,
+  value,
+  muted,
+}: {
+  icon: ReactNode
+  label: string
+  value: ReactNode
+  muted?: boolean
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="flex shrink-0 items-center gap-2 text-muted-foreground">
+        {icon}
+        <span className="text-[11px] font-medium tracking-wide uppercase">
+          {label}
+        </span>
+      </span>
+      <span
+        className={cn(
+          "ml-auto min-w-0 truncate text-right text-[13px]",
+          muted ? "text-muted-foreground" : "text-foreground"
+        )}
+      >
+        {value}
+      </span>
+    </div>
+  )
+}

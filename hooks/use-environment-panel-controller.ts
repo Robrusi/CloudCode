@@ -13,9 +13,9 @@ import {
   validateEntries,
   validateEnvName,
   type EnvVar,
-} from "@/components/environment-panel-model"
-import { fetchJson, postJson } from "@/lib/client-json"
-import { dedupeEnvVars, parseDotenv } from "@/lib/dotenv-parse"
+} from "@/components/sandbox/environment-panel-model"
+import { fetchJson, postJson } from "@/lib/http/client-json"
+import { dedupeEnvVars, parseDotenv } from "@/lib/env/dotenv-parse"
 
 async function fetchEntries(sandboxId: string, signal?: AbortSignal) {
   const data = await fetchJson<{ entries?: EnvVar[] }>(

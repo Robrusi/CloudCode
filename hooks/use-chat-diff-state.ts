@@ -7,13 +7,13 @@ import {
   MAX_PREFETCHED_CHANGED_TEXT_FILES,
   TEXT_FILE_PREFETCH_CONCURRENCY,
   TEXT_FILE_PREFETCH_DELAY_MS,
-} from "@/components/chat-prefetch"
-import type { ChatRecord } from "@/components/chat-types"
-import { getDiffStats } from "@/lib/diff-metadata"
+} from "@/components/chat/prefetch"
+import type { ChatRecord } from "@/components/chat/types"
+import { getDiffStats } from "@/lib/diff/metadata"
 import {
   diffCacheKey,
   fetchSandboxTextFileIntoCache,
-} from "@/lib/sandbox-file-cache"
+} from "@/lib/sandbox/file-cache"
 
 function latestMessageMeta(active: ChatRecord | null): {
   branch: string | null

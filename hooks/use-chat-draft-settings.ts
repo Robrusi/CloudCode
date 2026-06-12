@@ -11,7 +11,7 @@ import {
   REPO_KEY,
   SPEED_KEY,
   THINKING_KEY,
-} from "@/components/chat-storage"
+} from "@/components/chat/storage"
 import type { Id } from "@/convex/_generated/dataModel"
 import {
   MODELS,
@@ -21,14 +21,14 @@ import {
   type Model,
   type Speed,
   type Thinking,
-} from "@/lib/chat-options"
+} from "@/lib/chat/options"
 import {
   hasBrowserStorageKey,
   readBrowserStorage,
   removeBrowserStorage,
   writeBrowserStorage,
-} from "@/lib/browser-storage"
-import type { SandboxPresetRecord } from "@/lib/sandbox-preset-types"
+} from "@/lib/browser/storage"
+import type { SandboxPresetRecord } from "@/lib/sandbox/preset-types"
 
 export function useChatDraftSettings({
   autoSandboxPreset,

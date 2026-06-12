@@ -6,20 +6,20 @@ import {
   hasCachedRunKey,
   type SaveThreadRunState,
   type ThreadRunStateRef,
-} from "@/components/chat-run-state"
-import { IMAGE_ONLY_PROMPT } from "@/components/chat-storage"
+} from "@/components/chat/run-state"
+import { IMAGE_ONLY_PROMPT } from "@/components/chat/storage"
 import type {
   CachedRunState,
   ChatRecord,
   QueuedMessage,
-} from "@/components/chat-types"
-import { closeBrowserTerminalSession } from "@/components/sandbox-terminal-session"
+} from "@/components/chat/types"
+import { closeBrowserTerminalSession } from "@/components/sandbox/terminal-session"
 import type { Id } from "@/convex/_generated/dataModel"
-import type { ChatImageAttachment } from "@/lib/chat-attachments"
-import { buildResumeHandoff } from "@/lib/chat-resume-handoff"
-import type { BranchMode, Model, Speed, Thinking } from "@/lib/chat-options"
-import type { AuthStatus } from "@/lib/codex-auth"
-import { postJson } from "@/lib/client-json"
+import type { ChatImageAttachment } from "@/lib/chat/attachments"
+import { buildResumeHandoff } from "@/lib/chat/resume-handoff"
+import type { BranchMode, Model, Speed, Thinking } from "@/lib/chat/options"
+import type { AuthStatus } from "@/lib/codex/auth"
+import { postJson } from "@/lib/http/client-json"
 import { useChatQueuedMessages } from "@/hooks/use-chat-queued-messages"
 
 type CreateThread = (args: {

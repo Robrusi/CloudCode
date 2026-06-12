@@ -3,27 +3,27 @@ import type { Sandbox } from "@daytona/sdk"
 import {
   BillingRequiredError,
   getStartedCurrentUserDaytonaSandbox,
-} from "@/lib/billing-server"
+} from "@/lib/billing/server"
 import {
   jsonStringField,
   noStoreJson,
   noStoreJsonError,
   readJsonRecord,
   searchStringParam,
-} from "@/lib/api-route"
+} from "@/lib/http/api-route"
 import {
   getStartedDaytonaSandbox,
   readDaytonaTextFile,
   resolveDaytonaPaths,
   writeDaytonaTextFile,
-} from "@/lib/daytona-sandbox"
-import { requireSameOrigin } from "@/lib/request-security"
-import { requireCurrentUserSandbox } from "@/lib/sandbox-authorization"
+} from "@/lib/daytona/sandbox"
+import { requireSameOrigin } from "@/lib/http/request-security"
+import { requireCurrentUserSandbox } from "@/lib/sandbox/authorization"
 import {
   CLOUDCODE_ENV_END,
   CLOUDCODE_ENV_START,
   type SandboxEnvVar,
-} from "@/lib/sandbox-env"
+} from "@/lib/sandbox/env"
 
 export const runtime = "nodejs"
 

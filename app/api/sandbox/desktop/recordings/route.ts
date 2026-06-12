@@ -9,15 +9,15 @@ import {
   startDaytonaDesktopRecording,
   stopDaytonaDesktopRecording,
   type DaytonaDesktopRecordingFile,
-} from "@/lib/daytona-desktop"
+} from "@/lib/daytona/desktop"
 import {
   jsonError,
   jsonStringField,
   readJsonRecord,
   searchStringParam,
-} from "@/lib/api-route"
-import { requireSameOrigin } from "@/lib/request-security"
-import { requireCurrentUserSandbox } from "@/lib/sandbox-authorization"
+} from "@/lib/http/api-route"
+import { requireSameOrigin } from "@/lib/http/request-security"
+import { requireCurrentUserSandbox } from "@/lib/sandbox/authorization"
 
 export const runtime = "nodejs"
 export const maxDuration = 300

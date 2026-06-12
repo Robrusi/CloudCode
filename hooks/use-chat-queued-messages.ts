@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
-import type { QueuedMessage } from "@/components/chat-types"
-import type { ChatImageAttachment } from "@/lib/chat-attachments"
+import type { QueuedMessage } from "@/components/chat/types"
+import type { ChatImageAttachment } from "@/lib/chat/attachments"
 
 type QueuedMessageMap = Record<string, QueuedMessage[]>
 

@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 
-import { splitStreamingTokens } from "@/components/chat-streaming"
-import type { LiveRunRecord } from "@/components/chat-types"
+import { splitStreamingTokens } from "@/components/chat/streaming"
+import type { LiveRunRecord } from "@/components/chat/types"
 
 type LiveRevealState = {
   queue: string[]

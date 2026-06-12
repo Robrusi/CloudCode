@@ -7,24 +7,24 @@ import type {
 } from "@pierre/trees"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
-import { TREE_SCROLLBAR_CSS } from "@/components/file-browser-ui"
+import { TREE_SCROLLBAR_CSS } from "@/components/files/browser-ui"
 import {
   applyLiveDiffToEntries,
   type BrowserView,
   type FileBrowserListResponse,
   type FileBrowserOpenMode,
-} from "@/components/file-browser-model"
+} from "@/components/files/browser-model"
 import {
   diffTypeToGitStatus,
   formatDiffStat,
   getDiffStats,
   type DiffFileStat,
-} from "@/lib/diff-metadata"
+} from "@/lib/diff/metadata"
 import {
   readCachedFileList,
   writeCachedFileList,
   type SandboxFileEntry,
-} from "@/lib/sandbox-file-cache"
+} from "@/lib/sandbox/file-cache"
 
 const fileListCache = new Map<
   string,

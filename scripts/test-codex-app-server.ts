@@ -6,30 +6,30 @@ import {
   type CodexAppServerTransport,
   createCodexAppServerTurnReducer,
   type CodexAppServerNotification,
-} from "@/lib/codex-app-server"
+} from "@/lib/codex/app-server"
 import {
   buildCodexAuthJsonFromParsed,
   parseCodexAuthJson,
-} from "@/lib/codex-auth-json"
-import { getFilePathFromHref, normalizeLinkHref } from "@/lib/chat-link-path"
-import { refreshCodexOAuthTokens } from "@/lib/codex-oauth-refresh"
+} from "@/lib/codex/auth-json"
+import { getFilePathFromHref, normalizeLinkHref } from "@/lib/chat/link-path"
+import { refreshCodexOAuthTokens } from "@/lib/codex/oauth-refresh"
 import {
   inlineToolMarker,
   shouldPersistRunLog,
   stripInlineToolMarkers,
   type CodexRunLog as RunCodexLog,
-} from "@/lib/codex-run-log"
-import { workerRunFinalContent } from "@/lib/codex-run-worker"
-import { cloudcodeContextCodexConfig } from "@/lib/daytona-context"
+} from "@/lib/codex/run-log"
+import { workerRunFinalContent } from "@/lib/codex/run-worker"
+import { cloudcodeContextCodexConfig } from "@/lib/daytona/context"
 import {
   codexAppServerDaemonCommand,
   codexAppServerNotificationRoute,
   codexAppServerStdioCommand,
   parseCodexAppServerDaemonEventLine,
-} from "@/lib/codex-app-server-daemon"
-import { appServerThreadParams } from "@/lib/codex-app-server-run-params"
-import { codexAppServerStderrLogForLine } from "@/lib/codex-app-server-stderr"
-import type { RunCodexInSandboxResult } from "@/lib/daytona-codex-agent-types"
+} from "@/lib/codex/app-server-daemon"
+import { appServerThreadParams } from "@/lib/codex/app-server-run-params"
+import { codexAppServerStderrLogForLine } from "@/lib/codex/app-server-stderr"
+import type { RunCodexInSandboxResult } from "@/lib/daytona/codex-agent-types"
 
 const testPaths = {
   baseRefPath: "/tmp/base-ref",
@@ -103,11 +103,11 @@ assert.deepEqual(
 )
 assert.equal(parseCodexAppServerDaemonEventLine("not-json"), undefined)
 const daytonaCodexAgentSource = await readFile(
-  new URL("../lib/daytona-codex-agent.ts", import.meta.url),
+  new URL("../lib/daytona/codex-agent.ts", import.meta.url),
   "utf8"
 )
 const daytonaCodexAppServerRunSource = await readFile(
-  new URL("../lib/daytona-codex-app-server-run.ts", import.meta.url),
+  new URL("../lib/daytona/codex-app-server-run.ts", import.meta.url),
   "utf8"
 )
 assert.ok(!daytonaCodexAgentSource.includes("restoredConversationPrompt"))
@@ -123,7 +123,7 @@ assert.ok(
   daytonaCodexAppServerRunSource.includes("authHash: sha256(input.authJson)")
 )
 const daemonScriptSource = await readFile(
-  new URL("../lib/codex-app-server-daemon-script.ts", import.meta.url),
+  new URL("../lib/codex/app-server-daemon-script.ts", import.meta.url),
   "utf8"
 )
 assert.ok(daemonScriptSource.includes("initializedAuthHash"))

@@ -2,15 +2,15 @@
 
 import { useCallback, useState } from "react"
 
-import { limitThreadDisplayTitle } from "@/components/chat-format"
+import { limitThreadDisplayTitle } from "@/components/chat/format"
 import {
   hasCachedRunKey,
   type ThreadRunStateRef,
-} from "@/components/chat-run-state"
-import { closeBrowserTerminalSession } from "@/components/sandbox-terminal-session"
-import type { ChatRecord } from "@/components/chat-types"
+} from "@/components/chat/run-state"
+import { closeBrowserTerminalSession } from "@/components/sandbox/terminal-session"
+import type { ChatRecord } from "@/components/chat/types"
 import type { Id } from "@/convex/_generated/dataModel"
-import { requestJson } from "@/lib/client-json"
+import { requestJson } from "@/lib/http/client-json"
 
 type DeleteThread = (args: { threadId: Id<"threads"> }) => Promise<unknown>
 

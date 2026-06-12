@@ -6,17 +6,17 @@ import {
   jsonNumberField,
   jsonStringField,
   readJsonRecordOrNull,
-} from "@/lib/api-route"
-import { maybeGetCurrentGitHubRepoCredential } from "@/lib/github-auth"
+} from "@/lib/http/api-route"
+import { maybeGetCurrentGitHubRepoCredential } from "@/lib/github/auth"
 import {
   deleteBranchRef,
   getPullRequest,
   mergePullRequest,
   type MergeMethod,
-} from "@/lib/github-pull-requests"
-import { requireSameOrigin } from "@/lib/request-security"
-import { resolveSandboxGitContext } from "@/lib/sandbox-git"
-import { gitApiErrorResponse } from "@/lib/sandbox-git-route"
+} from "@/lib/github/pull-requests"
+import { requireSameOrigin } from "@/lib/http/request-security"
+import { resolveSandboxGitContext } from "@/lib/sandbox/git"
+import { gitApiErrorResponse } from "@/lib/sandbox/git-route"
 
 export const runtime = "nodejs"
 

@@ -9,13 +9,30 @@
  */
 
 import type * as billing from "../billing.js";
+import type * as billingAutumn from "../billingAutumn.js";
+import type * as billingPlan from "../billingPlan.js";
+import type * as billingSandboxSegments from "../billingSandboxSegments.js";
+import type * as billingUsageEvents from "../billingUsageEvents.js";
 import type * as chats from "../chats.js";
 import type * as codexAuth from "../codexAuth.js";
 import type * as codexRuns from "../codexRuns.js";
 import type * as files from "../files.js";
 import type * as githubApp from "../githubApp.js";
+import type * as lib_codexRunAuth from "../lib/codexRunAuth.js";
+import type * as lib_codexRunLifecycle from "../lib/codexRunLifecycle.js";
+import type * as lib_codexRunLogs from "../lib/codexRunLogs.js";
+import type * as lib_codexRunValidators from "../lib/codexRunValidators.js";
+import type * as lib_codexRunWorkerInput from "../lib/codexRunWorkerInput.js";
+import type * as lib_envNameValidation from "../lib/envNameValidation.js";
+import type * as lib_mcpServerRecords from "../lib/mcpServerRecords.js";
+import type * as lib_mcpServerValidation from "../lib/mcpServerValidation.js";
 import type * as lib_sandboxAccess from "../lib/sandboxAccess.js";
+import type * as lib_sandboxPresetBuilds from "../lib/sandboxPresetBuilds.js";
+import type * as lib_sandboxPresetRecords from "../lib/sandboxPresetRecords.js";
+import type * as lib_sandboxPresetValidation from "../lib/sandboxPresetValidation.js";
 import type * as lib_sandboxPresets from "../lib/sandboxPresets.js";
+import type * as lib_threadAccess from "../lib/threadAccess.js";
+import type * as lib_threadNotes from "../lib/threadNotes.js";
 import type * as lib_users from "../lib/users.js";
 import type * as lib_workerAuth from "../lib/workerAuth.js";
 import type * as mcpServers from "../mcpServers.js";
@@ -31,13 +48,30 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   billing: typeof billing;
+  billingAutumn: typeof billingAutumn;
+  billingPlan: typeof billingPlan;
+  billingSandboxSegments: typeof billingSandboxSegments;
+  billingUsageEvents: typeof billingUsageEvents;
   chats: typeof chats;
   codexAuth: typeof codexAuth;
   codexRuns: typeof codexRuns;
   files: typeof files;
   githubApp: typeof githubApp;
+  "lib/codexRunAuth": typeof lib_codexRunAuth;
+  "lib/codexRunLifecycle": typeof lib_codexRunLifecycle;
+  "lib/codexRunLogs": typeof lib_codexRunLogs;
+  "lib/codexRunValidators": typeof lib_codexRunValidators;
+  "lib/codexRunWorkerInput": typeof lib_codexRunWorkerInput;
+  "lib/envNameValidation": typeof lib_envNameValidation;
+  "lib/mcpServerRecords": typeof lib_mcpServerRecords;
+  "lib/mcpServerValidation": typeof lib_mcpServerValidation;
   "lib/sandboxAccess": typeof lib_sandboxAccess;
+  "lib/sandboxPresetBuilds": typeof lib_sandboxPresetBuilds;
+  "lib/sandboxPresetRecords": typeof lib_sandboxPresetRecords;
+  "lib/sandboxPresetValidation": typeof lib_sandboxPresetValidation;
   "lib/sandboxPresets": typeof lib_sandboxPresets;
+  "lib/threadAccess": typeof lib_threadAccess;
+  "lib/threadNotes": typeof lib_threadNotes;
   "lib/users": typeof lib_users;
   "lib/workerAuth": typeof lib_workerAuth;
   mcpServers: typeof mcpServers;

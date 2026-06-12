@@ -2,16 +2,16 @@ import { NextResponse } from "next/server"
 
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import { currentUserConvexHttpClient } from "@/lib/convex-http"
+import { currentUserConvexHttpClient } from "@/lib/convex/http"
 import {
   jsonError,
   jsonNumberField,
   jsonRawStringField,
   readJsonRecord,
   type JsonRecord,
-} from "@/lib/api-route"
-import { requireSameOrigin } from "@/lib/request-security"
-import { encryptSecret } from "@/lib/secret-crypto"
+} from "@/lib/http/api-route"
+import { requireSameOrigin } from "@/lib/http/request-security"
+import { encryptSecret } from "@/lib/security/secret-crypto"
 
 export const runtime = "nodejs"
 

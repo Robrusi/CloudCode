@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server"
 
-import { jsonError, searchStringParam } from "@/lib/api-route"
-import { readDaytonaSandboxInfo } from "@/lib/daytona-sandbox"
-import { requireCurrentUserSandbox } from "@/lib/sandbox-authorization"
+import { jsonError, searchStringParam } from "@/lib/http/api-route"
+import { readDaytonaSandboxInfo } from "@/lib/daytona/sandbox"
+import { requireCurrentUserSandbox } from "@/lib/sandbox/authorization"
 
 export const runtime = "nodejs"
 

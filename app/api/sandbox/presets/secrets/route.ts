@@ -2,24 +2,24 @@ import type { ConvexHttpClient } from "convex/browser"
 
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import { currentUserConvexHttpClient } from "@/lib/convex-http"
+import { currentUserConvexHttpClient } from "@/lib/convex/http"
 import {
   jsonRawStringField,
   noStoreJson,
   noStoreJsonError,
   readJsonRecord,
-} from "@/lib/api-route"
+} from "@/lib/http/api-route"
 import {
   getDaytonaSandbox,
   readDaytonaTextFile,
   resolveDaytonaPaths,
   runDaytonaCommand,
   writeDaytonaTextFile,
-} from "@/lib/daytona-sandbox"
-import { dedupeEnvVars, type ParsedEnvVar } from "@/lib/dotenv-parse"
-import { requireSameOrigin } from "@/lib/request-security"
-import { removeCloudcodeEnvLocalVars } from "@/lib/sandbox-env"
-import { encryptSecret } from "@/lib/secret-crypto"
+} from "@/lib/daytona/sandbox"
+import { dedupeEnvVars, type ParsedEnvVar } from "@/lib/env/dotenv-parse"
+import { requireSameOrigin } from "@/lib/http/request-security"
+import { removeCloudcodeEnvLocalVars } from "@/lib/sandbox/env"
+import { encryptSecret } from "@/lib/security/secret-crypto"
 
 export const runtime = "nodejs"
 export const maxDuration = 300

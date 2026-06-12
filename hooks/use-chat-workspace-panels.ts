@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react"
 
-import type { FileBrowserOpenMode } from "@/components/file-browser"
-import { TERMINAL_OPEN_KEY } from "@/components/chat-storage"
+import type { FileBrowserOpenMode } from "@/components/files/browser"
+import { TERMINAL_OPEN_KEY } from "@/components/chat/storage"
 import {
   readBrowserStorage,
   removeBrowserStorage,
   writeBrowserStorage,
-} from "@/lib/browser-storage"
+} from "@/lib/browser/storage"
 
 export type ChatToolPanelId = "context" | "desktop" | "files" | "github" | "ssh"
 

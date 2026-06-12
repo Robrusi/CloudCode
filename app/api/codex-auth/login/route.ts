@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server"
 
-import { getConvexAuthToken } from "@/lib/codex-auth"
-import { createCodexLoginUrl } from "@/lib/codex-oauth"
-import { escapeHtml } from "@/lib/html-escape"
+import { getConvexAuthToken } from "@/lib/codex/auth"
+import { createCodexLoginUrl } from "@/lib/codex/oauth"
+import { escapeHtml } from "@/lib/shared/html-escape"
 
 export const runtime = "nodejs"
 

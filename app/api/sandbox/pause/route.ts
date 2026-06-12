@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server"
 
-import { jsonError, readJsonStringField } from "@/lib/api-route"
-import { observeCurrentUserDaytonaBillingInfo } from "@/lib/billing-server"
-import { stopDaytonaSandbox } from "@/lib/daytona-sandbox"
-import { requireSameOrigin } from "@/lib/request-security"
-import { requireCurrentUserSandbox } from "@/lib/sandbox-authorization"
+import { jsonError, readJsonStringField } from "@/lib/http/api-route"
+import { observeCurrentUserDaytonaBillingInfo } from "@/lib/billing/server"
+import { stopDaytonaSandbox } from "@/lib/daytona/sandbox"
+import { requireSameOrigin } from "@/lib/http/request-security"
+import { requireCurrentUserSandbox } from "@/lib/sandbox/authorization"
 
 export const runtime = "nodejs"
 export const maxDuration = 300

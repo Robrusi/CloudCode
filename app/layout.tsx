@@ -4,9 +4,9 @@ import { GeistPixelSquare } from "geist/font/pixel"
 import { ClerkProvider } from "@clerk/nextjs"
 
 import "./globals.css"
-import { ConvexClientProvider } from "@/components/convex-client-provider"
-import { ThemeProvider } from "@/components/theme-provider"
-import { cn } from "@/lib/utils"
+import { ConvexClientProvider } from "@/components/providers/convex-client-provider"
+import { ThemeProvider } from "@/components/providers/theme-provider"
+import { cn } from "@/lib/shared/utils"
 
 export const viewport: Viewport = {
   width: "device-width",

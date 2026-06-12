@@ -53,11 +53,11 @@ try {
     readFile(join(generatedDir, "ServerNotification.ts"), "utf8"),
     readFile(join(generatedDir, "ServerRequest.ts"), "utf8"),
     readFile(
-      new URL("../lib/codex-app-server-requests.ts", import.meta.url),
+      new URL("../lib/codex/app-server-requests.ts", import.meta.url),
       "utf8"
     ),
     readFile(
-      new URL("../lib/codex-app-server-turn-reducer.ts", import.meta.url),
+      new URL("../lib/codex/app-server-turn-reducer.ts", import.meta.url),
       "utf8"
     ),
   ])

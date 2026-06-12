@@ -3,16 +3,16 @@
 import { useMutation, useQuery } from "convex/react"
 import { useEffect, useMemo, useState } from "react"
 
-import { ACTIVE_KEY, DRAFT_RUN_KEY } from "@/components/chat-storage"
-import type { ChatRecord, LiveRunRecord } from "@/components/chat-types"
+import { ACTIVE_KEY, DRAFT_RUN_KEY } from "@/components/chat/storage"
+import type { ChatRecord, LiveRunRecord } from "@/components/chat/types"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import {
   readBrowserStorage,
   removeBrowserStorage,
   writeBrowserStorage,
-} from "@/lib/browser-storage"
-import type { SandboxPresetRecord } from "@/lib/sandbox-preset-types"
+} from "@/lib/browser/storage"
+import type { SandboxPresetRecord } from "@/lib/sandbox/preset-types"
 
 const EMPTY_CHAT_RECORDS: ChatRecord[] = []
 const EMPTY_SANDBOX_PRESETS: SandboxPresetRecord[] = []

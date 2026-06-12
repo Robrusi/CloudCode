@@ -7,8 +7,8 @@ import process from "node:process"
 import {
   CODEX_APP_SERVER_DAEMON_CLIENT_SCRIPT,
   CODEX_APP_SERVER_DAEMON_SCRIPT,
-} from "@/lib/codex-app-server-daemon-script"
-import { buildCodexAuthJsonFromParsed } from "@/lib/codex-auth-json"
+} from "@/lib/codex/app-server-daemon-script"
+import { buildCodexAuthJsonFromParsed } from "@/lib/codex/auth-json"
 
 const REQUEST_TIMEOUT_MS = 15_000
 

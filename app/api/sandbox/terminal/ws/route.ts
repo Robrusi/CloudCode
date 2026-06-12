@@ -1,34 +1,34 @@
 import { NextResponse } from "next/server"
 
-import { observeCurrentUserDaytonaBillingInfo } from "@/lib/billing-server"
+import { observeCurrentUserDaytonaBillingInfo } from "@/lib/billing/server"
 import {
   jsonError,
   jsonNumberField,
   jsonStringField,
   readJsonRecord,
   searchStringParam,
-} from "@/lib/api-route"
+} from "@/lib/http/api-route"
 import {
   daytonaTerminalHasCurrentGitHubAuth,
   killDaytonaTerminal,
-} from "@/lib/daytona-terminal-sessions"
+} from "@/lib/daytona/terminal-sessions"
 import {
   prepareDaytonaTerminalWebSocket,
   refreshDaytonaTerminalWebSocketGitHubAuth,
   resizeDaytonaTerminalWebSocket,
-} from "@/lib/daytona-terminal-websocket"
-import { readDaytonaSandboxInfo } from "@/lib/daytona-sandbox"
+} from "@/lib/daytona/terminal-websocket"
+import { readDaytonaSandboxInfo } from "@/lib/daytona/sandbox"
 import {
   TERMINAL_DEFAULT_COLS,
   TERMINAL_DEFAULT_ROWS,
-} from "@/lib/daytona-terminal-params"
-import { maybeGetCurrentGitHubRepoCredential } from "@/lib/github-auth"
-import { requireSameOrigin } from "@/lib/request-security"
+} from "@/lib/daytona/terminal-params"
+import { maybeGetCurrentGitHubRepoCredential } from "@/lib/github/auth"
+import { requireSameOrigin } from "@/lib/http/request-security"
 import {
   numberParam,
   requireTerminalAccess,
   terminalRequiredResponse,
-} from "@/lib/sandbox-terminal-route"
+} from "@/lib/sandbox/terminal-route"
 
 export const runtime = "nodejs"
 

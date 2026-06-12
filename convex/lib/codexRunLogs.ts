@@ -1,12 +1,12 @@
 import type { Doc } from "../_generated/dataModel"
-import type { StoredCodexRunLog } from "../../lib/codex-run-log"
+import type { StoredCodexRunLog } from "@/lib/codex/run-log"
 
 const MAX_STORED_RUN_LOGS = 80
 const MAX_STORED_BUILD_LOGS = 120
 const MAX_STORED_LOG_MESSAGE_LENGTH = 500
 const MAX_STORED_LOG_DETAIL_LENGTH = 1_500
 
-export type { StoredCodexRunLog as StoredRunLog } from "../../lib/codex-run-log"
+export type { StoredCodexRunLog as StoredRunLog } from "@/lib/codex/run-log"
 
 type RunLogCompactionPolicy = {
   maxDetailLength: number

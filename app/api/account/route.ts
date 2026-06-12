@@ -2,11 +2,11 @@ import { auth, clerkClient } from "@clerk/nextjs/server"
 import { NextResponse } from "next/server"
 
 import { api } from "@/convex/_generated/api"
-import { convexHttpClientForSession } from "@/lib/convex-http"
-import { deleteDaytonaSandboxQuietly } from "@/lib/daytona-sandbox"
-import { disconnectCurrentGitHubAppUser } from "@/lib/github-app"
-import { jsonError } from "@/lib/api-route"
-import { requireSameOrigin } from "@/lib/request-security"
+import { convexHttpClientForSession } from "@/lib/convex/http"
+import { deleteDaytonaSandboxQuietly } from "@/lib/daytona/sandbox"
+import { disconnectCurrentGitHubAppUser } from "@/lib/github/app"
+import { jsonError } from "@/lib/http/api-route"
+import { requireSameOrigin } from "@/lib/http/request-security"
 
 export const runtime = "nodejs"
 

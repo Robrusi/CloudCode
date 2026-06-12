@@ -7,10 +7,10 @@ import {
   cleanMcpStringList,
   visibleMcpSecrets,
   type McpPair,
-} from "@/components/settings-mcp-model"
+} from "@/components/settings/mcp-model"
 import type { Id } from "@/convex/_generated/dataModel"
-import { requestJson } from "@/lib/client-json"
-import type { McpServerRecord } from "@/lib/mcp-server-types"
+import { requestJson } from "@/lib/http/client-json"
+import type { McpServerRecord } from "@/lib/mcp/server-types"
 
 type UseMcpServerFormControllerParams = {
   onRemove?: () => void | Promise<void>

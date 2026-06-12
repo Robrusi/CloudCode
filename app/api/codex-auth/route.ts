@@ -6,9 +6,13 @@ import {
   renameCodexAuthProfile,
   saveCodexAuthJson,
   setActiveCodexAuthProfile,
-} from "@/lib/codex-auth"
-import { jsonError, jsonRawStringField, readJsonRecord } from "@/lib/api-route"
-import { requireSameOrigin } from "@/lib/request-security"
+} from "@/lib/codex/auth"
+import {
+  jsonError,
+  jsonRawStringField,
+  readJsonRecord,
+} from "@/lib/http/api-route"
+import { requireSameOrigin } from "@/lib/http/request-security"
 
 export const runtime = "nodejs"
 

@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server"
 
-import { jsonError, searchStringParam } from "@/lib/api-route"
+import { jsonError, searchStringParam } from "@/lib/http/api-route"
 import {
   readSandboxGitStatus,
   resolveSandboxGitContext,
-} from "@/lib/sandbox-git"
-import { gitApiErrorResponse } from "@/lib/sandbox-git-route"
+} from "@/lib/sandbox/git"
+import { gitApiErrorResponse } from "@/lib/sandbox/git-route"
 
 export const runtime = "nodejs"
 

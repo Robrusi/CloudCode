@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect } from "react"
 
-import type { AuthStatus } from "@/lib/codex-auth"
-import type { GitHubAuthStatus } from "@/lib/github-auth"
+import type { AuthStatus } from "@/lib/codex/auth"
+import type { GitHubAuthStatus } from "@/lib/github/auth"
 
 type ViewerOnboardingState =
   | {

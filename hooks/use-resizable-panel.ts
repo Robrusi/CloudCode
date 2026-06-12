@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 
-import { readBrowserStorage, writeBrowserStorage } from "@/lib/browser-storage"
+import { readBrowserStorage, writeBrowserStorage } from "@/lib/browser/storage"
 
 export type ResizeEdge = "left" | "right"
 

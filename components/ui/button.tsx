@@ -4,7 +4,7 @@ import {
   buttonVariants,
   type ButtonVariantProps,
 } from "@/components/ui/button-variants"
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/shared/utils"
 
 function Button({
   className,

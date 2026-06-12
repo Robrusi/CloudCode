@@ -1,6 +1,6 @@
-import { readDaytonaSandboxInfo } from "@/lib/daytona-sandbox"
-import { searchStringParam } from "@/lib/api-route"
-import { requireCurrentUserSandbox } from "@/lib/sandbox-authorization"
+import { readDaytonaSandboxInfo } from "@/lib/daytona/sandbox"
+import { searchStringParam } from "@/lib/http/api-route"
+import { requireCurrentUserSandbox } from "@/lib/sandbox/authorization"
 
 export const runtime = "nodejs"
 export const maxDuration = 300

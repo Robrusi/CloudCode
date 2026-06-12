@@ -10,7 +10,7 @@ import {
 } from "react"
 
 import type { Id } from "@/convex/_generated/dataModel"
-import type { BranchMode, Model, Speed, Thinking } from "@/lib/chat-options"
+import type { BranchMode, Model, Speed, Thinking } from "@/lib/chat/options"
 
 type ThreadComposerUpdate = {
   model?: Model

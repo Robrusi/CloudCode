@@ -4,22 +4,26 @@ import { NextResponse } from "next/server"
 
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import { parseBranchMode } from "@/lib/codex-branch-names"
-import { currentUserConvexHttpClient } from "@/lib/convex-http"
-import { syncDiscoveredSandbox } from "@/lib/codex-run-sandbox-sync"
-import { parseChatImageAttachments } from "@/lib/chat-attachments"
+import { parseBranchMode } from "@/lib/codex/branch-names"
+import { currentUserConvexHttpClient } from "@/lib/convex/http"
+import { syncDiscoveredSandbox } from "@/lib/codex/run-sandbox-sync"
+import { parseChatImageAttachments } from "@/lib/chat/attachments"
 import {
   CODEX_REASONING_EFFORT_ERROR,
   CODEX_SPEED_ERROR,
   parseCodexReasoningEffort,
   parseCodexSpeed,
-} from "@/lib/codex-run-options"
-import { maybeGetCurrentGitHubRepoCredential } from "@/lib/github-auth"
-import { canClonePublicGitHubRepo } from "@/lib/github-repo-api"
-import { jsonError, jsonRawStringField, readJsonRecord } from "@/lib/api-route"
-import { requireSameOrigin } from "@/lib/request-security"
-import { encryptSecret } from "@/lib/secret-crypto"
-import { getWorkerSecret } from "@/lib/worker-secret"
+} from "@/lib/codex/run-options"
+import { maybeGetCurrentGitHubRepoCredential } from "@/lib/github/auth"
+import { canClonePublicGitHubRepo } from "@/lib/github/repo-api"
+import {
+  jsonError,
+  jsonRawStringField,
+  readJsonRecord,
+} from "@/lib/http/api-route"
+import { requireSameOrigin } from "@/lib/http/request-security"
+import { encryptSecret } from "@/lib/security/secret-crypto"
+import { getWorkerSecret } from "@/lib/security/worker-secret"
 import type { cloudcodeRun } from "@/trigger/cloudcode-run"
 
 export const runtime = "nodejs"

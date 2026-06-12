@@ -3,13 +3,13 @@ import { NextResponse } from "next/server"
 import {
   BillingRequiredError,
   getStartedCurrentUserDaytonaSandbox,
-} from "@/lib/billing-server"
-import { jsonError, searchStringParam } from "@/lib/api-route"
+} from "@/lib/billing/server"
+import { jsonError, searchStringParam } from "@/lib/http/api-route"
 import {
   resolveDaytonaPaths,
   runDaytonaCommand,
   shellQuote,
-} from "@/lib/daytona-sandbox"
+} from "@/lib/daytona/sandbox"
 
 export const runtime = "nodejs"
 

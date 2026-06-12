@@ -21,8 +21,8 @@ import {
   serialize,
   type Block,
   type BlockType,
-} from "@/components/markdown-editor-model"
-import type { EditableMarkdownField } from "@/components/markdown-editor-types"
+} from "@/components/markdown/editor-model"
+import type { EditableMarkdownField } from "@/components/markdown/editor-types"
 
 type UseMarkdownEditorControllerParams = {
   onChange: (markdown: string) => void

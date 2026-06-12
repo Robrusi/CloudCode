@@ -1,12 +1,12 @@
-import type { CodexRunLog as RunCodexLog } from "@/lib/codex-run-log"
-import { inlineToolMarker, shouldPersistRunLog } from "@/lib/codex-run-log"
+import type { CodexRunLog as RunCodexLog } from "@/lib/codex/run-log"
+import { inlineToolMarker, shouldPersistRunLog } from "@/lib/codex/run-log"
 import {
   appendWorkerRunLogs,
   isWorkerRunCanceledError,
   updateWorkerRunContent,
   type WorkerConvexClient,
   type WorkerRunPayload,
-} from "@/lib/codex-run-worker"
+} from "@/lib/codex/run-worker"
 
 const LOG_BATCH_SIZE = 20
 const LOG_FLUSH_DELAY_MS = 350

@@ -6,10 +6,10 @@ import type {
   CachedRunState,
   ChatRecord,
   OptimisticRun,
-} from "@/components/chat-types"
+} from "@/components/chat/types"
 import type { Id } from "@/convex/_generated/dataModel"
-import type { ChatImageAttachment } from "@/lib/chat-attachments"
-import type { Speed, Thinking } from "@/lib/chat-options"
+import type { ChatImageAttachment } from "@/lib/chat/attachments"
+import type { Speed, Thinking } from "@/lib/chat/options"
 
 export function useChatRunBookkeeping() {
   const cancelRequestedThreadIds = useRef(new Set<string>()).current

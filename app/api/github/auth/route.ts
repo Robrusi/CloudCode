@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server"
 
-import { getCurrentGitHubAuthStatus } from "@/lib/github-auth"
-import { disconnectCurrentGitHubAppUser } from "@/lib/github-app"
-import { requireSameOrigin } from "@/lib/request-security"
+import { getCurrentGitHubAuthStatus } from "@/lib/github/auth"
+import { disconnectCurrentGitHubAppUser } from "@/lib/github/app"
+import { requireSameOrigin } from "@/lib/http/request-security"
 
 export const runtime = "nodejs"
 

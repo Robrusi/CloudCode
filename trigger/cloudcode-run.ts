@@ -2,8 +2,8 @@ import { schedules, task, timeout } from "@trigger.dev/sdk"
 
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import { ensureAutoEnvironmentSandbox } from "@/lib/sandbox-auto-environment"
-import { runCodexInSandbox } from "@/lib/daytona-codex-agent"
+import { ensureAutoEnvironmentSandbox } from "@/lib/sandbox/auto-environment"
+import { runCodexInSandbox } from "@/lib/daytona/codex-agent"
 import {
   cancelWorkerRun,
   completeWorkerRun,
@@ -16,7 +16,7 @@ import {
   workerConvexClient,
   workerRunFinalContent,
   type WorkerRunPayload,
-} from "@/lib/codex-run-worker"
+} from "@/lib/codex/run-worker"
 import {
   createContentBuffer,
   createLogBuffer,

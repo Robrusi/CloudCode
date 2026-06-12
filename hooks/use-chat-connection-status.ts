@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react"
 
-import { fetchJson } from "@/lib/client-json"
-import type { AuthStatus } from "@/lib/codex-auth"
-import type { GitHubAuthStatus } from "@/lib/github-auth"
+import { fetchJson } from "@/lib/http/client-json"
+import type { AuthStatus } from "@/lib/codex/auth"
+import type { GitHubAuthStatus } from "@/lib/github/auth"
 
 export function useChatConnectionStatus(userLoading: boolean) {
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)

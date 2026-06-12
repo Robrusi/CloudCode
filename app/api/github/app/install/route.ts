@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 
-import { getConvexAuthToken } from "@/lib/codex-auth"
+import { getConvexAuthToken } from "@/lib/codex/auth"
 import {
   createGitHubAppInstallUrl,
   createGitHubAppState,
@@ -10,8 +10,8 @@ import {
   isGitHubAppConfigured,
   isGitHubAppUserAuthConfigured,
   syncCurrentGitHubAppUserInstallations,
-} from "@/lib/github-app"
-import { escapeHtml } from "@/lib/html-escape"
+} from "@/lib/github/app"
+import { escapeHtml } from "@/lib/shared/html-escape"
 
 export const runtime = "nodejs"
 

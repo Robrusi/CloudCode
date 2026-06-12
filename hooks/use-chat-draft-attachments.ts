@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
-import type { DraftImageAttachment } from "@/components/chat-types"
+import type { DraftImageAttachment } from "@/components/chat/types"
 import { useImageUpload } from "@/hooks/use-image-upload"
 import {
   isChatImageAttachmentMimeType,
@@ -10,7 +10,7 @@ import {
   MAX_CHAT_IMAGE_ATTACHMENTS,
   sanitizeImageAttachmentName,
   type ChatImageAttachment,
-} from "@/lib/chat-attachments"
+} from "@/lib/chat/attachments"
 
 export function useChatDraftAttachments() {
   const uploadImage = useImageUpload()

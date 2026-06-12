@@ -2,8 +2,8 @@
 
 import { useCallback, type Dispatch, type SetStateAction } from "react"
 
-import { loadSandboxTerminalPanel } from "@/components/chat-lazy-panels"
-import type { FileBrowserOpenMode } from "@/components/file-browser"
+import { loadSandboxTerminalPanel } from "@/components/chat/lazy-panels"
+import type { FileBrowserOpenMode } from "@/components/files/browser"
 
 type OpenFilePanel = (
   path: string,

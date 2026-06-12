@@ -7,15 +7,15 @@ import {
   type SandboxActionResult,
   type SandboxState,
   normalizeSandboxActionState,
-} from "@/components/chat-sandbox-types"
+} from "@/components/chat/sandbox-types"
 import type {
   SaveThreadRunState,
   ThreadRunStateRef,
-} from "@/components/chat-run-state"
-import { closeBrowserTerminalSession } from "@/components/sandbox-terminal-session"
-import type { CachedRunState, ChatRecord } from "@/components/chat-types"
+} from "@/components/chat/run-state"
+import { closeBrowserTerminalSession } from "@/components/sandbox/terminal-session"
+import type { CachedRunState, ChatRecord } from "@/components/chat/types"
 import type { Id } from "@/convex/_generated/dataModel"
-import { JsonRequestError, requestJson } from "@/lib/client-json"
+import { JsonRequestError, requestJson } from "@/lib/http/client-json"
 
 type ClearSandbox = (args: { threadId: Id<"threads"> }) => Promise<unknown>
 

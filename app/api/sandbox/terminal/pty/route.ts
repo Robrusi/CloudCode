@@ -9,28 +9,28 @@ import {
   resizeDaytonaTerminal,
   sendDaytonaTerminalInput,
   type ConnectedDaytonaTerminal,
-} from "@/lib/daytona-terminal-sessions"
-import { observeCurrentUserDaytonaBillingInfo } from "@/lib/billing-server"
+} from "@/lib/daytona/terminal-sessions"
+import { observeCurrentUserDaytonaBillingInfo } from "@/lib/billing/server"
 import {
   jsonError,
   jsonNumberField,
   jsonStringField,
   readJsonRecord,
   searchStringParam,
-} from "@/lib/api-route"
-import { readDaytonaSandboxInfo } from "@/lib/daytona-sandbox"
+} from "@/lib/http/api-route"
+import { readDaytonaSandboxInfo } from "@/lib/daytona/sandbox"
 import {
   TERMINAL_DEFAULT_COLS,
   TERMINAL_DEFAULT_ROWS,
-} from "@/lib/daytona-terminal-params"
-import { maybeGetCurrentGitHubRepoCredential } from "@/lib/github-auth"
-import { requireSameOrigin } from "@/lib/request-security"
-import { requireCurrentUserSandbox } from "@/lib/sandbox-authorization"
+} from "@/lib/daytona/terminal-params"
+import { maybeGetCurrentGitHubRepoCredential } from "@/lib/github/auth"
+import { requireSameOrigin } from "@/lib/http/request-security"
+import { requireCurrentUserSandbox } from "@/lib/sandbox/authorization"
 import {
   numberParam,
   requireTerminalAccess,
   terminalRequiredResponse,
-} from "@/lib/sandbox-terminal-route"
+} from "@/lib/sandbox/terminal-route"
 
 export const runtime = "nodejs"
 export const maxDuration = 3600

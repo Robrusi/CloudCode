@@ -2,7 +2,7 @@
 
 import { useCallback } from "react"
 
-import type { SettingsSectionId } from "@/components/settings-sections"
+import type { SettingsSectionId } from "@/components/settings/sections"
 import type { Id } from "@/convex/_generated/dataModel"
 
 export function useChatNavigation({

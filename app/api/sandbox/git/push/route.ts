@@ -4,15 +4,15 @@ import {
   jsonError,
   jsonStringField,
   readJsonRecordOrNull,
-} from "@/lib/api-route"
-import { requireSameOrigin } from "@/lib/request-security"
+} from "@/lib/http/api-route"
+import { requireSameOrigin } from "@/lib/http/request-security"
 import {
   getCurrentSandboxBranch,
   pushSandboxBranch,
   resolveSandboxGitContext,
   withSandboxGitHubAuth,
-} from "@/lib/sandbox-git"
-import { gitApiErrorResponse } from "@/lib/sandbox-git-route"
+} from "@/lib/sandbox/git"
+import { gitApiErrorResponse } from "@/lib/sandbox/git-route"
 
 export const runtime = "nodejs"
 

@@ -3,10 +3,14 @@ import { NextResponse } from "next/server"
 
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import { currentUserConvexHttpClient } from "@/lib/convex-http"
-import { syncDiscoveredSandbox } from "@/lib/codex-run-sandbox-sync"
-import { jsonError, jsonStringField, readJsonRecord } from "@/lib/api-route"
-import { requireSameOrigin } from "@/lib/request-security"
+import { currentUserConvexHttpClient } from "@/lib/convex/http"
+import { syncDiscoveredSandbox } from "@/lib/codex/run-sandbox-sync"
+import {
+  jsonError,
+  jsonStringField,
+  readJsonRecord,
+} from "@/lib/http/api-route"
+import { requireSameOrigin } from "@/lib/http/request-security"
 
 export const runtime = "nodejs"
 

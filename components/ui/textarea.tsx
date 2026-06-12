@@ -1,7 +1,7 @@
 import { cva, type VariantProps } from "class-variance-authority"
 import type { ComponentProps } from "react"
 
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/shared/utils"
 
 const textareaVariants = cva(
   "w-full text-sm leading-relaxed transition-colors outline-none placeholder:text-muted-foreground/60 disabled:pointer-events-none disabled:opacity-60",

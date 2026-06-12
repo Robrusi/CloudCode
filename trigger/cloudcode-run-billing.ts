@@ -2,21 +2,22 @@ import { usage } from "@trigger.dev/sdk"
 
 import type { Id } from "@/convex/_generated/dataModel"
 import {
-  BILLING_TRIGGER_CHECKPOINT_MS,
   daytonaBillingState,
   microUsdFromTriggerCents,
   type DaytonaBillingState,
-} from "@/lib/billing"
+} from "@/lib/billing/model"
 import {
   daytonaSandboxBillingResources,
   getDaytonaSandbox,
   stopDaytonaSandbox,
-} from "@/lib/daytona-sandbox"
+} from "@/lib/daytona/sandbox"
 import {
   observeWorkerDaytonaSandbox,
   recordWorkerBillingUsage,
   type WorkerConvexClient,
-} from "@/lib/codex-run-worker"
+} from "@/lib/codex/run-worker"
+
+const BILLING_TRIGGER_CHECKPOINT_MS = 30_000
 
 export type ActiveBillingSandboxSegment = {
   cpu: number

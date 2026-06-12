@@ -8,8 +8,8 @@ import {
   saveGitHubAppInstallation,
   syncCurrentGitHubAppUserInstallations,
   verifyGitHubAppInstallation,
-} from "@/lib/github-app"
-import { escapeHtml } from "@/lib/html-escape"
+} from "@/lib/github/app"
+import { escapeHtml } from "@/lib/shared/html-escape"
 
 export const runtime = "nodejs"
 

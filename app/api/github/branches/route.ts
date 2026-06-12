@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server"
 
-import { jsonError, searchStringParam } from "@/lib/api-route"
-import { maybeGetCurrentGitHubRepoCredential } from "@/lib/github-auth"
-import { parseGitHubRepoUrl } from "@/lib/github-repo"
+import { jsonError, searchStringParam } from "@/lib/http/api-route"
+import { maybeGetCurrentGitHubRepoCredential } from "@/lib/github/auth"
+import { parseGitHubRepoUrl } from "@/lib/github/repo"
 import {
   fetchGitHubRepoMetadata,
   githubApiHeaders,
-} from "@/lib/github-repo-api"
+} from "@/lib/github/repo-api"
 
 export const runtime = "nodejs"
 

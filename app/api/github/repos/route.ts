@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 
-import { listCurrentGitHubAppRepositories } from "@/lib/github-app"
+import { listCurrentGitHubAppRepositories } from "@/lib/github/app"
 
 export const runtime = "nodejs"
 
