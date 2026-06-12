@@ -215,6 +215,7 @@ export function ChatComposer({
           readyAttachmentCount={readyAttachmentCount}
           speed={speed}
           thinking={thinking}
+          thinkingMenuPlacement={isMobile && !hasActiveChat ? "down" : "up"}
           thinkingOpen={thinkingOpen}
           uploadingAttachmentCount={uploadingAttachmentCount}
           onModelSelect={onModelSelect}

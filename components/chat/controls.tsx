@@ -199,6 +199,7 @@ export function ThinkingSpeedPill<
   onSelectSpeed,
   open,
   setOpen,
+  menuPlacement = "up",
 }: {
   thinking: TThinking
   thinkingOptions: readonly TThinking[]
@@ -210,6 +211,7 @@ export function ThinkingSpeedPill<
   onSelectSpeed: (v: TSpeed) => void
   open: boolean
   setOpen: (v: boolean) => void
+  menuPlacement?: "up" | "down"
 }) {
   const ref = useRef<HTMLDivElement>(null)
   useClickOutside(ref, open, () => setOpen(false))
@@ -229,7 +231,13 @@ export function ThinkingSpeedPill<
         <ChevronDown className="size-3 opacity-60" />
       </button>
       {open ? (
-        <div className={cn(popoverPanel, "right-0 bottom-10 min-w-52")}>
+        <div
+          className={cn(
+            popoverPanel,
+            "right-0 min-w-52",
+            menuPlacement === "down" ? "top-10" : "bottom-10"
+          )}
+        >
           <div className="px-2.5 pt-1.5 pb-1 text-left text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">
             Thinking
           </div>

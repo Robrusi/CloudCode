@@ -72,12 +72,12 @@ export function SandboxMenu({
     display = "running"
   } else if (sandboxPending && !sandboxId) {
     display = "starting"
-  } else if (loading) {
-    display = "checking"
   } else if (info) {
     display = info.state
-  } else if (sandboxState === "deleted") {
-    display = "deleted"
+  } else if (sandboxState) {
+    display = sandboxState
+  } else if (loading) {
+    display = "checking"
   } else if (!sandboxId && !sandboxPending) {
     display = "idle"
   } else {

@@ -28,6 +28,7 @@ export function ComposerSubmitRow({
   readyAttachmentCount,
   speed,
   thinking,
+  thinkingMenuPlacement,
   thinkingOpen,
   uploadingAttachmentCount,
   onModelSelect,
@@ -47,6 +48,7 @@ export function ComposerSubmitRow({
   readyAttachmentCount: number
   speed: Speed
   thinking: Thinking
+  thinkingMenuPlacement: "up" | "down"
   thinkingOpen: boolean
   uploadingAttachmentCount: number
   onModelSelect: (value: Model) => void
@@ -97,6 +99,7 @@ export function ComposerSubmitRow({
           onSelectSpeed={onSpeedSelect}
           open={thinkingOpen}
           setOpen={setThinkingOpen}
+          menuPlacement={thinkingMenuPlacement}
         />
 
         {activeRunPending ? (

@@ -213,21 +213,42 @@ export function useSandboxInfo({
   useEffect(() => {
     const controller = new AbortController()
     let fallbackInterval: number | undefined
+    let initialFallbackTimeout: number | undefined
+    let receivedStatus = false
 
     if (!sandboxId) {
       return
     }
 
+    const checkedSandboxId = sandboxId
     const source = new EventSource(
-      `/api/sandbox/status?sandboxId=${encodeURIComponent(sandboxId)}`
+      `/api/sandbox/status?sandboxId=${encodeURIComponent(checkedSandboxId)}`
     )
+
+    function clearInitialFallbackTimeout() {
+      if (!initialFallbackTimeout) return
+      window.clearTimeout(initialFallbackTimeout)
+      initialFallbackTimeout = undefined
+    }
+
+    function startFallbackPolling() {
+      if (controller.signal.aborted || fallbackInterval) return
+      clearInitialFallbackTimeout()
+      source.close()
+      void load(checkedSandboxId, { signal: controller.signal })
+      fallbackInterval = window.setInterval(() => {
+        void load(checkedSandboxId, { signal: controller.signal })
+      }, 2_000)
+    }
 
     source.onmessage = (event) => {
       if (controller.signal.aborted) return
       try {
         const data = JSON.parse(event.data) as Record<string, unknown>
+        receivedStatus = true
+        clearInitialFallbackTimeout()
         if (data.notFound) {
-          applyMissing(sandboxId)
+          applyMissing(checkedSandboxId)
           source.close()
           return
         }
@@ -238,16 +259,16 @@ export function useSandboxInfo({
     }
 
     source.onerror = () => {
-      if (controller.signal.aborted || fallbackInterval) return
-      source.close()
-      void load(sandboxId, { signal: controller.signal })
-      fallbackInterval = window.setInterval(() => {
-        void load(sandboxId, { signal: controller.signal })
-      }, 2_000)
+      startFallbackPolling()
     }
+
+    initialFallbackTimeout = window.setTimeout(() => {
+      if (!receivedStatus) startFallbackPolling()
+    }, 2_500)
 
     return () => {
       controller.abort()
+      clearInitialFallbackTimeout()
       source.close()
       if (fallbackInterval) window.clearInterval(fallbackInterval)
     }
