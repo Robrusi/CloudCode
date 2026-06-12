@@ -228,13 +228,30 @@ export function daytonaCodexPath(
   return daytonaPathForHomes([paths.runtimeHome, paths.home])
 }
 
+/**
+ * mise walks ancestor directories of the cwd (and $HOME) looking for config
+ * files, so a snapshot-baked config such as ~/.config/mise/config.toml gets
+ * loaded alongside the repo's. Untrusted configs make mise abort, which kills
+ * the Codex launcher. Trust both sandbox homes in addition to the repo so no
+ * config discovered this way ever hits the interactive `mise trust` prompt.
+ */
+export function miseTrustedConfigPaths(
+  paths: Pick<DaytonaSandboxPaths, "home" | "repoPath" | "runtimeHome">
+) {
+  return uniquePathEntries([
+    paths.repoPath,
+    paths.home.replace(/\/+$/, ""),
+    paths.runtimeHome.replace(/\/+$/, ""),
+  ]).join(":")
+}
+
 export function repoCommandEnv(
   paths: Pick<DaytonaSandboxPaths, "home" | "repoPath" | "runtimeHome">,
   extraEnv: Record<string, string> = {}
 ) {
   return {
     HOME: paths.runtimeHome,
-    MISE_TRUSTED_CONFIG_PATHS: paths.repoPath,
+    MISE_TRUSTED_CONFIG_PATHS: miseTrustedConfigPaths(paths),
     PATH: daytonaCodexPath(paths),
     ...extraEnv,
   }

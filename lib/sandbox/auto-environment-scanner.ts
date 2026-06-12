@@ -10,6 +10,7 @@ import { codexShellEnv } from "@/lib/daytona/codex-runtime"
 import {
   daytonaTerminalPath,
   installDaytonaTarWrapper,
+  miseTrustedConfigPaths,
   runDaytonaCommand,
   shellQuote,
   writeDaytonaTextFile,
@@ -77,7 +78,7 @@ export async function prepareBuilderCodex(
     cwd: paths.home,
     env: {
       HOME: paths.home,
-      MISE_TRUSTED_CONFIG_PATHS: paths.repoPath,
+      MISE_TRUSTED_CONFIG_PATHS: miseTrustedConfigPaths(paths),
       PATH: daytonaTerminalPath(paths.home),
       TAR_OPTIONS: "--no-same-owner --no-same-permissions",
     },

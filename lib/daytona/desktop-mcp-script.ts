@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 
 const repoPath = process.env.CLOUDCODE_REPO_PATH || process.cwd();
+const miseTrustedPaths = process.env.MISE_TRUSTED_CONFIG_PATHS || repoPath;
 const stateDir = process.env.CLOUDCODE_DESKTOP_STATE_DIR || join(homedir(), ".cache", "cloudcode-desktop");
 const cloudcodeBrowserCommand = process.env.CLOUDCODE_BROWSER_COMMAND || ${JSON.stringify(DESKTOP_BROWSER_COMMAND)};
 const terminalHome = process.env.CLOUDCODE_TERMINAL_HOME || homedir();
@@ -206,7 +207,7 @@ function desktopTerminalEnv(display) {
     CODEX_HOME: codexHome,
     DISPLAY: display,
     HOME: terminalHome,
-    MISE_TRUSTED_CONFIG_PATHS: repoPath,
+    MISE_TRUSTED_CONFIG_PATHS: miseTrustedPaths,
     PATH: terminalPath,
     TAR_OPTIONS: process.env.TAR_OPTIONS || "--no-same-owner --no-same-permissions",
     TERM: "xterm-256color",
@@ -368,7 +369,7 @@ async function openTerminal(args) {
       "#!/usr/bin/env bash",
       "cd " + shellQuote(cwd) + " || exit $?",
       "export CODEX_HOME=" + shellQuote(env.CODEX_HOME || ""),
-      "export MISE_TRUSTED_CONFIG_PATHS=" + shellQuote(repoPath),
+      "export MISE_TRUSTED_CONFIG_PATHS=" + shellQuote(miseTrustedPaths),
       "export PATH=" + shellQuote(env.PATH || ""),
       "export TAR_OPTIONS=" + shellQuote(env.TAR_OPTIONS || "--no-same-owner --no-same-permissions"),
       "printf '%s\\n' " + shellQuote("$ " + command),

@@ -10,6 +10,7 @@ import {
 import {
   createDaytonaSandbox,
   daytonaTerminalPath,
+  miseTrustedConfigPaths,
   defaultDaytonaSnapshot,
   deleteDaytonaSandboxQuietly,
   readDaytonaTextFile,
@@ -259,7 +260,7 @@ async function buildAutoEnvironmentSandbox({
       CI: "1",
       CLOUDCODE_REPO: paths.repoPath,
       HOME: paths.home,
-      MISE_TRUSTED_CONFIG_PATHS: paths.repoPath,
+      MISE_TRUSTED_CONFIG_PATHS: miseTrustedConfigPaths(paths),
       MISE_YES: "1",
       PATH: daytonaTerminalPath(paths.home),
       TAR_OPTIONS: "--no-same-owner --no-same-permissions",

@@ -10,6 +10,7 @@ import type { CodexRunLog as RunCodexLog } from "@/lib/codex/run-log"
 import { cloneGitRepositoryInSandbox } from "@/lib/daytona/git"
 import {
   daytonaTerminalPath,
+  miseTrustedConfigPaths,
   repoCommandEnv,
   runDaytonaCommand,
   shellQuote,
@@ -61,6 +62,35 @@ async function createBranch(
   }
 }
 
+/**
+ * `-B` instead of `-b`: continuation runs reuse the thread's branch name, and a
+ * recovered sandbox or preset snapshot may still hold that local branch from a
+ * previous run. The repo is already reset to the refreshed base and the prior
+ * work is replayed via previousDiff, so resetting the leftover branch to HEAD
+ * is the intended state — failing on "already exists" would brick the thread.
+ */
+async function checkoutBranchAtHead(
+  sandbox: Sandbox,
+  input: DaytonaCodexRepoInput,
+  paths: DaytonaSandboxPaths,
+  branchName: string
+) {
+  await emitRepoLog(input, {
+    kind: "command",
+    message: `git checkout -B ${branchName}`,
+  })
+  const result = await runDaytonaCommand(
+    sandbox,
+    `git -C ${shellQuote(paths.repoPath)} checkout -B ${shellQuote(branchName)}`,
+    { signal: input.signal, timeoutMs: 10_000 }
+  )
+  if (result.exitCode !== 0) {
+    throw new Error(
+      compactLine(result.stderr || result.stdout) || "Unable to create branch."
+    )
+  }
+}
+
 async function readSandboxHeadBranch(
   sandbox: Sandbox,
   input: DaytonaCodexRepoInput,
@@ -92,7 +122,7 @@ async function resolveBaseModeBranch(
   if (branch) return branch
 
   const fallback = baseBranch?.trim() || defaultBranchName()
-  await createBranch(sandbox, input, paths, fallback)
+  await checkoutBranchAtHead(sandbox, input, paths, fallback)
   return fallback
 }
 
@@ -140,7 +170,7 @@ function trustMiseCommand(paths: DaytonaSandboxPaths) {
     "set -e",
     `marker_path=${shellQuote(markerPath)}`,
     `mkdir -p ${shellQuote(paths.codexHome)}`,
-    `export MISE_TRUSTED_CONFIG_PATHS=${shellQuote(paths.repoPath)}`,
+    `export MISE_TRUSTED_CONFIG_PATHS=${shellQuote(miseTrustedConfigPaths(paths))}`,
     `cd ${shellQuote(paths.repoPath)}`,
     "hash_file() {",
     "  if command -v sha256sum >/dev/null 2>&1; then",
@@ -202,7 +232,7 @@ export async function trustRepoMiseConfig(
     cwd: paths.home,
     env: {
       HOME: paths.home,
-      MISE_TRUSTED_CONFIG_PATHS: paths.repoPath,
+      MISE_TRUSTED_CONFIG_PATHS: miseTrustedConfigPaths(paths),
       MISE_YES: "1",
       PATH: daytonaTerminalPath(paths.home),
     },
@@ -326,7 +356,7 @@ export async function cloneRepo({
     return resolveBaseModeBranch(sandbox, input, paths, baseBranch)
   }
   if (requestedBranchName) {
-    await createBranch(sandbox, input, paths, requestedBranchName)
+    await checkoutBranchAtHead(sandbox, input, paths, requestedBranchName)
     return requestedBranchName
   }
   return createDefaultBranch(sandbox, input, paths, branchName)
@@ -400,7 +430,7 @@ export async function prepareExistingRepoForFreshRun({
     return await resolveBaseModeBranch(sandbox, input, paths, baseBranch)
   }
   if (requestedBranchName) {
-    await createBranch(sandbox, input, paths, requestedBranchName)
+    await checkoutBranchAtHead(sandbox, input, paths, requestedBranchName)
     return requestedBranchName
   }
 

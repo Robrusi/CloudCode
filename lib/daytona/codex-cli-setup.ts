@@ -9,6 +9,7 @@ import { compactLine } from "@/lib/shared/compact-line"
 import type { CodexRunLog as RunCodexLog } from "@/lib/codex/run-log"
 import {
   daytonaTerminalPath,
+  miseTrustedConfigPaths,
   runDaytonaCommand,
   shellQuote,
   type DaytonaSandboxPaths,
@@ -101,7 +102,7 @@ export async function updateCodexCli(
     cwd: paths.home,
     env: {
       HOME: paths.home,
-      MISE_TRUSTED_CONFIG_PATHS: paths.repoPath,
+      MISE_TRUSTED_CONFIG_PATHS: miseTrustedConfigPaths(paths),
       PATH: daytonaTerminalPath(paths.home),
     },
     onStderr: (data) => {
