@@ -25,7 +25,7 @@ export {
 
 const DAYTONA_DESKTOP_PORT = 6080
 const DESKTOP_PREVIEW_TTL_SECONDS = 60 * 60
-const DESKTOP_TOOL_VERSION = "8"
+const DESKTOP_TOOL_VERSION = "9"
 const DESKTOP_BROWSER_URL = "about:blank"
 
 type DaytonaDesktopToolExtras = {
@@ -512,8 +512,10 @@ function desktopAgentInstructions() {
     "Do not open `chromium`, `chromium-browser`, `google-chrome`, `google-chrome-stable`, `firefox`, `x-www-browser`, or `xdg-open` directly. For browser work, use `desktop_open_browser`; if a shell fallback is unavoidable, run `/usr/local/bin/cloudcode-browser` directly.",
     "",
     "For visual work, use this loop: start the desktop, take a screenshot, act, take another screenshot, and repeat until the UI state is verified.",
+    "When the desktop is available, prioritize visual UI testing in the desktop over headless checks: verify UI changes by driving Cloudcode Browser on the desktop and inspecting screenshots, not with headless browsers, headless Playwright or Puppeteer runs, curl HTML dumps, or DOM-only assertions. Fall back to headless tools only when the desktop cannot be started.",
     "After making UI-facing changes, decide whether visual verification is needed. Use the Daytona desktop when the change affects layout, styling, visible components, browser behavior, forms, navigation, or user interactions. Skip desktop verification only when the change is clearly non-visual or cannot affect rendered UI.",
-    "When UI verification is needed, assume the dev server is already running, open the relevant local URL with `desktop_open_browser`, inspect with screenshots, interact with the changed workflow when useful, and verify the final state before reporting back.",
+    "When UI verification is needed, assume the dev server is already running, open the relevant local URL with `desktop_open_browser`, and exercise the changed workflow end-to-end the way a user would: click, type, and navigate through it, then confirm with screenshots that the expected outcome actually occurred.",
+    "Confirming the app starts, the page loads, or no errors appear is not verification. Verify the specific behavior the change was meant to produce — the new element is visible, the interaction has the intended effect, the fixed bug no longer reproduces — and treat the change as unverified if the screenshots do not show it.",
     "If desktop verification requires starting a dev server, watcher, or other long-running process, run it with `desktop_open_terminal` so it stays visible in the graphical desktop. Use ordinary shell commands only for finite setup and checks.",
     "",
     "A shell fallback is also available as `cloudcode-computer`, including `cloudcode-computer terminal '<command>'`, but prefer the MCP tools because screenshots are returned as inspectable images.",
@@ -524,8 +526,10 @@ export function daytonaDesktopAgentContext() {
   return [
     "Cloudcode may provide a Daytona desktop for GUI/browser work.",
     "When a task needs visual interaction, use the `cloudcode_desktop` MCP tools: start with `desktop_start`, open Cloudcode Browser with `desktop_open_browser` when needed, inspect with `desktop_screenshot`, act with click/type/key/scroll tools, then take another screenshot to verify the state.",
+    "When the desktop is available, prioritize visual UI testing in the desktop over headless checks: drive Cloudcode Browser and inspect screenshots instead of headless browsers, headless Playwright or Puppeteer runs, curl HTML dumps, or DOM-only assertions. Fall back to headless tools only when the desktop cannot be started.",
     "After UI-facing code changes, decide whether browser verification is needed. Use the Daytona desktop for layout, styling, visible component, browser behavior, form, navigation, and interaction changes; skip it only when the edit is clearly non-visual or cannot affect rendered UI.",
-    "When UI verification is needed, assume the dev server is already running, open the relevant local URL with `desktop_open_browser`, interact with the changed workflow when useful, and verify with screenshots before reporting back.",
+    "When UI verification is needed, assume the dev server is already running, open the relevant local URL with `desktop_open_browser`, and exercise the changed workflow end-to-end the way a user would; confirm with screenshots that the expected outcome actually occurred before reporting back.",
+    "Confirming the app starts, the page loads, or no errors appear is not verification. Verify the specific behavior the change was meant to produce — the new element is visible, the interaction has the intended effect, the fixed bug no longer reproduces — and treat the change as unverified if the screenshots do not show it.",
     "If desktop verification requires starting a dev server, watcher, or another long-running process, use `desktop_open_terminal` so it runs in the visible desktop terminal. Keep ordinary shell commands for finite setup and checks.",
     "Do not launch `chromium`, `chromium-browser`, `google-chrome`, `google-chrome-stable`, `firefox`, `x-www-browser`, or `xdg-open` directly; `desktop_open_browser` uses `/usr/local/bin/cloudcode-browser`.",
     "Daytona Computer Use recording starts automatically before desktop actions and Cloudcode stops it after the run; use `desktop_record_stop` only when an intermediate video artifact is needed before the run ends.",

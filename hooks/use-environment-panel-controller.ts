@@ -79,6 +79,7 @@ export function useEnvironmentPanelController(sandboxId: string | null) {
     if (!sandboxId) return
 
     const controller = new AbortController()
+    const hadCache = envCache.has(sandboxId)
     dirtyRef.current = false
 
     void fetchEntries(sandboxId, controller.signal)
@@ -95,12 +96,12 @@ export function useEnvironmentPanelController(sandboxId: string | null) {
         dispatch({
           type: "load-error",
           error: err instanceof Error ? err.message : "Failed to load",
-          status: initialEntries ? "idle" : "error",
+          status: hadCache ? "idle" : "error",
         })
       })
 
     return () => controller.abort()
-  }, [initialEntries, sandboxId])
+  }, [sandboxId])
 
   useEffect(() => clearSavedTimer, [clearSavedTimer])
 

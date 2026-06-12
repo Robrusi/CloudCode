@@ -3,3 +3,33 @@ packages:
 
 minimumReleaseAge: 10080
 trustPolicy: no-downgrade
+# semver@6.3.1 is a 2023 ReDoS-fix backport published without provenance after
+# semver 7.x gained it — a known-benign trust "downgrade" by publish date.
+trustPolicyExclude:
+  - semver
+
+# Security overrides for vulnerable transitive dependencies (pnpm audit).
+# Scoped by major version where multiple majors coexist in the tree.
+overrides:
+  shell-quote: ^1.8.4 # GHSA-w7jw-789q-3m8p (critical) via @daytona/sdk
+  # node-tar path traversal advisories via trigger.dev>giget. giget@1 pins
+  # tar@6 (unpatched major); it only uses `extract`, which tar@7 keeps.
+  tar: ^7.5.11
+  systeminformation: ^5.31.6 # command injection advisories via @opentelemetry/host-metrics
+  "@grpc/grpc-js": ^1.14.4 # GHSA via @daytona/sdk otel exporters
+  "@opentelemetry/sdk-node": ^0.217.0 # GHSA-q7rr-3cgh-j5r3 (prometheus exporter crash)
+  "@opentelemetry/exporter-prometheus": ^0.217.0 # GHSA-q7rr-3cgh-j5r3
+  hono: ^4.12.21 # JWT validation advisories via @modelcontextprotocol/sdk
+  "ws@8": ^8.20.1 # via socket.io>engine.io
+  "cookie@0": ^0.7.2 # GHSA via engine.io
+  fast-uri: ^3.1.2 # via atmn>conf>ajv
+  "qs@6": ^6.15.2 # via @modelcontextprotocol/sdk>express
+  ip-address: ^10.1.1 # via @modelcontextprotocol/sdk>express-rate-limit
+  "brace-expansion@5": ^5.0.6 # ReDoS via eslint tooling
+  "js-cookie@3": ^3.0.7 # via @clerk/shared
+  "postcss@8": ^8.5.10 # parsing advisory via next
+  "protobufjs@7": ^7.5.8 # via react-doctor>@sentry/node
+  "protobufjs@8": ^8.0.2 # DoS advisories via react-doctor>@sentry/node (otlp-transformer)
+  # 3.10.1 dropped provenance attestation (trustPolicy no-downgrade rejects it);
+  # 4.4.x restores SLSA provenance. Lint-only tooling via eslint-config-next.
+  eslint-import-resolver-typescript: ^4.4.3

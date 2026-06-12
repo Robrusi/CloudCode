@@ -130,6 +130,10 @@ export function environmentPanelReducer(
   switch (action.type) {
     case "apply-entries": {
       const next = cloneEntries(action.entries)
+      // Keep existing row ids when the data matches what is displayed, so a
+      // background refresh or save does not remount rows and drop focus or
+      // reveal state.
+      const rowsUnchanged = entriesEqual(state.rows, next)
       return {
         ...state,
         adding: false,
@@ -139,8 +143,8 @@ export function environmentPanelReducer(
         original: next,
         pasteText: "",
         pasting: false,
-        revealed: new Set(),
-        rows: rowsFromEntries(next),
+        revealed: rowsUnchanged ? state.revealed : new Set(),
+        rows: rowsUnchanged ? state.rows : rowsFromEntries(next),
         status: action.status ?? state.status,
       }
     }
