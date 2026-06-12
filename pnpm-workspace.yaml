@@ -7,6 +7,26 @@ trustPolicy: no-downgrade
 # semver 7.x gained it — a known-benign trust "downgrade" by publish date.
 trustPolicyExclude:
   - semver
+  # c12@3, pulled by trigger.dev tooling, requires chokidar ^4.0.3; chokidar
+  # 5 has provenance but is outside the declared compatible range.
+  - chokidar
+  # react-doctor@0.4.0 pins effect v4 beta tooling; current react-doctor
+  # releases are still inside the 7-day minimumReleaseAge window.
+  - effect
+  - "@effect/platform-node-shared"
+
+# Postinstall scripts stay blocked (each verified unnecessary): esbuild,
+# @depot/cli, unrs-resolver, and msgpackr-extract all ship their native
+# binaries via platform-specific optional deps (the scripts are fallback
+# downloaders/compilers); @clerk/shared's script only prints a telemetry
+# notice; protobufjs's script only generates optional CLI artifacts.
+ignoredBuiltDependencies:
+  - esbuild
+  - protobufjs
+  - "@depot/cli"
+  - "@clerk/shared"
+  - unrs-resolver
+  - msgpackr-extract
 
 # Security overrides for vulnerable transitive dependencies (pnpm audit).
 # Scoped by major version where multiple majors coexist in the tree.
@@ -28,8 +48,10 @@ overrides:
   "brace-expansion@5": ^5.0.6 # ReDoS via eslint tooling
   "js-cookie@3": ^3.0.7 # via @clerk/shared
   "postcss@8": ^8.5.10 # parsing advisory via next
+  reselect: ^5.2.0 # no-downgrade trust policy blocks older 5.1.1 via @base-ui/utils
   "protobufjs@7": ^7.5.8 # via react-doctor>@sentry/node
   "protobufjs@8": ^8.0.2 # DoS advisories via react-doctor>@sentry/node (otlp-transformer)
+  "trigger.dev>esbuild": ^0.25.0 # GHSA-67mh-4wv8-2f99 via trigger.dev dev server tooling
   # 3.10.1 dropped provenance attestation (trustPolicy no-downgrade rejects it);
   # 4.4.x restores SLSA provenance. Lint-only tooling via eslint-config-next.
   eslint-import-resolver-typescript: ^4.4.3
