@@ -1,4 +1,4 @@
-import type { Viewport } from "next"
+import type { Metadata, Viewport } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import { GeistPixelSquare } from "geist/font/pixel"
 import { ClerkProvider } from "@clerk/nextjs"
@@ -7,6 +7,24 @@ import "./globals.css"
 import { ConvexClientProvider } from "@/components/providers/convex-client-provider"
 import { ThemeProvider } from "@/components/providers/theme-provider"
 import { cn } from "@/lib/shared/utils"
+
+export const metadata: Metadata = {
+  title: {
+    default: "Cloudcode",
+    template: "%s | Cloudcode",
+  },
+  description: "Chat with Codex in a Daytona sandbox.",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "Cloudcode",
+    statusBarStyle: "black-translucent",
+  },
+  icons: {
+    icon: [{ url: "/icons/icon-192.png", type: "image/png" }],
+    apple: [{ url: "/icons/apple-touch-icon.png" }],
+  },
+}
 
 export const viewport: Viewport = {
   width: "device-width",
