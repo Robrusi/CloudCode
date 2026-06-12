@@ -91,6 +91,29 @@ const DAYTONA_TAR_WRAPPER = [
   "",
 ].join("\n")
 
+export function replayMissingDaytonaCommandOutput({
+  finalOutput,
+  onMissingOutput,
+  streamedOutput,
+}: {
+  finalOutput: string
+  onMissingOutput?: (chunk: string) => void
+  streamedOutput: string
+}) {
+  if (!finalOutput || finalOutput === streamedOutput) return streamedOutput
+
+  if (finalOutput.startsWith(streamedOutput)) {
+    const missingOutput = finalOutput.slice(streamedOutput.length)
+    if (missingOutput) onMissingOutput?.(missingOutput)
+  }
+
+  return finalOutput
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number) {
+  return (await Promise.race([promise, wait(timeoutMs)])) as T | void
+}
+
 export async function installDaytonaTarWrapper(
   sandbox: Sandbox,
   paths: { home: string }
@@ -261,12 +284,22 @@ export async function runDaytonaCommand(
       )
 
       await Promise.race([logsPromise, wait(1_000)])
-      if (!options.onStdout && !options.onStderr) {
-        const logs = await sandbox.process
-          .getSessionCommandLogs(sessionId, commandId)
-          .catch(() => undefined)
-        stdout = logs?.stdout ?? logs?.output ?? ""
-        stderr = logs?.stderr ?? ""
+      const logs = await withTimeout(
+        sandbox.process.getSessionCommandLogs(sessionId, commandId),
+        5_000
+      ).catch(() => undefined)
+
+      if (logs) {
+        stdout = replayMissingDaytonaCommandOutput({
+          finalOutput: logs.stdout ?? logs.output ?? "",
+          onMissingOutput: options.onStdout,
+          streamedOutput: stdout,
+        })
+        stderr = replayMissingDaytonaCommandOutput({
+          finalOutput: logs.stderr ?? "",
+          onMissingOutput: options.onStderr,
+          streamedOutput: stderr,
+        })
       }
 
       return {

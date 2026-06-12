@@ -29,6 +29,7 @@ import {
 } from "@/lib/codex/app-server-daemon"
 import { appServerThreadParams } from "@/lib/codex/app-server-run-params"
 import { codexAppServerStderrLogForLine } from "@/lib/codex/app-server-stderr"
+import { replayMissingDaytonaCommandOutput } from "@/lib/daytona/sandbox-command"
 import type { RunCodexInSandboxResult } from "@/lib/daytona/codex-agent-types"
 
 const testPaths = {
@@ -194,6 +195,19 @@ assert.deepEqual(
     service_tier: "fast",
   }
 )
+const replayedDaytonaChunks: string[] = []
+assert.equal(
+  replayMissingDaytonaCommandOutput({
+    finalOutput:
+      '{"type":"thread","threadId":"thread-from-daemon"}\n{"type":"result","threadId":"thread-from-daemon","status":"completed","updatedAuthJson":"{}"}\n',
+    onMissingOutput: (chunk) => replayedDaytonaChunks.push(chunk),
+    streamedOutput: '{"type":"thread","threadId":"thread-from-daemon"}\n',
+  }),
+  '{"type":"thread","threadId":"thread-from-daemon"}\n{"type":"result","threadId":"thread-from-daemon","status":"completed","updatedAuthJson":"{}"}\n'
+)
+assert.deepEqual(replayedDaytonaChunks, [
+  '{"type":"result","threadId":"thread-from-daemon","status":"completed","updatedAuthJson":"{}"}\n',
+])
 
 function base64UrlJson(value: unknown) {
   return Buffer.from(JSON.stringify(value))
