@@ -104,6 +104,7 @@ function computerUseStatusLooksActive(status: string) {
 const LOCAL_DESKTOP_STATUS_MARKER = "__cloudcode_desktop_status__"
 
 type LocalDesktopStatus = {
+  error?: string
   missing: string[]
   processes: Record<string, string>
   running: boolean
@@ -172,6 +173,15 @@ async function readLocalDesktopStatus(sandbox: Sandbox) {
   )
 
   return parseLocalDesktopStatus(`${result.stdout}\n${result.stderr}`)
+}
+
+function localDesktopStatusFromError(error: unknown): LocalDesktopStatus {
+  return {
+    error: errorMessage(error),
+    missing: ["xvfb", "xfce4", "x11vnc", "novnc"],
+    processes: {},
+    running: false,
+  }
 }
 
 function startDesktopServicesCommand() {
@@ -351,12 +361,16 @@ export async function readDaytonaDesktopStatus(
     }
   }
 
-  const localStatus = await readLocalDesktopStatus(sandbox)
+  const localStatus = await readLocalDesktopStatus(sandbox).catch(
+    localDesktopStatusFromError
+  )
   return {
     previewUrl: localStatus.running
       ? await safeDesktopPreviewUrl(sandbox)
       : null,
-    status: localStatus.running ? "running (fallback)" : status,
+    status: localStatus.running
+      ? "running (fallback)"
+      : (localStatus.error ?? status),
   }
 }
 
