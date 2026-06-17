@@ -32,34 +32,16 @@ function returnUrlForRequest(url: URL) {
   ).toString()
 }
 
-function appOriginForRequest(url: URL) {
-  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL?.trim()
-  if (!configuredUrl) return url.origin
-
-  try {
-    return new URL(configuredUrl).origin
-  } catch {
-    return url.origin
-  }
-}
-
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url)
-    const appOrigin = appOriginForRequest(url)
-    if (url.origin !== appOrigin) {
-      return NextResponse.redirect(
-        new URL(`${url.pathname}${url.search}`, appOrigin)
-      )
-    }
-
     await getConvexAuthToken()
     const addAccount =
       url.searchParams.get("add") === "1" ||
       url.searchParams.get("mode") === "add"
     const profile = url.searchParams.get("profile") ?? undefined
     const { cookieValue, loginUrl } = createCodexLoginRequest({
-      appOrigin,
+      appOrigin: url.origin,
       forceLogin: addAccount,
       profile,
       returnUrl: returnUrlForRequest(url),
