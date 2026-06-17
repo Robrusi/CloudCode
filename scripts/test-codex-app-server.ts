@@ -177,6 +177,18 @@ const codexRunsSource = await readFile(
 assert.ok(codexRunsSource.includes("by_user_profile_updated"))
 assert.ok(codexRunsSource.includes("isActiveCodexRunStatus"))
 assert.ok(codexRunsSource.includes("CODEX_AUTH_PROFILE_BUSY_MESSAGE"))
+assert.ok(codexRunsSource.includes('status: "profile_busy"'))
+assert.ok(codexRunsSource.includes('status: "thread_busy"'))
+assert.ok(codexRunsSource.includes('status: "auth_reconnect_required"'))
+assert.ok(codexRunsSource.includes('status: "missing_auth"'))
+assert.ok(codexRunsSource.includes("ok: true as const"))
+const codexRunRouteSource = await readFile(
+  new URL("../app/api/codex-run/route.ts", import.meta.url),
+  "utf8"
+)
+assert.ok(codexRunRouteSource.includes("CODEX_RUN_CREATE_ERROR_STATUS"))
+assert.ok(codexRunRouteSource.includes("if (!created.ok)"))
+assert.ok(codexRunRouteSource.includes("created.status"))
 const codexAuthSource = await readFile(
   new URL("../convex/codexAuth.ts", import.meta.url),
   "utf8"

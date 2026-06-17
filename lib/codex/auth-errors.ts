@@ -4,6 +4,10 @@ export const CODEX_AUTH_RECONNECT_MESSAGE =
 export const CODEX_AUTH_PROFILE_BUSY_MESSAGE =
   "Another Codex run is already using this ChatGPT account. Wait for it to finish or stop it before starting another run."
 
+export function codexAuthMissingMessage(profile: string) {
+  return `No Codex ChatGPT OAuth credentials are stored for profile "${profile}".`
+}
+
 export function codexAuthReconnectMessage(profile?: string) {
   return profile
     ? `${CODEX_AUTH_RECONNECT_MESSAGE} Profile: ${profile}.`

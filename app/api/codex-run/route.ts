@@ -5,10 +5,6 @@ import { NextResponse } from "next/server"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { parseBranchMode } from "@/lib/codex/branch-names"
-import {
-  CODEX_AUTH_PROFILE_BUSY_MESSAGE,
-  CODEX_AUTH_RECONNECT_MESSAGE,
-} from "@/lib/codex/auth-errors"
 import { currentUserConvexHttpClient } from "@/lib/convex/http"
 import { syncDiscoveredSandbox } from "@/lib/codex/run-sandbox-sync"
 import { parseChatImageAttachments } from "@/lib/chat/attachments"
@@ -43,13 +39,17 @@ function requiredString(value: unknown, label: string) {
 const QUEUE_WORKER_SECRET_ERROR =
   "Set TRIGGER_WORKER_SECRET before queueing Codex runs."
 
-function queueErrorStatus(error: unknown) {
-  const message = error instanceof Error ? error.message : ""
+const CODEX_RUN_CREATE_ERROR_STATUS = {
+  auth_reconnect_required: 401,
+  missing_auth: 401,
+  profile_busy: 409,
+  thread_busy: 409,
+} as const
 
-  if (message.startsWith(CODEX_AUTH_RECONNECT_MESSAGE)) return 401
-  if (message === CODEX_AUTH_PROFILE_BUSY_MESSAGE) return 409
-
-  return 500
+function createRunErrorStatus(
+  status: keyof typeof CODEX_RUN_CREATE_ERROR_STATUS
+) {
+  return CODEX_RUN_CREATE_ERROR_STATUS[status]
 }
 
 export async function POST(request: Request) {
@@ -134,6 +134,13 @@ export async function POST(request: Request) {
       threadId,
       workerSecret: getWorkerSecret(QUEUE_WORKER_SECRET_ERROR),
     })
+    if (!created.ok) {
+      return jsonError(
+        created.message,
+        createRunErrorStatus(created.status),
+        "profile" in created ? { profile: created.profile } : undefined
+      )
+    }
     const createdRunId = created.runId
     runId = createdRunId
 
@@ -168,10 +175,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ runId: createdRunId, triggerRunId: handle.id })
   } catch (error) {
-    const status = queueErrorStatus(error)
-    if (status >= 500) {
-      console.error("/api/codex-run failed", error)
-    }
+    console.error("/api/codex-run failed", error)
     if (runId) {
       const failedRunId = runId
       await currentUserConvexHttpClient()
@@ -187,7 +191,7 @@ export async function POST(request: Request) {
 
     return jsonError(
       error instanceof Error ? error.message : "Unable to queue run.",
-      status
+      500
     )
   }
 }

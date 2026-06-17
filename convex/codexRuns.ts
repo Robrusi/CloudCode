@@ -11,9 +11,13 @@ import {
   sandboxIdFromLog,
   TERMINAL_RUN_STATUSES,
 } from "./lib/codexRunLifecycle"
-import { requireCodexAuth } from "./lib/codexRunAuth"
+import { findCodexAuth } from "./lib/codexRunAuth"
 import { workerInputForRun } from "./lib/codexRunWorkerInput"
-import { CODEX_AUTH_PROFILE_BUSY_MESSAGE } from "@/lib/codex/auth-errors"
+import {
+  CODEX_AUTH_PROFILE_BUSY_MESSAGE,
+  codexAuthMissingMessage,
+  codexAuthReconnectMessage,
+} from "@/lib/codex/auth-errors"
 import {
   branchMode,
   imageAttachment,
@@ -125,7 +129,13 @@ export const create = mutation({
     const thread = await requireOwnedThread(ctx, args.threadId, userId)
     if (thread.hasPendingMessage) {
       const activeRun = await activeRunForThread(ctx, args.threadId)
-      if (activeRun) throw new Error("A Codex run is already active.")
+      if (activeRun) {
+        return {
+          ok: false as const,
+          message: "A Codex run is already active.",
+          status: "thread_busy" as const,
+        }
+      }
     }
     await requireOwnedAssistantMessage(
       ctx,
@@ -138,9 +148,30 @@ export const create = mutation({
       args.sandboxPresetId ?? thread.sandboxPresetId,
       userId
     )
-    const auth = await requireCodexAuth(ctx, userId, args.profile, {
-      fallbackToActive: true,
-    })
+    const { auth, profile: authProfile } = await findCodexAuth(
+      ctx,
+      userId,
+      args.profile,
+      {
+        fallbackToActive: true,
+      }
+    )
+    if (!auth) {
+      return {
+        ok: false as const,
+        message: codexAuthMissingMessage(authProfile),
+        profile: authProfile,
+        status: "missing_auth" as const,
+      }
+    }
+    if (auth.invalidatedAt) {
+      return {
+        ok: false as const,
+        message: codexAuthReconnectMessage(authProfile),
+        profile: authProfile,
+        status: "auth_reconnect_required" as const,
+      }
+    }
     const activeProfileRuns = await ctx.db
       .query("codexRuns")
       .withIndex("by_user_profile_updated", (q) =>
@@ -149,7 +180,12 @@ export const create = mutation({
       .order("desc")
       .take(20)
     if (activeProfileRuns.some((run) => isActiveCodexRunStatus(run.status))) {
-      throw new Error(CODEX_AUTH_PROFILE_BUSY_MESSAGE)
+      return {
+        ok: false as const,
+        message: CODEX_AUTH_PROFILE_BUSY_MESSAGE,
+        profile: auth.profile,
+        status: "profile_busy" as const,
+      }
     }
     const now = Date.now()
     const queuedLog = {
@@ -200,7 +236,7 @@ export const create = mutation({
       updatedAt: now,
     })
 
-    return { runId, userId }
+    return { ok: true as const, runId, userId }
   },
 })
 

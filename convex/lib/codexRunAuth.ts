@@ -1,13 +1,16 @@
-import type { Id } from "../_generated/dataModel"
+import type { Doc, Id } from "../_generated/dataModel"
 import type { MutationCtx, QueryCtx } from "../_generated/server"
-import { codexAuthReconnectMessage } from "@/lib/codex/auth-errors"
+import {
+  codexAuthMissingMessage,
+  codexAuthReconnectMessage,
+} from "@/lib/codex/auth-errors"
 
-export async function requireCodexAuth(
+export async function findCodexAuth(
   ctx: MutationCtx | QueryCtx,
   userId: Id<"users">,
   profile: string | undefined,
   options?: { fallbackToActive?: boolean }
-) {
+): Promise<{ auth: Doc<"codexAuth"> | null; profile: string }> {
   const user = options?.fallbackToActive ? await ctx.db.get(userId) : null
   const authProfile =
     profile ??
@@ -20,10 +23,24 @@ export async function requireCodexAuth(
     )
     .unique()
 
+  return { auth, profile: authProfile }
+}
+
+export async function requireCodexAuth(
+  ctx: MutationCtx | QueryCtx,
+  userId: Id<"users">,
+  profile: string | undefined,
+  options?: { fallbackToActive?: boolean }
+) {
+  const { auth, profile: authProfile } = await findCodexAuth(
+    ctx,
+    userId,
+    profile,
+    options
+  )
+
   if (!auth) {
-    throw new Error(
-      `No Codex ChatGPT OAuth credentials are stored for profile "${authProfile}".`
-    )
+    throw new Error(codexAuthMissingMessage(authProfile))
   }
   if (auth.invalidatedAt) {
     throw new Error(codexAuthReconnectMessage(authProfile))
