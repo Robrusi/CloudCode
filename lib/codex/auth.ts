@@ -49,6 +49,7 @@ export type SaveCodexOAuthTokensInput = {
 
 export type SaveCodexAuthJsonForWorkerInput = {
   authJson: string
+  expectedFingerprint?: string
   profile?: string
   userId: Id<"users">
   workerSecret: string
@@ -184,12 +185,29 @@ export async function saveCodexAuthJsonForWorker(
   return await client.mutation(api.codexAuth.saveOAuthTokensForWorker, {
     accessToken: parsed.accessToken,
     accountId: parsed.accountId,
+    expectedFingerprint: input.expectedFingerprint,
     fingerprint: fingerprint(parsed.idToken, parsed.refreshToken, lastRefresh),
     idToken: parsed.idToken,
     lastRefresh,
     openaiApiKey: parsed.openaiApiKey,
     profile,
     refreshToken: parsed.refreshToken,
+    userId: input.userId,
+    workerSecret: input.workerSecret,
+  })
+}
+
+export async function invalidateCodexAuthForWorker(input: {
+  invalidReason: string
+  profile: string
+  userId: Id<"users">
+  workerSecret: string
+}) {
+  const client = new ConvexHttpClient(requireConvexUrl())
+
+  return await client.mutation(api.codexAuth.invalidateOAuthTokensForWorker, {
+    invalidReason: input.invalidReason,
+    profile: input.profile,
     userId: input.userId,
     workerSecret: input.workerSecret,
   })

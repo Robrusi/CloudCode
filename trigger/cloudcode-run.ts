@@ -6,10 +6,15 @@ import { ensureAutoEnvironmentSandbox } from "@/lib/sandbox/auto-environment"
 import { runCodexInSandbox } from "@/lib/daytona/codex-agent"
 import { codexAppServerRunUpdatedAuthJson } from "@/lib/daytona/codex-app-server-run"
 import {
+  CODEX_AUTH_RECONNECT_MESSAGE,
+  isCodexRefreshTokenReusedError,
+} from "@/lib/codex/auth-errors"
+import {
   cancelWorkerRun,
   completeWorkerRun,
   failWorkerRun,
   getWorkerSecret,
+  invalidateWorkerAuthProfile,
   isWorkerRunCanceledError,
   saveWorkerAuthJson,
   startAndLoadWorkerRun,
@@ -102,6 +107,7 @@ export const cloudcodeRun = task({
     let billingPauseSandboxId: string | undefined
     let billingPausePromise: Promise<void> | undefined
     let loadedProfile: string | undefined
+    let runAuthFingerprint: string | undefined
     let runAuthJson: string | undefined
     const sandboxObservations = new Map<string, Promise<void>>()
     const failBilling = (error: unknown) => {
@@ -171,6 +177,7 @@ export const cloudcodeRun = task({
 
       loadedUserId = loaded.userId
       loadedProfile = loaded.profile
+      runAuthFingerprint = loaded.authFingerprint
       usageMeter = createTriggerUsageMeter({
         client,
         failBilling,
@@ -245,7 +252,8 @@ export const cloudcodeRun = task({
         await saveWorkerAuthJson(
           loaded.userId,
           loaded.profile,
-          result.updatedAuthJson
+          result.updatedAuthJson,
+          runAuthFingerprint
         )
       }
 
@@ -275,6 +283,29 @@ export const cloudcodeRun = task({
         return { canceled: true }
       }
 
+      if (
+        loadedUserId &&
+        loadedProfile &&
+        isCodexRefreshTokenReusedError(error)
+      ) {
+        await invalidateWorkerAuthProfile(
+          loadedUserId,
+          loadedProfile,
+          "refresh_token_reused"
+        ).catch((authError) => {
+          console.warn("Unable to invalidate Codex auth profile.", authError)
+        })
+        await failWorkerRun(
+          client,
+          payload.runId,
+          CODEX_AUTH_RECONNECT_MESSAGE,
+          latestSandboxId
+        ).catch((failError) => {
+          console.warn("Unable to mark Codex run failed.", failError)
+        })
+        throw new Error(CODEX_AUTH_RECONNECT_MESSAGE)
+      }
+
       const updatedAuthJson = codexAppServerRunUpdatedAuthJson(error)
       if (
         loadedUserId &&
@@ -285,7 +316,8 @@ export const cloudcodeRun = task({
         await saveWorkerAuthJson(
           loadedUserId,
           loadedProfile,
-          updatedAuthJson
+          updatedAuthJson,
+          runAuthFingerprint
         ).catch((authError) => {
           console.warn("Unable to save Codex auth after failed run.", authError)
         })

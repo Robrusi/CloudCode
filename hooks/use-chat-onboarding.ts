@@ -3,6 +3,7 @@
 import { useCallback, useEffect } from "react"
 
 import type { AuthStatus } from "@/lib/codex/auth"
+import { codexAuthAnyAccountUsable } from "@/lib/codex/auth-types"
 import type { GitHubAuthStatus } from "@/lib/github/auth"
 
 type ViewerOnboardingState =
@@ -23,9 +24,7 @@ export function useChatOnboarding({
   githubStatus: GitHubAuthStatus | null
   viewer: ViewerOnboardingState
 }) {
-  const codexConnected = Boolean(
-    authStatus && (authStatus.exists || authStatus.accounts.length > 0)
-  )
+  const codexConnected = codexAuthAnyAccountUsable(authStatus)
   const githubUserReady = Boolean(githubStatus?.app?.user.connected)
   const githubAppReady = (githubStatus?.app?.installations.length ?? 0) > 0
   const githubConnected = Boolean(githubStatus?.connected)

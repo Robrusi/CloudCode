@@ -14,6 +14,10 @@ export const TERMINAL_RUN_STATUSES = new Set([
 
 const ACTIVE_RUN_STATUSES = new Set(["queued", "running", "canceling"])
 
+export function isActiveCodexRunStatus(status: Doc<"codexRuns">["status"]) {
+  return ACTIVE_RUN_STATUSES.has(status)
+}
+
 export async function activeRunForThread(
   ctx: QueryCtx | MutationCtx,
   threadId: Id<"threads">

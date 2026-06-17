@@ -5,6 +5,7 @@ import { mutation, query, type MutationCtx } from "./_generated/server"
 import { compactMessageMeta, compactRunLogs } from "./lib/codexRunLogs"
 import {
   activeRunForThread,
+  isActiveCodexRunStatus,
   markRunCanceled,
   markRunCanceling,
   sandboxIdFromLog,
@@ -12,6 +13,7 @@ import {
 } from "./lib/codexRunLifecycle"
 import { requireCodexAuth } from "./lib/codexRunAuth"
 import { workerInputForRun } from "./lib/codexRunWorkerInput"
+import { CODEX_AUTH_PROFILE_BUSY_MESSAGE } from "@/lib/codex/auth-errors"
 import {
   branchMode,
   imageAttachment,
@@ -139,6 +141,16 @@ export const create = mutation({
     const auth = await requireCodexAuth(ctx, userId, args.profile, {
       fallbackToActive: true,
     })
+    const activeProfileRuns = await ctx.db
+      .query("codexRuns")
+      .withIndex("by_user_profile_updated", (q) =>
+        q.eq("userId", userId).eq("profile", auth.profile)
+      )
+      .order("desc")
+      .take(20)
+    if (activeProfileRuns.some((run) => isActiveCodexRunStatus(run.status))) {
+      throw new Error(CODEX_AUTH_PROFILE_BUSY_MESSAGE)
+    }
     const now = Date.now()
     const queuedLog = {
       kind: "setup" as const,

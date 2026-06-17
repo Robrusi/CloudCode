@@ -19,6 +19,7 @@ import type { ChatImageAttachment } from "@/lib/chat/attachments"
 import { buildResumeHandoff } from "@/lib/chat/resume-handoff"
 import type { BranchMode, Model, Speed, Thinking } from "@/lib/chat/options"
 import type { AuthStatus } from "@/lib/codex/auth"
+import { codexAuthOverviewUsable } from "@/lib/codex/auth-types"
 import { postJson } from "@/lib/http/client-json"
 import { useChatQueuedMessages } from "@/hooks/use-chat-queued-messages"
 
@@ -210,8 +211,10 @@ export function useChatRunActions({
       setEditingRepo(true)
       return
     }
-    if (!authStatus?.exists) {
-      window.location.href = "/api/codex-auth/login"
+    if (!authStatus || !codexAuthOverviewUsable(authStatus)) {
+      const profile = authStatus?.activeProfile || authStatus?.profile
+      const search = profile ? `?profile=${encodeURIComponent(profile)}` : ""
+      window.location.href = `/api/codex-auth/login${search}`
       return
     }
     if (uploadingAttachmentCount > 0) {

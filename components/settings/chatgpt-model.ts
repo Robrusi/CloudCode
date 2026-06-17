@@ -147,6 +147,8 @@ function isAutoProfile(profile: string) {
 }
 
 export function codexAccountSubtitle(account: CodexAuthAccountStatus) {
+  if (account.invalidatedAt) return "Reconnect required"
+
   const label =
     account.accountEmail && account.accountName
       ? account.accountName

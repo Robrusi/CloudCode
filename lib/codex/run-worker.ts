@@ -6,6 +6,7 @@ import { requireConvexUrl } from "@/lib/convex/env"
 import { getWorkerSecret } from "@/lib/security/worker-secret"
 import {
   buildCodexAuthJson,
+  invalidateCodexAuthForWorker,
   saveCodexAuthJsonForWorker,
 } from "@/lib/codex/auth"
 import { WorkerRunCanceledError } from "@/lib/codex/run-cancel-error"
@@ -92,6 +93,7 @@ export {
 } from "@/lib/codex/run-cancel-error"
 
 export type LoadedWorkerRun = {
+  authFingerprint: string
   authJson: string
   input: Omit<
     RunCodexInSandboxInput,
@@ -173,6 +175,7 @@ export async function startAndLoadWorkerRun(
   const authJson = buildCodexAuthJson(response.auth)
 
   return {
+    authFingerprint: response.auth.fingerprint,
     authJson,
     input: {
       authJson,
@@ -299,10 +302,27 @@ export async function cancelWorkerRun(
 export async function saveWorkerAuthJson(
   userId: Id<"users">,
   profile: string | undefined,
-  authJson: string
+  authJson: string,
+  expectedFingerprint?: string
 ) {
   return await saveCodexAuthJsonForWorker({
     authJson,
+    expectedFingerprint,
+    profile,
+    userId,
+    workerSecret: getWorkerSecret(),
+  })
+}
+
+export async function invalidateWorkerAuthProfile(
+  userId: Id<"users">,
+  profile: string | undefined,
+  invalidReason: string
+) {
+  if (!profile) return null
+
+  return await invalidateCodexAuthForWorker({
+    invalidReason,
     profile,
     userId,
     workerSecret: getWorkerSecret(),

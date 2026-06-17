@@ -77,6 +77,8 @@ export default defineSchema({
     displayName: v.optional(v.string()),
     fingerprint: v.string(),
     idToken: v.string(),
+    invalidReason: v.optional(v.string()),
+    invalidatedAt: v.optional(v.string()),
     lastRefresh: v.string(),
     openaiApiKey: v.optional(v.string()),
     profile: v.string(),
@@ -125,6 +127,7 @@ export default defineSchema({
     .index("by_thread_updated", ["threadId", "updatedAt"])
     .index("by_sandbox", ["sandboxId"])
     .index("by_trigger_run", ["triggerRunId"])
+    .index("by_user_profile_updated", ["userId", "profile", "updatedAt"])
     .index("by_user_updated", ["userId", "updatedAt"]),
 
   billingCustomers: defineTable({

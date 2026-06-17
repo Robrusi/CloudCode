@@ -1,6 +1,6 @@
 "use client"
 
-import { FileUp } from "lucide-react"
+import { FileUp, Plus, RefreshCw } from "lucide-react"
 import { useReducer } from "react"
 
 import { ChatGPTAccountEditRow } from "@/components/settings/chatgpt-account-edit-row"
@@ -11,7 +11,11 @@ import {
   codexAccountTitle,
   initialChatGPTConnectionState,
 } from "@/components/settings/chatgpt-model"
-import { navAction, SettingsConfirmDialog } from "@/components/settings/shared"
+import {
+  navAction,
+  navPrimary,
+  SettingsConfirmDialog,
+} from "@/components/settings/shared"
 import { OpenAIIcon } from "@/components/ui/brand-icons"
 import type {
   CodexAuthAccountStatus,
@@ -51,10 +55,15 @@ export function ChatGPTConnectionRow({
   const activeAccount = accounts.find(
     (account) => account.profile === activeProfile
   )
+  const reconnectProfile = activeAccount?.invalidatedAt
+    ? activeProfile
+    : undefined
   const detail = connected
-    ? activeAccount
-      ? `Using ${codexAccountTitle(activeAccount)}`
-      : "Connected. Codex runs are authorized with ChatGPT."
+    ? activeAccount?.invalidatedAt
+      ? "Reconnect ChatGPT before starting another Codex run."
+      : activeAccount
+        ? `Using ${codexAccountTitle(activeAccount)}`
+        : "Connected. Codex runs are authorized with ChatGPT."
     : "Sign in with ChatGPT to authorize Codex runs."
   const visibleError = switchError || authError
 
@@ -201,16 +210,34 @@ export function ChatGPTConnectionRow({
           <FileUp className="size-3.5" />
           Import auth.json
         </button>
-        {/* Connect / Add account via ChatGPT OAuth. Kept for easy re-adding. */}
-        {/* <form action="/api/codex-auth/login" method="get">
-          {connected ? <input type="hidden" name="add" value="1" /> : null}
-          <button type="submit" className={connected ? navAction : navPrimary}>
-            {connected ? <Plus className="size-3.5" /> : null}
-            {connected ? "Add account" : "Connect"}
+        <form action="/api/codex-auth/login" method="get">
+          {reconnectProfile ? (
+            <input type="hidden" name="profile" value={reconnectProfile} />
+          ) : connected ? (
+            <input type="hidden" name="add" value="1" />
+          ) : null}
+          <button
+            type="submit"
+            className={connected && !reconnectProfile ? navAction : navPrimary}
+          >
+            {reconnectProfile ? (
+              <RefreshCw className="size-3.5" />
+            ) : connected ? (
+              <Plus className="size-3.5" />
+            ) : null}
+            {reconnectProfile
+              ? "Reconnect"
+              : connected
+                ? "Add account"
+                : "Connect"}
           </button>
-        </form> */}
+        </form>
       </div>
-      {visibleError ? (
+      {status?.invalidatedAt ? (
+        <div className="mt-2 text-[11px] leading-4 text-destructive">
+          Reconnect ChatGPT before starting another Codex run.
+        </div>
+      ) : visibleError ? (
         <div className="mt-2 text-[11px] leading-4 text-destructive">
           {visibleError}
         </div>

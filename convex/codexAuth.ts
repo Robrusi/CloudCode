@@ -5,6 +5,7 @@ import type { Doc, Id } from "./_generated/dataModel"
 import type { MutationCtx, QueryCtx } from "./_generated/server"
 import { ensureCurrentUser, getCurrentUser } from "./lib/users"
 import { requireWorkerSecret } from "./lib/workerAuth"
+import { codexAuthReconnectMessage } from "@/lib/codex/auth-errors"
 
 function toStatus(auth: {
   accountEmail?: string
@@ -13,6 +14,8 @@ function toStatus(auth: {
   authMode: "chatgpt"
   displayName?: string
   fingerprint: string
+  invalidReason?: string
+  invalidatedAt?: string
   lastRefresh: string
   profile: string
   updatedAt: string
@@ -25,6 +28,8 @@ function toStatus(auth: {
     ...(auth.displayName ? { displayName: auth.displayName } : {}),
     exists: true as const,
     fingerprint: auth.fingerprint,
+    ...(auth.invalidReason ? { invalidReason: auth.invalidReason } : {}),
+    ...(auth.invalidatedAt ? { invalidatedAt: auth.invalidatedAt } : {}),
     lastRefresh: auth.lastRefresh,
     profile: auth.profile,
     updatedAt: auth.updatedAt,
@@ -57,11 +62,14 @@ function activeProfileForUser(
   auths: Doc<"codexAuth">[]
 ) {
   const active = user.activeCodexProfile?.trim()
+  const usableAuths = auths.filter((auth) => !auth.invalidatedAt)
 
-  if (active && auths.some((auth) => auth.profile === active)) return active
-  if (auths.some((auth) => auth.profile === "default")) return "default"
+  if (active && usableAuths.some((auth) => auth.profile === active)) {
+    return active
+  }
+  if (usableAuths.some((auth) => auth.profile === "default")) return "default"
 
-  return auths[0]?.profile ?? active ?? "default"
+  return usableAuths[0]?.profile ?? auths[0]?.profile ?? active ?? "default"
 }
 
 function overviewForUser(
@@ -207,6 +215,8 @@ export const saveOAuthTokens = mutation({
       authMode: "chatgpt" as const,
       fingerprint: args.fingerprint,
       idToken: args.idToken,
+      invalidReason: undefined,
+      invalidatedAt: undefined,
       lastRefresh: args.lastRefresh,
       openaiApiKey: args.openaiApiKey,
       profile,
@@ -259,6 +269,9 @@ export const setActiveProfile = mutation({
 
     if (!auth) {
       throw new Error("ChatGPT account is not connected.")
+    }
+    if (auth.invalidatedAt) {
+      throw new Error(codexAuthReconnectMessage(args.profile))
     }
 
     await ctx.db.patch(userId, {
@@ -362,6 +375,7 @@ export const saveOAuthTokensForWorker = mutation({
   args: {
     accessToken: v.string(),
     accountId: v.union(v.string(), v.null()),
+    expectedFingerprint: v.optional(v.string()),
     fingerprint: v.string(),
     idToken: v.string(),
     lastRefresh: v.string(),
@@ -380,12 +394,22 @@ export const saveOAuthTokensForWorker = mutation({
       )
       .unique()
 
+    if (
+      args.expectedFingerprint &&
+      existing &&
+      existing.fingerprint !== args.expectedFingerprint
+    ) {
+      return toStatus(existing)
+    }
+
     const auth = {
       accessToken: args.accessToken,
       accountId: args.accountId,
       authMode: "chatgpt" as const,
       fingerprint: args.fingerprint,
       idToken: args.idToken,
+      invalidReason: undefined,
+      invalidatedAt: undefined,
       lastRefresh: args.lastRefresh,
       openaiApiKey: args.openaiApiKey,
       profile: args.profile,
@@ -401,5 +425,59 @@ export const saveOAuthTokensForWorker = mutation({
     }
 
     return toStatus(auth)
+  },
+})
+
+export const invalidateOAuthTokensForWorker = mutation({
+  args: {
+    invalidReason: v.string(),
+    profile: v.string(),
+    userId: v.id("users"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const [user, existing] = await Promise.all([
+      ctx.db.get(args.userId),
+      ctx.db
+        .query("codexAuth")
+        .withIndex("by_user_profile", (q) =>
+          q.eq("userId", args.userId).eq("profile", args.profile)
+        )
+        .unique(),
+    ])
+    if (!existing) return null
+
+    const invalidatedAt = new Date().toISOString()
+    await ctx.db.patch(existing._id, {
+      invalidReason: args.invalidReason,
+      invalidatedAt,
+      updatedAt: invalidatedAt,
+    })
+
+    if (user?.activeCodexProfile === args.profile) {
+      const auths = (await authRecordsForUser(ctx, args.userId)).map((auth) =>
+        auth._id === existing._id
+          ? {
+              ...auth,
+              invalidReason: args.invalidReason,
+              invalidatedAt,
+              updatedAt: invalidatedAt,
+            }
+          : auth
+      )
+
+      await ctx.db.patch(args.userId, {
+        activeCodexProfile: activeProfileForUser(user, auths),
+        updatedAt: Date.now(),
+      })
+    }
+
+    return toStatus({
+      ...existing,
+      invalidReason: args.invalidReason,
+      invalidatedAt,
+      updatedAt: invalidatedAt,
+    })
   },
 })

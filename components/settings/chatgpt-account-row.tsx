@@ -1,6 +1,12 @@
 "use client"
 
-import { CheckCircle2, Circle, Pencil, Trash2 } from "lucide-react"
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Circle,
+  Pencil,
+  Trash2,
+} from "lucide-react"
 
 import {
   codexAccountSubtitle,
@@ -28,6 +34,7 @@ export function ChatGPTAccountRow({
   onSelect: () => void
 }) {
   const title = codexAccountTitle(account)
+  const invalid = Boolean(account.invalidatedAt)
   return (
     <div
       className={cn(
@@ -43,7 +50,9 @@ export function ChatGPTAccountRow({
         onClick={onSelect}
         className="flex min-w-0 flex-1 items-center gap-2.5 text-left disabled:pointer-events-none"
       >
-        {active ? (
+        {invalid ? (
+          <AlertTriangle className="size-4 shrink-0 text-destructive" />
+        ) : active ? (
           <CheckCircle2 className="size-4 shrink-0 text-success" />
         ) : (
           <Circle className="size-4 shrink-0 text-muted-foreground" />

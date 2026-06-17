@@ -8,6 +8,8 @@ export type CodexAuthAccountStatus = {
   displayName?: string
   exists: true
   fingerprint: string
+  invalidReason?: string
+  invalidatedAt?: string
   lastRefresh: string
   profile: string
   updatedAt: string
@@ -23,9 +25,32 @@ export type CodexAuthOverview = {
   displayName?: string
   exists: boolean
   fingerprint?: string
+  invalidReason?: string
+  invalidatedAt?: string
   lastRefresh?: string
   profile: string
   updatedAt?: string
+}
+
+export function codexAuthAccountUsable(
+  account: Pick<CodexAuthAccountStatus, "invalidatedAt"> | null | undefined
+) {
+  return Boolean(account && !account.invalidatedAt)
+}
+
+export function codexAuthOverviewUsable(
+  status: Pick<CodexAuthOverview, "exists" | "invalidatedAt"> | null | undefined
+) {
+  return Boolean(status?.exists && !status.invalidatedAt)
+}
+
+export function codexAuthAnyAccountUsable(
+  status: CodexAuthOverview | null | undefined
+) {
+  return Boolean(
+    codexAuthOverviewUsable(status) ||
+    status?.accounts.some(codexAuthAccountUsable)
+  )
 }
 
 export function normalizeCodexProfile(profile?: string) {

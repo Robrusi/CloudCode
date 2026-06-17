@@ -11,6 +11,15 @@ import {
   buildCodexAuthJsonFromParsed,
   parseCodexAuthJson,
 } from "@/lib/codex/auth-json"
+import {
+  CODEX_AUTH_PROFILE_BUSY_MESSAGE,
+  CODEX_AUTH_RECONNECT_MESSAGE,
+  isCodexRefreshTokenReusedError,
+} from "@/lib/codex/auth-errors"
+import {
+  codexAuthAnyAccountUsable,
+  codexAuthOverviewUsable,
+} from "@/lib/codex/auth-types"
 import { getFilePathFromHref, normalizeLinkHref } from "@/lib/chat/link-path"
 import { describeItem, summarizeBundle } from "@/components/chat/tool-details"
 import {
@@ -161,6 +170,20 @@ assert.ok(daemonScriptSource.includes("initializedAuthHash"))
 assert.ok(daemonScriptSource.includes("fs.chmodSync(CODEX_HOME"))
 assert.ok(daemonScriptSource.includes("writeAuthOutput"))
 assert.ok(daemonScriptSource.includes("isBundledBubblewrapWarning"))
+const codexRunsSource = await readFile(
+  new URL("../convex/codexRuns.ts", import.meta.url),
+  "utf8"
+)
+assert.ok(codexRunsSource.includes("by_user_profile_updated"))
+assert.ok(codexRunsSource.includes("isActiveCodexRunStatus"))
+assert.ok(codexRunsSource.includes("CODEX_AUTH_PROFILE_BUSY_MESSAGE"))
+const codexAuthSource = await readFile(
+  new URL("../convex/codexAuth.ts", import.meta.url),
+  "utf8"
+)
+assert.ok(codexAuthSource.includes("invalidateOAuthTokensForWorker"))
+assert.ok(codexAuthSource.includes("expectedFingerprint"))
+assert.ok(codexAuthSource.includes("invalidatedAt"))
 assert.deepEqual(
   codexAppServerStderrLogForLine(
     "Codex could not find bubblewrap on PATH. Codex will use the bundled bubblewrap in the meantime."
@@ -169,6 +192,67 @@ assert.deepEqual(
     kind: "setup",
     message: "Codex using bundled bubblewrap sandbox helper",
   }
+)
+assert.ok(
+  isCodexRefreshTokenReusedError(
+    new Error("code: refresh_token_reused; refresh token was already used")
+  )
+)
+assert.ok(
+  isCodexRefreshTokenReusedError(
+    "Your access token could not be refreshed because your refresh token was already used."
+  )
+)
+assert.equal(
+  isCodexRefreshTokenReusedError(new Error("network timeout")),
+  false
+)
+assert.ok(CODEX_AUTH_RECONNECT_MESSAGE.includes("Reconnect ChatGPT"))
+assert.ok(CODEX_AUTH_PROFILE_BUSY_MESSAGE.includes("already using"))
+assert.equal(
+  codexAuthOverviewUsable({
+    exists: true,
+    invalidatedAt: "2026-06-17T00:00:00.000Z",
+  }),
+  false
+)
+assert.equal(
+  codexAuthAnyAccountUsable({
+    accounts: [
+      {
+        authMode: "chatgpt",
+        exists: true,
+        fingerprint: "fingerprint",
+        invalidatedAt: "2026-06-17T00:00:00.000Z",
+        lastRefresh: "2026-06-17T00:00:00.000Z",
+        profile: "default",
+        updatedAt: "2026-06-17T00:00:00.000Z",
+      },
+    ],
+    activeProfile: "default",
+    exists: true,
+    invalidatedAt: "2026-06-17T00:00:00.000Z",
+    profile: "default",
+  }),
+  false
+)
+assert.equal(
+  codexAuthAnyAccountUsable({
+    accounts: [
+      {
+        authMode: "chatgpt",
+        exists: true,
+        fingerprint: "fingerprint",
+        lastRefresh: "2026-06-17T00:00:00.000Z",
+        profile: "default",
+        updatedAt: "2026-06-17T00:00:00.000Z",
+      },
+    ],
+    activeProfile: "default",
+    exists: false,
+    profile: "missing",
+  }),
+  true
 )
 assert.equal(
   codexAppServerStderrLogForLine(

@@ -1,5 +1,6 @@
 import type { Id } from "../_generated/dataModel"
 import type { MutationCtx, QueryCtx } from "../_generated/server"
+import { codexAuthReconnectMessage } from "@/lib/codex/auth-errors"
 
 export async function requireCodexAuth(
   ctx: MutationCtx | QueryCtx,
@@ -23,6 +24,9 @@ export async function requireCodexAuth(
     throw new Error(
       `No Codex ChatGPT OAuth credentials are stored for profile "${authProfile}".`
     )
+  }
+  if (auth.invalidatedAt) {
+    throw new Error(codexAuthReconnectMessage(authProfile))
   }
 
   return auth
