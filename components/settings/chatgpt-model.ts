@@ -139,13 +139,22 @@ export function codexAccountTitle(account: CodexAuthAccountStatus) {
   )
 }
 
+// Profiles created automatically: the "default" profile and the per-account
+// profiles derived on import/add (e.g. "chatgpt_<accountId>_<hash>"). Their raw
+// slugs are not meant for display.
+function isAutoProfile(profile: string) {
+  return profile === "default" || profile.startsWith("chatgpt_")
+}
+
 export function codexAccountSubtitle(account: CodexAuthAccountStatus) {
   const label =
     account.accountEmail && account.accountName
       ? account.accountName
       : account.profile === "default"
         ? "Default profile"
-        : account.profile
+        : isAutoProfile(account.profile)
+          ? "ChatGPT account"
+          : account.profile
 
   return account.accountId
     ? `${label} - ${shortAccountId(account.accountId)}`

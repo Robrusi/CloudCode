@@ -6,11 +6,12 @@ import { join } from "node:path"
 loadEnvConfig(process.cwd())
 mkdirSync(join(process.cwd(), ".trigger", "tmp", "store"), { recursive: true })
 
-const project = process.env.TRIGGER_PROJECT_REF
-
-if (!project) {
-  throw new Error("Set TRIGGER_PROJECT_REF to your Trigger.dev project ref.")
-}
+// The project ref is a non-secret identifier and must resolve during the
+// managed deploy/index step, which runs in an isolated build container with no
+// access to local .env files (process.cwd() is not the project root there).
+// Keep the env override for flexibility, but fall back to the literal so deploy
+// never aborts on a missing env var.
+const project = process.env.TRIGGER_PROJECT_REF ?? "proj_getetvnaifsfxtvhnkdk"
 
 export default defineConfig({
   project,
