@@ -93,7 +93,7 @@ export async function getConvexAuthToken() {
   return await getConvexAuthTokenForSession(await auth())
 }
 
-function fingerprint(...values: string[]) {
+export function codexAuthFingerprint(...values: string[]) {
   return createHash("sha256")
     .update(values.join("\0"))
     .digest("hex")
@@ -106,7 +106,7 @@ function profileFromAccount(accountId: string | null, idToken: string) {
       .replace(/[^a-zA-Z0-9_-]+/g, "_")
       .replace(/^_+|_+$/g, "")
       .slice(0, 48) || "chatgpt"
-  const suffix = fingerprint(accountId ?? idToken).slice(0, 8)
+  const suffix = codexAuthFingerprint(accountId ?? idToken).slice(0, 8)
 
   return normalizeCodexProfile(`${safePrefix}_${suffix}`)
 }
@@ -141,7 +141,11 @@ export async function saveCodexOAuthTokens(input: SaveCodexOAuthTokensInput) {
     accountId: idTokenProfile.accountId,
     accountName: idTokenProfile.accountName,
     activate: input.activate,
-    fingerprint: fingerprint(input.idToken, input.refreshToken, lastRefresh),
+    fingerprint: codexAuthFingerprint(
+      input.idToken,
+      input.refreshToken,
+      lastRefresh
+    ),
     idToken: input.idToken,
     lastRefresh,
     openaiApiKey: input.openaiApiKey,
@@ -186,7 +190,11 @@ export async function saveCodexAuthJsonForWorker(
     accessToken: parsed.accessToken,
     accountId: parsed.accountId,
     expectedFingerprint: input.expectedFingerprint,
-    fingerprint: fingerprint(parsed.idToken, parsed.refreshToken, lastRefresh),
+    fingerprint: codexAuthFingerprint(
+      parsed.idToken,
+      parsed.refreshToken,
+      lastRefresh
+    ),
     idToken: parsed.idToken,
     lastRefresh,
     openaiApiKey: parsed.openaiApiKey,

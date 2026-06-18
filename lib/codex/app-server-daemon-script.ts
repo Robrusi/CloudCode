@@ -1,12 +1,13 @@
-export const CODEX_APP_SERVER_DAEMON_VERSION = "5"
+export const CODEX_APP_SERVER_DAEMON_VERSION = "6"
 
 export const CODEX_APP_SERVER_DAEMON_SCRIPT = String.raw`import { createHash } from "node:crypto"
 import { spawn } from "node:child_process"
 import fs from "node:fs"
 import net from "node:net"
 
-const VERSION = "5"
+const VERSION = "6"
 const REQUEST_TIMEOUT_MS = Number(process.env.CLOUDCODE_APP_SERVER_REQUEST_TIMEOUT_MS || "45000")
+const AUTH_REFRESH_RESPONSE_TIMEOUT_MS = Number(process.env.CLOUDCODE_AUTH_REFRESH_RESPONSE_TIMEOUT_MS || "120000")
 const SOCKET_PATH = requiredEnv("CLOUDCODE_DAEMON_SOCKET")
 const DAEMON_DIR = SOCKET_PATH.slice(0, SOCKET_PATH.lastIndexOf("/"))
 const STATE_PATH = requiredEnv("CLOUDCODE_DAEMON_STATE")
@@ -61,6 +62,16 @@ function daemonFilePath(value) {
     throw new Error("Codex app-server daemon auth output path is invalid.")
   }
   return filePath
+}
+
+function daemonDirectoryPath(value) {
+  const dirPath = stringValue(value)
+  if (!dirPath) return undefined
+  const normalized = dirPath.replace(/\/+$/, "")
+  if (normalized.includes("\0") || (normalized !== DAEMON_DIR && !normalized.startsWith(DAEMON_DIR + "/"))) {
+    throw new Error("Codex app-server daemon response directory is invalid.")
+  }
+  return normalized
 }
 
 function writeAuthOutput(filePath, authJson) {
@@ -464,6 +475,73 @@ function ensureAuthJson(authJson, authHash) {
 }
 
 async function performChatgptAuthTokenRefresh(run, params) {
+  if (run.authRefreshResponseDir) {
+    return await performCloudcodeChatgptAuthTokenRefresh(run, params)
+  }
+
+  return await performLocalChatgptAuthTokenRefresh(run, params)
+}
+
+function authRefreshResponseFilePath(run) {
+  const requestId =
+    Date.now().toString(36) + "-" + Math.random().toString(16).slice(2)
+  return {
+    requestId,
+    responsePath: run.authRefreshResponseDir + "/auth-refresh-" + requestId + ".json",
+  }
+}
+
+async function waitForAuthRefreshResponse(responsePath) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < AUTH_REFRESH_RESPONSE_TIMEOUT_MS) {
+    if (fs.existsSync(responsePath)) {
+      try {
+        return JSON.parse(fs.readFileSync(responsePath, "utf8"))
+      } finally {
+        try {
+          fs.unlinkSync(responsePath)
+        } catch {}
+      }
+    }
+    await sleep(250)
+  }
+  throw new Error("Timed out waiting for Cloudcode ChatGPT token refresh.")
+}
+
+async function performCloudcodeChatgptAuthTokenRefresh(run, params) {
+  if (activeRun !== run || !run.auth) {
+    throw new Error("No active Codex auth is available for token refresh.")
+  }
+  const previousAccountId = stringValue(objectRecord(params) && objectRecord(params).previousAccountId)
+  const { requestId, responsePath } = authRefreshResponseFilePath(run)
+
+  writeLine(run.socket, {
+    requestId,
+    responsePath,
+    ...(previousAccountId ? { previousAccountId } : {}),
+    type: "authRefreshRequest",
+  })
+
+  const response = objectRecord(await waitForAuthRefreshResponse(responsePath))
+  const error = stringValue(response && response.error)
+  if (error) throw new Error(error)
+
+  const authJson = stringValue(response && response.authJson)
+  const result = objectRecord(response && response.result)
+  if (!authJson || !result) {
+    throw new Error("Cloudcode ChatGPT token refresh response is malformed.")
+  }
+
+  const auth = parseAuthJson(authJson)
+  run.auth = auth
+  run.authJson = authJson
+  writeAuthJson(authJson)
+  initializedAuthHash = writtenAuthHash
+
+  return result
+}
+
+async function performLocalChatgptAuthTokenRefresh(run, params) {
   if (activeRun !== run || !run.auth) {
     throw new Error("No active Codex auth is available for token refresh.")
   }
@@ -716,6 +794,7 @@ async function runTurn(payload, socket) {
 
   const run = {
     auth,
+    authRefreshResponseDir: daemonDirectoryPath(payload.authRefreshResponseDir),
     authRefreshPromise: null,
     authRefreshResult: null,
     authJson,

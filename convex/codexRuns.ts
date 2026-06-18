@@ -5,7 +5,6 @@ import { mutation, query, type MutationCtx } from "./_generated/server"
 import { compactMessageMeta, compactRunLogs } from "./lib/codexRunLogs"
 import {
   activeRunForThread,
-  isActiveCodexRunStatus,
   markRunCanceled,
   markRunCanceling,
   sandboxIdFromLog,
@@ -14,7 +13,6 @@ import {
 import { findCodexAuth } from "./lib/codexRunAuth"
 import { workerInputForRun } from "./lib/codexRunWorkerInput"
 import {
-  CODEX_AUTH_PROFILE_BUSY_MESSAGE,
   codexAuthMissingMessage,
   codexAuthReconnectMessage,
 } from "@/lib/codex/auth-errors"
@@ -170,21 +168,6 @@ export const create = mutation({
         message: codexAuthReconnectMessage(authProfile),
         profile: authProfile,
         status: "auth_reconnect_required" as const,
-      }
-    }
-    const activeProfileRuns = await ctx.db
-      .query("codexRuns")
-      .withIndex("by_user_profile_updated", (q) =>
-        q.eq("userId", userId).eq("profile", auth.profile)
-      )
-      .order("desc")
-      .take(20)
-    if (activeProfileRuns.some((run) => isActiveCodexRunStatus(run.status))) {
-      return {
-        ok: false as const,
-        message: CODEX_AUTH_PROFILE_BUSY_MESSAGE,
-        profile: auth.profile,
-        status: "profile_busy" as const,
       }
     }
     const now = Date.now()

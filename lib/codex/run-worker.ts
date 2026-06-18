@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto"
+
 import { ConvexHttpClient } from "convex/browser"
 
 import { api } from "@/convex/_generated/api"
@@ -7,9 +9,16 @@ import { requireConvexUrl } from "@/lib/convex/env"
 import { getWorkerSecret } from "@/lib/security/worker-secret"
 import {
   buildCodexAuthJson,
+  codexAuthFingerprint,
   invalidateCodexAuthForWorker,
   saveCodexAuthJsonForWorker,
 } from "@/lib/codex/auth"
+import {
+  buildCodexAuthJsonFromParsed,
+  getCodexProfileFromIdToken,
+} from "@/lib/codex/auth-json"
+import { isCodexRefreshTokenReusedError } from "@/lib/codex/auth-errors"
+import { refreshCodexOAuthTokens } from "@/lib/codex/oauth-refresh"
 import { WorkerRunCanceledError } from "@/lib/codex/run-cancel-error"
 import type {
   RunCodexInSandboxInput,
@@ -33,6 +42,8 @@ import type {
 
 const WORKER_CONVEX_URL_ERROR =
   "Set NEXT_PUBLIC_CONVEX_URL before running Trigger tasks."
+const AUTH_REFRESH_MAX_WAIT_MS = 2 * 60 * 1000
+const AUTH_REFRESH_MAX_RETRY_MS = 5_000
 
 export type WorkerRunPayload = {
   runId: Id<"codexRuns">
@@ -65,6 +76,18 @@ type WorkerRunRecord = {
 }
 
 type WorkerAuthRecord = Parameters<typeof buildCodexAuthJson>[0]
+
+type WorkerRefreshAuth = Pick<
+  WorkerAuthRecord,
+  | "accessToken"
+  | "accountId"
+  | "fingerprint"
+  | "idToken"
+  | "lastRefresh"
+  | "openaiApiKey"
+  | "profile"
+  | "refreshToken"
+>
 
 type WorkerPresetRecord = Omit<SandboxPresetForRun, "secrets"> & {
   secrets: Array<{ name: string; value: string }>
@@ -153,6 +176,179 @@ function decryptMcpServers(
       value: decryptSecret(secret.value),
     })),
   }))
+}
+
+function waitForAuthRefreshLease(ms: number, signal?: AbortSignal) {
+  if (!signal) return new Promise<void>((resolve) => setTimeout(resolve, ms))
+  if (signal.aborted) return Promise.reject(new WorkerRunCanceledError())
+
+  return new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(done, ms)
+
+    function done() {
+      clearTimeout(timeout)
+      signal?.removeEventListener("abort", abort)
+      resolve()
+    }
+
+    function abort() {
+      clearTimeout(timeout)
+      signal?.removeEventListener("abort", abort)
+      reject(new WorkerRunCanceledError())
+    }
+
+    signal.addEventListener("abort", abort, { once: true })
+  })
+}
+
+function authJsonFromRefreshAuth(auth: WorkerRefreshAuth) {
+  return buildCodexAuthJsonFromParsed({
+    accessToken: auth.accessToken,
+    accountId: auth.accountId,
+    idToken: auth.idToken,
+    lastRefresh: auth.lastRefresh,
+    openaiApiKey: auth.openaiApiKey,
+    refreshToken: auth.refreshToken,
+  })
+}
+
+function authRefreshResult(
+  auth: Pick<WorkerRefreshAuth, "accessToken" | "accountId">
+) {
+  return {
+    accessToken: auth.accessToken,
+    chatgptAccountId: auth.accountId ?? "",
+    chatgptPlanType: null,
+  }
+}
+
+export async function refreshWorkerAuthForRun({
+  client,
+  previousAccountId,
+  profile,
+  runId,
+  signal,
+  userId,
+}: {
+  client: ConvexHttpClient
+  previousAccountId?: string
+  profile: string | undefined
+  runId: Id<"codexRuns">
+  signal?: AbortSignal
+  userId: Id<"users">
+}) {
+  if (!profile) throw new Error("Codex run is missing a ChatGPT profile.")
+
+  const leaseId = randomUUID()
+  const startedAt = Date.now()
+  let auth: WorkerRefreshAuth | undefined
+
+  while (!auth) {
+    const lease = (await client.mutation(
+      api.codexAuth.beginOAuthRefreshForWorker,
+      {
+        leaseId,
+        profile,
+        runId,
+        userId,
+        workerSecret: getWorkerSecret(),
+      }
+    )) as
+      | {
+          acquired: true
+          auth: WorkerRefreshAuth
+        }
+      | {
+          acquired: false
+          message?: string
+          retryAfterMs?: number
+        }
+
+    if (lease.acquired) {
+      auth = lease.auth
+      break
+    }
+
+    if (lease.message) throw new Error(lease.message)
+    if (Date.now() - startedAt >= AUTH_REFRESH_MAX_WAIT_MS) {
+      throw new Error("Timed out waiting for ChatGPT token refresh lock.")
+    }
+
+    await waitForAuthRefreshLease(
+      Math.min(
+        AUTH_REFRESH_MAX_RETRY_MS,
+        Math.max(250, lease.retryAfterMs ?? 500)
+      ),
+      signal
+    )
+  }
+
+  try {
+    const refreshed = await refreshCodexOAuthTokens(auth.refreshToken)
+    const idToken = refreshed.idToken ?? auth.idToken
+    const idTokenProfile = getCodexProfileFromIdToken(idToken)
+    const accountId =
+      idTokenProfile.accountId ?? auth.accountId ?? previousAccountId ?? null
+    const refreshToken = refreshed.refreshToken ?? auth.refreshToken
+    const lastRefresh = new Date().toISOString()
+    const nextAuth = {
+      accessToken: refreshed.accessToken,
+      accountId,
+      fingerprint: codexAuthFingerprint(idToken, refreshToken, lastRefresh),
+      idToken,
+      lastRefresh,
+      openaiApiKey: auth.openaiApiKey,
+      profile,
+      refreshToken,
+    } satisfies WorkerRefreshAuth
+    const complete = (await client.mutation(
+      api.codexAuth.completeOAuthRefreshForWorker,
+      {
+        accessToken: nextAuth.accessToken,
+        accountId: nextAuth.accountId,
+        expectedFingerprint: auth.fingerprint,
+        fingerprint: nextAuth.fingerprint,
+        idToken: nextAuth.idToken,
+        lastRefresh: nextAuth.lastRefresh,
+        leaseId,
+        openaiApiKey: nextAuth.openaiApiKey,
+        profile,
+        refreshToken: nextAuth.refreshToken,
+        userId,
+        workerSecret: getWorkerSecret(),
+      }
+    )) as { completed: boolean; message?: string }
+
+    if (!complete.completed) {
+      throw new Error(
+        complete.message ?? "ChatGPT token refresh lease was lost."
+      )
+    }
+
+    return {
+      authJson: authJsonFromRefreshAuth(nextAuth),
+      result: authRefreshResult(nextAuth),
+    }
+  } catch (error) {
+    await client
+      .mutation(api.codexAuth.failOAuthRefreshForWorker, {
+        leaseId,
+        profile,
+        userId,
+        workerSecret: getWorkerSecret(),
+      })
+      .catch(() => undefined)
+
+    if (isCodexRefreshTokenReusedError(error)) {
+      await invalidateWorkerAuthProfile(
+        userId,
+        profile,
+        "refresh_token_reused"
+      ).catch(() => undefined)
+    }
+
+    throw error
+  }
 }
 
 export async function startAndLoadWorkerRun(

@@ -42,7 +42,6 @@ const QUEUE_WORKER_SECRET_ERROR =
 const CODEX_RUN_CREATE_ERROR_STATUS = {
   auth_reconnect_required: 401,
   missing_auth: 401,
-  profile_busy: 409,
   thread_busy: 409,
 } as const
 

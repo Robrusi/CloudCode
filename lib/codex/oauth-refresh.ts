@@ -22,14 +22,24 @@ export async function refreshCodexOAuthTokens(
     method: "POST",
   })
 
-  if (!response.ok) {
-    throw new Error(`Token refresh failed with status ${response.status}.`)
-  }
-
-  const data = (await response.json()) as {
+  const data = (await response.json().catch(() => ({}))) as {
+    error?: unknown
+    error_description?: unknown
     access_token?: unknown
     id_token?: unknown
+    message?: unknown
     refresh_token?: unknown
+  }
+
+  if (!response.ok) {
+    const detail = [data.error, data.error_description, data.message]
+      .filter((value): value is string => typeof value === "string" && !!value)
+      .join(": ")
+    throw new Error(
+      `Token refresh failed with status ${response.status}${
+        detail ? `: ${detail}` : ""
+      }.`
+    )
   }
 
   if (typeof data.access_token !== "string") {

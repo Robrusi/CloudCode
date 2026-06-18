@@ -31,6 +31,13 @@ export type RunCodexInSandboxInput = {
   mcpServers?: McpServerInput[]
   model?: string
   notesAccessToken?: string
+  onAuthRefreshRequest?: (request: {
+    previousAccountId?: string
+    requestId: string
+  }) => Promise<{
+    authJson: string
+    result: Record<string, unknown>
+  }>
   onContentDelta?: (delta: string) => void | Promise<void>
   onLog?: (log: RunCodexLog) => void | Promise<void>
   onMcpServerToolsDiscovered?: (

@@ -12,7 +12,6 @@ import {
   parseCodexAuthJson,
 } from "@/lib/codex/auth-json"
 import {
-  CODEX_AUTH_PROFILE_BUSY_MESSAGE,
   CODEX_AUTH_RECONNECT_MESSAGE,
   isCodexRefreshTokenReusedError,
   isCodexRefreshTokenReusedRunResult,
@@ -128,6 +127,17 @@ assert.deepEqual(
     type: "setup",
   }
 )
+assert.deepEqual(
+  parseCodexAppServerDaemonEventLine(
+    '{"type":"authRefreshRequest","requestId":"refresh-1","responsePath":"/tmp/runtime-home/codex-app-server/auth-refresh-1.json","previousAccountId":"account-1"}'
+  ),
+  {
+    previousAccountId: "account-1",
+    requestId: "refresh-1",
+    responsePath: "/tmp/runtime-home/codex-app-server/auth-refresh-1.json",
+    type: "authRefreshRequest",
+  }
+)
 assert.equal(parseCodexAppServerDaemonEventLine("not-json"), undefined)
 const daytonaCodexAgentSource = await readFile(
   new URL("../lib/daytona/codex-agent.ts", import.meta.url),
@@ -205,14 +215,16 @@ assert.ok(daemonScriptSource.includes("initializedAuthHash"))
 assert.ok(daemonScriptSource.includes("fs.chmodSync(CODEX_HOME"))
 assert.ok(daemonScriptSource.includes("writeAuthOutput"))
 assert.ok(daemonScriptSource.includes("isBundledBubblewrapWarning"))
+assert.ok(daemonScriptSource.includes("authRefreshRequest"))
+assert.ok(
+  daemonScriptSource.includes("performCloudcodeChatgptAuthTokenRefresh")
+)
 const codexRunsSource = await readFile(
   new URL("../convex/codexRuns.ts", import.meta.url),
   "utf8"
 )
-assert.ok(codexRunsSource.includes("by_user_profile_updated"))
-assert.ok(codexRunsSource.includes("isActiveCodexRunStatus"))
-assert.ok(codexRunsSource.includes("CODEX_AUTH_PROFILE_BUSY_MESSAGE"))
-assert.ok(codexRunsSource.includes('status: "profile_busy"'))
+assert.ok(!codexRunsSource.includes("CODEX_AUTH_PROFILE_BUSY_MESSAGE"))
+assert.ok(!codexRunsSource.includes('status: "profile_busy"'))
 assert.ok(codexRunsSource.includes('status: "thread_busy"'))
 assert.ok(codexRunsSource.includes('status: "auth_reconnect_required"'))
 assert.ok(codexRunsSource.includes('status: "missing_auth"'))
@@ -228,6 +240,7 @@ const triggerCloudcodeRunSource = await readFile(
   new URL("../trigger/cloudcode-run.ts", import.meta.url),
   "utf8"
 )
+assert.ok(triggerCloudcodeRunSource.includes("refreshWorkerAuthForRun"))
 const returnedAuthFailureCheck = triggerCloudcodeRunSource.indexOf(
   "isCodexRefreshTokenReusedRunResult(result)"
 )
@@ -242,6 +255,9 @@ const codexAuthSource = await readFile(
   "utf8"
 )
 assert.ok(codexAuthSource.includes("invalidateOAuthTokensForWorker"))
+assert.ok(codexAuthSource.includes("beginOAuthRefreshForWorker"))
+assert.ok(codexAuthSource.includes("completeOAuthRefreshForWorker"))
+assert.ok(codexAuthSource.includes("refreshLeaseId"))
 assert.ok(codexAuthSource.includes("expectedFingerprint"))
 assert.ok(codexAuthSource.includes("invalidatedAt"))
 assert.deepEqual(
@@ -282,7 +298,6 @@ assert.equal(
   false
 )
 assert.ok(CODEX_AUTH_RECONNECT_MESSAGE.includes("Reconnect ChatGPT"))
-assert.ok(CODEX_AUTH_PROFILE_BUSY_MESSAGE.includes("already using"))
 assert.equal(
   codexAuthOverviewUsable({
     exists: true,

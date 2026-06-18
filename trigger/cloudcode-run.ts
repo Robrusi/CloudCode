@@ -18,6 +18,7 @@ import {
   getWorkerSecret,
   invalidateWorkerAuthProfile,
   isWorkerRunCanceledError,
+  refreshWorkerAuthForRun,
   saveWorkerAuthJson,
   startAndLoadWorkerRun,
   syncWorkerMcpServerTools,
@@ -276,6 +277,15 @@ export const cloudcodeRun = task({
       const result = await runCodexInSandbox({
         ...runInput,
         authJson: runAuthJson,
+        onAuthRefreshRequest: ({ previousAccountId }) =>
+          refreshWorkerAuthForRun({
+            client,
+            previousAccountId,
+            profile: loaded.profile,
+            runId: payload.runId,
+            signal: billingAbort.signal,
+            userId: loaded.userId,
+          }),
         onContentDelta: (delta) => contentBuffer.append(delta),
         onLog: (log) => {
           contentBuffer.appendToolLog(log)

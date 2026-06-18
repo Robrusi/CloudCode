@@ -36,6 +36,12 @@ export type CodexAppServerDaemonEvent =
       type: "error"
     }
   | {
+      previousAccountId?: string
+      requestId: string
+      responsePath: string
+      type: "authRefreshRequest"
+    }
+  | {
       threadId: string
       type: "thread"
     }
@@ -176,6 +182,18 @@ export function parseCodexAppServerDaemonEventLine(
     case "error": {
       const message = rawStringValue(record.message)
       return message ? { message, type } : undefined
+    }
+    case "authRefreshRequest": {
+      const requestId = rawStringValue(record.requestId)
+      const responsePath = rawStringValue(record.responsePath)
+      if (!requestId || !responsePath) return undefined
+      const previousAccountId = rawStringValue(record.previousAccountId)
+      return {
+        ...(previousAccountId ? { previousAccountId } : {}),
+        requestId,
+        responsePath,
+        type,
+      }
     }
     case "thread": {
       const threadId = rawStringValue(record.threadId)

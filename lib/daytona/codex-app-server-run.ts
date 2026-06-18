@@ -26,7 +26,10 @@ import type { CodexRunLog as RunCodexLog } from "@/lib/codex/run-log"
 import type { CodexSpeed, ReasoningEffort } from "@/lib/codex/run-options"
 import { redactCodexAuthPayloads } from "@/lib/codex/auth-redaction"
 import { compactLine } from "@/lib/shared/compact-line"
-import type { DaytonaSandboxPaths } from "@/lib/daytona/sandbox"
+import {
+  writeDaytonaTextFile,
+  type DaytonaSandboxPaths,
+} from "@/lib/daytona/sandbox"
 import type { SandboxGitHubAuth } from "@/lib/sandbox/github-auth"
 import type { McpServerInput } from "@/lib/daytona/codex-runtime"
 import type { SandboxPresetEnvVar } from "@/lib/sandbox/env"
@@ -38,6 +41,13 @@ import {
 type RunCodexViaAppServerInput = {
   authJson: string
   mcpServers?: McpServerInput[]
+  onAuthRefreshRequest?: (request: {
+    previousAccountId?: string
+    requestId: string
+  }) => Promise<{
+    authJson: string
+    result: Record<string, unknown>
+  }>
   onContentDelta?: (delta: string) => void | Promise<void>
   onLog?: (log: RunCodexLog) => void | Promise<void>
   onMcpServerToolsDiscovered?: (
@@ -76,6 +86,17 @@ export function redactCodexAppServerAuthPayloads(value: string) {
   return redactCodexAuthPayloads(value)
 }
 
+function validateDaemonResponsePath(
+  paths: DaytonaSandboxPaths,
+  responsePath: string
+) {
+  const root = `${paths.runtimeHome.replace(/\/+$/, "")}/codex-app-server/`
+  if (!responsePath.startsWith(root) || responsePath.includes("\0")) {
+    throw new Error("Codex app-server daemon response path is invalid.")
+  }
+  return responsePath
+}
+
 export async function runCodexViaAppServer({
   codexThreadIdToResume,
   gitAuth,
@@ -109,6 +130,7 @@ export async function runCodexViaAppServer({
   let resumeLogged = false
   let bundledBubblewrapWarningLogged = false
   const discoveryTasks: Promise<void>[] = []
+  const authRefreshTasks: Promise<void>[] = []
 
   try {
     const daemon = await ensureCodexAppServerDaemon({
@@ -244,6 +266,45 @@ export async function runCodexViaAppServer({
           case "error":
             daemonError = event.message
             return
+          case "authRefreshRequest": {
+            const task = (async () => {
+              const responsePath = validateDaemonResponsePath(
+                paths,
+                event.responsePath
+              )
+              try {
+                if (!input.onAuthRefreshRequest) {
+                  throw new Error(
+                    "Cloudcode auth refresh coordinator is unavailable."
+                  )
+                }
+                const refreshed = await input.onAuthRefreshRequest({
+                  ...(event.previousAccountId
+                    ? { previousAccountId: event.previousAccountId }
+                    : {}),
+                  requestId: event.requestId,
+                })
+                await writeDaytonaTextFile(
+                  sandbox,
+                  responsePath,
+                  JSON.stringify(refreshed)
+                )
+              } catch (error) {
+                await writeDaytonaTextFile(
+                  sandbox,
+                  responsePath,
+                  JSON.stringify({
+                    error:
+                      error instanceof Error
+                        ? error.message
+                        : "Cloudcode auth refresh failed.",
+                  })
+                ).catch(() => undefined)
+              }
+            })()
+            authRefreshTasks.push(task)
+            return
+          }
           case "result":
             daemonResult = event
             activeThreadId = event.threadId
@@ -254,6 +315,10 @@ export async function runCodexViaAppServer({
       payload: {
         authHash: sha256(input.authJson),
         authJson: input.authJson,
+        authRefreshResponseDir: `${paths.runtimeHome.replace(
+          /\/+$/,
+          ""
+        )}/codex-app-server`,
         codexThreadIdToResume,
         threadParams,
         turnParams,
@@ -265,6 +330,7 @@ export async function runCodexViaAppServer({
       input.signal?.removeEventListener("abort", interruptDaemonRun)
     })
     const { result } = daemonResponse
+    await Promise.all(authRefreshTasks)
     updatedAuthJson = daemonResponse.updatedAuthJson
 
     if (result.stderr) {

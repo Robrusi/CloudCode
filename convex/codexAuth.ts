@@ -7,6 +7,8 @@ import { ensureCurrentUser, getCurrentUser } from "./lib/users"
 import { requireWorkerSecret } from "./lib/workerAuth"
 import { codexAuthReconnectMessage } from "@/lib/codex/auth-errors"
 
+const OAUTH_REFRESH_LEASE_MS = 90_000
+
 function toStatus(auth: {
   accountEmail?: string
   accountId: string | null
@@ -33,6 +35,19 @@ function toStatus(auth: {
     lastRefresh: auth.lastRefresh,
     profile: auth.profile,
     updatedAt: auth.updatedAt,
+  }
+}
+
+function toWorkerAuth(auth: Doc<"codexAuth">) {
+  return {
+    accessToken: auth.accessToken,
+    accountId: auth.accountId,
+    fingerprint: auth.fingerprint,
+    idToken: auth.idToken,
+    lastRefresh: auth.lastRefresh,
+    openaiApiKey: auth.openaiApiKey,
+    profile: auth.profile,
+    refreshToken: auth.refreshToken,
   }
 }
 
@@ -220,6 +235,9 @@ export const saveOAuthTokens = mutation({
       lastRefresh: args.lastRefresh,
       openaiApiKey: args.openaiApiKey,
       profile,
+      refreshLeaseExpiresAt: undefined,
+      refreshLeaseId: undefined,
+      refreshLeaseRunId: undefined,
       refreshToken: args.refreshToken,
       updatedAt: args.lastRefresh,
       userId,
@@ -371,6 +389,199 @@ export const disconnectProfile = mutation({
   },
 })
 
+export const beginOAuthRefreshForWorker = mutation({
+  args: {
+    leaseId: v.string(),
+    profile: v.string(),
+    runId: v.optional(v.string()),
+    userId: v.id("users"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const auth = await ctx.db
+      .query("codexAuth")
+      .withIndex("by_user_profile", (q) =>
+        q.eq("userId", args.userId).eq("profile", args.profile)
+      )
+      .unique()
+
+    if (!auth) {
+      return {
+        acquired: false as const,
+        message: `No Codex ChatGPT OAuth credentials are stored for profile "${args.profile}".`,
+        missing: true as const,
+        profile: args.profile,
+      }
+    }
+
+    if (auth.invalidatedAt) {
+      return {
+        acquired: false as const,
+        invalidated: true as const,
+        message: codexAuthReconnectMessage(args.profile),
+        profile: args.profile,
+      }
+    }
+
+    const now = Date.now()
+    const leaseStillActive =
+      auth.refreshLeaseId &&
+      auth.refreshLeaseExpiresAt &&
+      auth.refreshLeaseExpiresAt > now
+
+    if (leaseStillActive && auth.refreshLeaseId !== args.leaseId) {
+      return {
+        acquired: false as const,
+        busy: true as const,
+        profile: args.profile,
+        retryAfterMs: Math.max(250, auth.refreshLeaseExpiresAt! - now),
+      }
+    }
+
+    const leaseExpiresAt = now + OAUTH_REFRESH_LEASE_MS
+    await ctx.db.patch(auth._id, {
+      refreshLeaseExpiresAt: leaseExpiresAt,
+      refreshLeaseId: args.leaseId,
+      refreshLeaseRunId: args.runId,
+    })
+
+    return {
+      acquired: true as const,
+      auth: toWorkerAuth(auth),
+      leaseExpiresAt,
+      profile: args.profile,
+    }
+  },
+})
+
+export const completeOAuthRefreshForWorker = mutation({
+  args: {
+    accessToken: v.string(),
+    accountId: v.union(v.string(), v.null()),
+    expectedFingerprint: v.string(),
+    fingerprint: v.string(),
+    idToken: v.string(),
+    lastRefresh: v.string(),
+    leaseId: v.string(),
+    openaiApiKey: v.optional(v.string()),
+    profile: v.string(),
+    refreshToken: v.string(),
+    userId: v.id("users"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const existing = await ctx.db
+      .query("codexAuth")
+      .withIndex("by_user_profile", (q) =>
+        q.eq("userId", args.userId).eq("profile", args.profile)
+      )
+      .unique()
+
+    if (!existing) {
+      return {
+        completed: false as const,
+        message: `No Codex ChatGPT OAuth credentials are stored for profile "${args.profile}".`,
+        missing: true as const,
+        profile: args.profile,
+      }
+    }
+
+    if (existing.invalidatedAt) {
+      return {
+        completed: false as const,
+        invalidated: true as const,
+        message: codexAuthReconnectMessage(args.profile),
+        profile: args.profile,
+      }
+    }
+
+    if (existing.refreshLeaseId !== args.leaseId) {
+      return {
+        completed: false as const,
+        lostLease: true as const,
+        profile: args.profile,
+      }
+    }
+
+    if (existing.fingerprint !== args.expectedFingerprint) {
+      await ctx.db.patch(existing._id, {
+        refreshLeaseExpiresAt: undefined,
+        refreshLeaseId: undefined,
+        refreshLeaseRunId: undefined,
+      })
+      return {
+        auth: toWorkerAuth(existing),
+        completed: false as const,
+        fingerprintChanged: true as const,
+        profile: args.profile,
+      }
+    }
+
+    await ctx.db.patch(existing._id, {
+      accessToken: args.accessToken,
+      accountId: args.accountId,
+      fingerprint: args.fingerprint,
+      idToken: args.idToken,
+      invalidReason: undefined,
+      invalidatedAt: undefined,
+      lastRefresh: args.lastRefresh,
+      openaiApiKey: args.openaiApiKey,
+      refreshLeaseExpiresAt: undefined,
+      refreshLeaseId: undefined,
+      refreshLeaseRunId: undefined,
+      refreshToken: args.refreshToken,
+      updatedAt: args.lastRefresh,
+    })
+
+    return {
+      auth: toWorkerAuth({
+        ...existing,
+        accessToken: args.accessToken,
+        accountId: args.accountId,
+        fingerprint: args.fingerprint,
+        idToken: args.idToken,
+        lastRefresh: args.lastRefresh,
+        openaiApiKey: args.openaiApiKey,
+        profile: args.profile,
+        refreshToken: args.refreshToken,
+        updatedAt: args.lastRefresh,
+      }),
+      completed: true as const,
+      profile: args.profile,
+    }
+  },
+})
+
+export const failOAuthRefreshForWorker = mutation({
+  args: {
+    leaseId: v.string(),
+    profile: v.string(),
+    userId: v.id("users"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const existing = await ctx.db
+      .query("codexAuth")
+      .withIndex("by_user_profile", (q) =>
+        q.eq("userId", args.userId).eq("profile", args.profile)
+      )
+      .unique()
+
+    if (!existing || existing.refreshLeaseId !== args.leaseId) return null
+
+    await ctx.db.patch(existing._id, {
+      refreshLeaseExpiresAt: undefined,
+      refreshLeaseId: undefined,
+      refreshLeaseRunId: undefined,
+    })
+
+    return toStatus(existing)
+  },
+})
+
 export const saveOAuthTokensForWorker = mutation({
   args: {
     accessToken: v.string(),
@@ -413,6 +624,9 @@ export const saveOAuthTokensForWorker = mutation({
       lastRefresh: args.lastRefresh,
       openaiApiKey: args.openaiApiKey,
       profile: args.profile,
+      refreshLeaseExpiresAt: undefined,
+      refreshLeaseId: undefined,
+      refreshLeaseRunId: undefined,
       refreshToken: args.refreshToken,
       updatedAt: args.lastRefresh,
       userId: args.userId,
@@ -452,6 +666,9 @@ export const invalidateOAuthTokensForWorker = mutation({
     await ctx.db.patch(existing._id, {
       invalidReason: args.invalidReason,
       invalidatedAt,
+      refreshLeaseExpiresAt: undefined,
+      refreshLeaseId: undefined,
+      refreshLeaseRunId: undefined,
       updatedAt: invalidatedAt,
     })
 
@@ -462,6 +679,9 @@ export const invalidateOAuthTokensForWorker = mutation({
               ...auth,
               invalidReason: args.invalidReason,
               invalidatedAt,
+              refreshLeaseExpiresAt: undefined,
+              refreshLeaseId: undefined,
+              refreshLeaseRunId: undefined,
               updatedAt: invalidatedAt,
             }
           : auth
