@@ -1,8 +1,8 @@
 export const CODEX_AUTH_RECONNECT_MESSAGE =
-  "Reconnect ChatGPT before starting another Codex run. The stored ChatGPT session can no longer refresh access tokens."
+  "Import a fresh auth.json before starting another Codex run. The stored ChatGPT session can no longer refresh access tokens."
 
 export function codexAuthMissingMessage(profile: string) {
-  return `No Codex ChatGPT OAuth credentials are stored for profile "${profile}".`
+  return `No Codex auth.json credentials are stored for profile "${profile}".`
 }
 
 export function codexAuthReconnectMessage(profile?: string) {

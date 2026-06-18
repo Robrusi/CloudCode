@@ -297,7 +297,7 @@ assert.equal(
   isCodexRefreshTokenReusedError(new Error("network timeout")),
   false
 )
-assert.ok(CODEX_AUTH_RECONNECT_MESSAGE.includes("Reconnect ChatGPT"))
+assert.ok(CODEX_AUTH_RECONNECT_MESSAGE.includes("Import a fresh auth.json"))
 assert.equal(
   codexAuthOverviewUsable({
     exists: true,

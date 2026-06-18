@@ -5,7 +5,10 @@ import type { Doc, Id } from "./_generated/dataModel"
 import type { MutationCtx, QueryCtx } from "./_generated/server"
 import { ensureCurrentUser, getCurrentUser } from "./lib/users"
 import { requireWorkerSecret } from "./lib/workerAuth"
-import { codexAuthReconnectMessage } from "@/lib/codex/auth-errors"
+import {
+  codexAuthMissingMessage,
+  codexAuthReconnectMessage,
+} from "@/lib/codex/auth-errors"
 
 const OAUTH_REFRESH_LEASE_MS = 90_000
 
@@ -409,7 +412,7 @@ export const beginOAuthRefreshForWorker = mutation({
     if (!auth) {
       return {
         acquired: false as const,
-        message: `No Codex ChatGPT OAuth credentials are stored for profile "${args.profile}".`,
+        message: codexAuthMissingMessage(args.profile),
         missing: true as const,
         profile: args.profile,
       }
@@ -482,7 +485,7 @@ export const completeOAuthRefreshForWorker = mutation({
     if (!existing) {
       return {
         completed: false as const,
-        message: `No Codex ChatGPT OAuth credentials are stored for profile "${args.profile}".`,
+        message: codexAuthMissingMessage(args.profile),
         missing: true as const,
         profile: args.profile,
       }

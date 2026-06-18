@@ -84,6 +84,7 @@ export function useChatRunActions({
   markRunActive,
   mergeThreadRunState,
   model,
+  onAuthRequired,
   queueingRunKeys,
   readyDraftAttachments,
   repoUrl,
@@ -131,6 +132,7 @@ export function useChatRunActions({
     patch: CachedRunState
   ) => CachedRunState
   model: Model
+  onAuthRequired: () => void
   queueingRunKeys: Set<string>
   readyDraftAttachments: ChatImageAttachment[]
   repoUrl: string
@@ -212,9 +214,7 @@ export function useChatRunActions({
       return
     }
     if (!authStatus || !codexAuthOverviewUsable(authStatus)) {
-      const profile = authStatus?.activeProfile || authStatus?.profile
-      const search = profile ? `?profile=${encodeURIComponent(profile)}` : ""
-      window.location.href = `/api/codex-auth/login${search}`
+      onAuthRequired()
       return
     }
     if (uploadingAttachmentCount > 0) {

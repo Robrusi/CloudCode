@@ -1,6 +1,6 @@
 "use client"
 
-import { FileUp, Plus, RefreshCw } from "lucide-react"
+import { FileUp } from "lucide-react"
 import { useReducer } from "react"
 
 import { ChatGPTAccountEditRow } from "@/components/settings/chatgpt-account-edit-row"
@@ -55,16 +55,13 @@ export function ChatGPTConnectionRow({
   const activeAccount = accounts.find(
     (account) => account.profile === activeProfile
   )
-  const reconnectProfile = activeAccount?.invalidatedAt
-    ? activeProfile
-    : undefined
   const detail = connected
     ? activeAccount?.invalidatedAt
-      ? "Reconnect ChatGPT before starting another Codex run."
+      ? "Import a fresh auth.json before starting another Codex run."
       : activeAccount
         ? `Using ${codexAccountTitle(activeAccount)}`
-        : "Connected. Codex runs are authorized with ChatGPT."
-    : "Sign in with ChatGPT to authorize Codex runs."
+        : "auth.json imported. Codex runs are authorized with ChatGPT."
+    : "Import auth.json to authorize Codex runs."
   const visibleError = switchError || authError
 
   async function selectProfile(profile: string) {
@@ -204,38 +201,18 @@ export function ChatGPTConnectionRow({
         </div>
         <button
           type="button"
-          className={navAction}
+          className={
+            connected && !activeAccount?.invalidatedAt ? navAction : navPrimary
+          }
           onClick={() => dispatch({ type: "import-open" })}
         >
           <FileUp className="size-3.5" />
           Import auth.json
         </button>
-        <form action="/api/codex-auth/login" method="get">
-          {reconnectProfile ? (
-            <input type="hidden" name="profile" value={reconnectProfile} />
-          ) : connected ? (
-            <input type="hidden" name="add" value="1" />
-          ) : null}
-          <button
-            type="submit"
-            className={connected && !reconnectProfile ? navAction : navPrimary}
-          >
-            {reconnectProfile ? (
-              <RefreshCw className="size-3.5" />
-            ) : connected ? (
-              <Plus className="size-3.5" />
-            ) : null}
-            {reconnectProfile
-              ? "Reconnect"
-              : connected
-                ? "Add account"
-                : "Connect"}
-          </button>
-        </form>
       </div>
       {status?.invalidatedAt ? (
         <div className="mt-2 text-[11px] leading-4 text-destructive">
-          Reconnect ChatGPT before starting another Codex run.
+          Import a fresh auth.json before starting another Codex run.
         </div>
       ) : visibleError ? (
         <div className="mt-2 text-[11px] leading-4 text-destructive">

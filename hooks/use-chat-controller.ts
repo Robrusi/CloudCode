@@ -220,6 +220,63 @@ export function useChatController(): ChatShellProps {
       measureComposer: terminalVisible,
       measureVersion: `${activeFilePath ?? ""}:${empty ? 1 : 0}`,
     })
+  const threadBottomInset =
+    THREAD_BOTTOM_CLEARANCE +
+    (terminalVisible
+      ? Math.max(composerHeight, DEFAULT_COMPOSER_HEIGHT) + terminalHeight
+      : 0)
+
+  useEffect(() => {
+    if (terminalVisible) markTerminalDockMounted()
+  }, [markTerminalDockMounted, terminalVisible])
+
+  const {
+    codexConnected,
+    dismissOnboarding,
+    githubAppReady,
+    githubConnected,
+    githubUserReady,
+    showOnboarding,
+  } = useChatOnboarding({
+    authStatus,
+    dismissOnboarding: dismissOnboardingMutation,
+    githubStatus,
+    viewer,
+  })
+  const threadScrollable = !isMobile || !empty || showOnboarding
+  const {
+    captureThreadScrollForPanel,
+    onThreadScroll,
+    setPromptFocused,
+    setThreadElement,
+  } = useChatThreadScroll({
+    activeRunKey,
+    empty,
+    isMobile,
+    onActiveThreadReset: resetActiveThreadScroll,
+    threadBottomInset,
+    threadContentVersion,
+  })
+  const {
+    exitSettings,
+    selectChat,
+    selectSettingsSection,
+    showSettings,
+    startNewChat,
+    startNewChatInRepo,
+  } = useChatNavigation({
+    clearDraftAttachments,
+    isMobile,
+    persistDraftRepo,
+    resetThreadWorkspace,
+    setActiveId,
+    setEditingRepo,
+    setInput,
+    setPromptFocused,
+    setSettingsSection,
+    setSidebarOpen,
+    setView,
+  })
   const {
     activeQueuedMessages,
     cancelCodexRun,
@@ -256,6 +313,7 @@ export function useChatController(): ChatShellProps {
     markRunActive,
     mergeThreadRunState,
     model,
+    onAuthRequired: () => showSettings("connections"),
     queueingRunKeys,
     readyDraftAttachments,
     repoUrl,
@@ -328,63 +386,6 @@ export function useChatController(): ChatShellProps {
     setTerminalOpen,
     threadRunStateRef,
     updateThreadTitle: updateThread,
-  })
-  const threadBottomInset =
-    THREAD_BOTTOM_CLEARANCE +
-    (terminalVisible
-      ? Math.max(composerHeight, DEFAULT_COMPOSER_HEIGHT) + terminalHeight
-      : 0)
-
-  useEffect(() => {
-    if (terminalVisible) markTerminalDockMounted()
-  }, [markTerminalDockMounted, terminalVisible])
-
-  const {
-    codexConnected,
-    dismissOnboarding,
-    githubAppReady,
-    githubConnected,
-    githubUserReady,
-    showOnboarding,
-  } = useChatOnboarding({
-    authStatus,
-    dismissOnboarding: dismissOnboardingMutation,
-    githubStatus,
-    viewer,
-  })
-  const threadScrollable = !isMobile || !empty || showOnboarding
-  const {
-    captureThreadScrollForPanel,
-    onThreadScroll,
-    setPromptFocused,
-    setThreadElement,
-  } = useChatThreadScroll({
-    activeRunKey,
-    empty,
-    isMobile,
-    onActiveThreadReset: resetActiveThreadScroll,
-    threadBottomInset,
-    threadContentVersion,
-  })
-  const {
-    exitSettings,
-    selectChat,
-    selectSettingsSection,
-    showSettings,
-    startNewChat,
-    startNewChatInRepo,
-  } = useChatNavigation({
-    clearDraftAttachments,
-    isMobile,
-    persistDraftRepo,
-    resetThreadWorkspace,
-    setActiveId,
-    setEditingRepo,
-    setInput,
-    setPromptFocused,
-    setSettingsSection,
-    setSidebarOpen,
-    setView,
   })
   const {
     onAttachmentInputChange,
@@ -585,6 +586,7 @@ export function useChatController(): ChatShellProps {
         githubUserReady,
         messages,
         onDismissOnboarding: dismissOnboarding,
+        onOpenConnectionsSettings: () => showSettings("connections"),
         onOpenFile: openFile,
         onOpenFileDiff: openFileDiff,
         onScroll: onThreadScroll,
