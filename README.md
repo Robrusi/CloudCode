@@ -1,6 +1,6 @@
 # Cloudcode
 
-Cloudcode is a Next.js app for running Codex CLI on GitHub repositories inside
+Cloudcode is a Next.js app for running Codex on GitHub repositories inside
 Daytona sandboxes. It uses Clerk for sign-in, ChatGPT OAuth for Codex auth, a
 GitHub App for repository access, Convex for app data, and Trigger.dev for
 background Codex runs.
