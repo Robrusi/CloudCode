@@ -301,10 +301,15 @@ export async function stopDaytonaDesktopRecording(
   return await sandbox.computerUse.recording.stop(input.recordingId)
 }
 
-async function downloadDaytonaDesktopRecordingToCache(
-  sandboxId: string,
+async function downloadDaytonaDesktopRecordingToCache({
+  recordingId,
+  sandbox,
+  sandboxId,
+}: {
   recordingId: string
-): Promise<DaytonaDesktopRecordingFile> {
+  sandbox?: Sandbox
+  sandboxId: string
+}): Promise<DaytonaDesktopRecordingFile> {
   await mkdir(DESKTOP_RECORDING_CACHE_DIR, { recursive: true })
   await pruneDesktopRecordingCache()
 
@@ -313,8 +318,10 @@ async function downloadDaytonaDesktopRecordingToCache(
   const cached = await cachedDesktopRecordingFile(cachePath, fallbackFileName)
   if (cached) return cached
 
-  const sandbox = await getStartedDaytonaSandbox(sandboxId)
-  const recording = await sandbox.computerUse.recording.get(recordingId)
+  const recordingSandbox =
+    sandbox ?? (await getStartedDaytonaSandbox(sandboxId))
+  const recording =
+    await recordingSandbox.computerUse.recording.get(recordingId)
   const fileName = recording.fileName || fallbackFileName
   const tmpPath = join(
     DESKTOP_RECORDING_CACHE_DIR,
@@ -322,7 +329,7 @@ async function downloadDaytonaDesktopRecordingToCache(
   )
 
   try {
-    await sandbox.computerUse.recording.download(recordingId, tmpPath)
+    await recordingSandbox.computerUse.recording.download(recordingId, tmpPath)
     const fileStat = await stat(tmpPath)
     if (!fileStat.isFile() || fileStat.size < 1) {
       throw new Error("Daytona desktop recording download was empty.")
@@ -342,18 +349,34 @@ async function downloadDaytonaDesktopRecordingToCache(
 
 export async function getDaytonaDesktopRecordingFile(
   sandboxId: string,
-  recordingId: string
+  recordingId: string,
+  options: { sandbox?: Sandbox } = {}
 ) {
   const cacheKey = desktopRecordingCacheKey(sandboxId, recordingId)
   const pending = desktopRecordingDownloads.get(cacheKey)
   if (pending) return await pending
 
-  const download = downloadDaytonaDesktopRecordingToCache(
+  const download = downloadDaytonaDesktopRecordingToCache({
+    recordingId,
     sandboxId,
-    recordingId
-  ).finally(() => {
+    sandbox: options.sandbox,
+  }).finally(() => {
     desktopRecordingDownloads.delete(cacheKey)
   })
   desktopRecordingDownloads.set(cacheKey, download)
   return await download
+}
+
+export async function getCachedDaytonaDesktopRecordingFile(
+  sandboxId: string,
+  recordingId: string
+) {
+  const cacheKey = desktopRecordingCacheKey(sandboxId, recordingId)
+  const pending = desktopRecordingDownloads.get(cacheKey)
+  if (pending) return await pending.catch(() => undefined)
+
+  return await cachedDesktopRecordingFile(
+    desktopRecordingCachePath(sandboxId, recordingId),
+    `${recordingId}.mp4`
+  )
 }

@@ -1,6 +1,6 @@
 "use client"
 
-import { Loader2, RefreshCw } from "lucide-react"
+import { Loader2, Play, RefreshCw } from "lucide-react"
 import {
   type ComponentPropsWithoutRef,
   useCallback,
@@ -15,6 +15,7 @@ import {
   recordingRequestUrl,
   type RecordingVideoArtifact,
 } from "@/components/sandbox/recording-video-utils"
+import { fetchJson, requestJson } from "@/lib/http/client-json"
 import { cn } from "@/lib/shared/utils"
 
 type RecordingVideoProps = {
@@ -23,7 +24,14 @@ type RecordingVideoProps = {
   sandboxId?: string | null
 } & Omit<ComponentPropsWithoutRef<"video">, "children" | "className" | "src">
 
-type VideoLoadState = "error" | "loading" | "ready" | "retrying"
+type VideoLoadState =
+  | "checking"
+  | "error"
+  | "idle"
+  | "loading"
+  | "materializing"
+  | "ready"
+  | "retrying"
 
 const RECORDING_VIDEO_RETRY_DELAYS_MS = [1500, 3000, 6000, 10_000] as const
 
@@ -49,12 +57,22 @@ function RecordingVideoInner({
   sandboxId,
   ...videoProps
 }: RecordingVideoProps) {
+  const resolvedSandboxId = sandboxId ?? recording.sandboxId ?? null
   const [attempt, setAttempt] = useState(0)
-  const [loadState, setLoadState] = useState<VideoLoadState>("loading")
+  const [loadState, setLoadState] = useState<VideoLoadState>(() =>
+    recording.id && resolvedSandboxId ? "checking" : "idle"
+  )
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [sourceEnabled, setSourceEnabled] = useState(false)
+  const playAfterReadyRef = useRef(false)
   const retryTimeoutRef = useRef<number | null>(null)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
   const src = useMemo(
-    () => recordingRequestUrl(recording, { attempt, sandboxId }),
-    [attempt, recording, sandboxId]
+    () =>
+      sourceEnabled
+        ? recordingRequestUrl(recording, { attempt, sandboxId })
+        : null,
+    [attempt, recording, sandboxId, sourceEnabled]
   )
   const label = recordingLabel(recording)
 
@@ -66,16 +84,45 @@ function RecordingVideoInner({
 
   useEffect(() => clearRetryTimer, [clearRetryTimer])
 
-  const markReady = useCallback(() => {
-    clearRetryTimer()
-    setLoadState("ready")
-  }, [clearRetryTimer])
+  useEffect(() => {
+    if (!recording.id || !resolvedSandboxId) {
+      setLoadState("idle")
+      setSourceEnabled(false)
+      return
+    }
 
-  const retryNow = useCallback(() => {
-    clearRetryTimer()
-    setLoadState("loading")
-    setAttempt((value) => value + 1)
-  }, [clearRetryTimer])
+    const controller = new AbortController()
+    playAfterReadyRef.current = false
+    setErrorMessage(null)
+    setSourceEnabled(false)
+    setLoadState("checking")
+
+    void fetchJson<{
+      cached?: boolean
+    }>(
+      `/api/sandbox/desktop/recordings?${new URLSearchParams({
+        recordingId: recording.id,
+        sandboxId: resolvedSandboxId,
+        status: "1",
+      })}`,
+      { signal: controller.signal },
+      { fallbackError: "Unable to check recording cache." }
+    )
+      .then((result) => {
+        if (controller.signal.aborted) return
+        if (result.cached) {
+          setSourceEnabled(true)
+          setLoadState("loading")
+        } else {
+          setLoadState("idle")
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setLoadState("idle")
+      })
+
+    return () => controller.abort()
+  }, [recording.id, resolvedSandboxId])
 
   const scheduleRetry = useCallback(() => {
     clearRetryTimer()
@@ -93,7 +140,107 @@ function RecordingVideoInner({
     }, delay)
   }, [attempt, clearRetryTimer])
 
-  if (!src) return null
+  const materializeAndLoad = useCallback(async () => {
+    if (!recording.id || !resolvedSandboxId || loadState === "materializing") {
+      return
+    }
+
+    clearRetryTimer()
+    setErrorMessage(null)
+    setSourceEnabled(false)
+    setLoadState("materializing")
+
+    try {
+      await requestJson(
+        "/api/sandbox/desktop/recordings",
+        "POST",
+        {
+          action: "materialize",
+          recordingId: recording.id,
+          sandboxId: resolvedSandboxId,
+        },
+        { fallbackError: "Unable to load recording." }
+      )
+      playAfterReadyRef.current = true
+      setAttempt((value) => value + 1)
+      setSourceEnabled(true)
+      setLoadState("loading")
+    } catch (error) {
+      playAfterReadyRef.current = false
+      setErrorMessage(
+        error instanceof Error ? error.message : "Unable to load recording."
+      )
+      setLoadState("error")
+    }
+  }, [clearRetryTimer, loadState, recording.id, resolvedSandboxId])
+
+  const markReady = useCallback(() => {
+    clearRetryTimer()
+    setLoadState("ready")
+    if (playAfterReadyRef.current) {
+      playAfterReadyRef.current = false
+      void videoRef.current?.play().catch(() => undefined)
+    }
+  }, [clearRetryTimer])
+
+  const retryNow = useCallback(() => {
+    void materializeAndLoad()
+  }, [materializeAndLoad])
+
+  if (!src) {
+    const checking = loadState === "checking"
+    const materializing = loadState === "materializing"
+    const failed = loadState === "error"
+    const busy = checking || materializing
+
+    return (
+      <div
+        className="grid aspect-video place-items-center rounded-lg border border-border/60 bg-muted px-4 py-6 text-center"
+        title={label}
+      >
+        <div className="flex max-w-full flex-col items-center gap-3">
+          <span className="grid size-10 place-items-center rounded-full border border-border/70 bg-background/60 text-muted-foreground">
+            {busy ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : failed ? (
+              <RefreshCw className="size-4" />
+            ) : (
+              <Play className="size-4 fill-current" />
+            )}
+          </span>
+          <div className="max-w-full space-y-1">
+            <div className="truncate text-sm font-medium text-foreground/85">
+              Desktop recording
+            </div>
+            <div className="max-w-[24rem] text-xs break-words text-muted-foreground">
+              {failed
+                ? (errorMessage ?? "Recording could not load.")
+                : checking
+                  ? "Checking recording..."
+                  : materializing
+                    ? "Preparing recording..."
+                    : "Starts sandbox if needed."}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void materializeAndLoad()}
+            disabled={busy || !recording.id || !resolvedSandboxId}
+            className="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-background px-3 text-xs font-medium text-foreground/85 transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-60"
+          >
+            {busy ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : failed ? (
+              <RefreshCw className="size-3.5" />
+            ) : (
+              <Play className="size-3.5 fill-current" />
+            )}
+            <span>{failed ? "Retry" : "Load recording"}</span>
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   const loading = loadState === "loading" || loadState === "retrying"
   const statusText =
@@ -107,6 +254,7 @@ function RecordingVideoInner({
     <div className="relative overflow-hidden rounded-lg border border-border/60 bg-muted">
       <video
         {...videoProps}
+        ref={videoRef}
         aria-label={videoProps["aria-label"] ?? `Recording video: ${label}`}
         controls
         playsInline

@@ -17,6 +17,7 @@ import {
 } from "@/lib/daytona/desktop-dependencies"
 import { desktopMcpServerScript } from "@/lib/daytona/desktop-mcp-script"
 export {
+  getCachedDaytonaDesktopRecordingFile,
   getDaytonaDesktopRecordingFile,
   listDaytonaDesktopRecordings,
   stopDaytonaDesktopAgentRecording,

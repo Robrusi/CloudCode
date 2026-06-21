@@ -4,6 +4,12 @@ import { Readable } from "node:stream"
 import { NextResponse } from "next/server"
 
 import {
+  BillingRequiredError,
+  getStartedCurrentUserDaytonaSandbox,
+  pauseCurrentUserSandboxForBilling,
+} from "@/lib/billing/server"
+import {
+  getCachedDaytonaDesktopRecordingFile,
   getDaytonaDesktopRecordingFile,
   listDaytonaDesktopRecordings,
   startDaytonaDesktopRecording,
@@ -113,6 +119,15 @@ function videoResponse(
   })
 }
 
+function recordingDownloadPath(sandboxId: string, recordingId: string) {
+  return `/api/sandbox/desktop/recordings?${new URLSearchParams({
+    download: "1",
+    inline: "1",
+    recordingId,
+    sandboxId,
+  })}`
+}
+
 export async function GET(request: Request) {
   const blocked = requireSameOrigin(request)
   if (blocked) return blocked
@@ -122,6 +137,7 @@ export async function GET(request: Request) {
   const recordingId = searchStringParam(request, "recordingId")
   const download = searchParams.get("download") === "1"
   const inline = searchParams.get("inline") === "1"
+  const status = searchParams.get("status") === "1"
 
   if (!sandboxId) {
     return jsonError("sandboxId required", 400)
@@ -130,11 +146,33 @@ export async function GET(request: Request) {
   try {
     await requireCurrentUserSandbox(sandboxId)
 
-    if (recordingId && download) {
-      const recording = await getDaytonaDesktopRecordingFile(
+    if (recordingId && status) {
+      const recording = await getCachedDaytonaDesktopRecordingFile(
         sandboxId,
         recordingId
       )
+      if (!recording) {
+        return NextResponse.json({ cached: false })
+      }
+
+      return NextResponse.json({
+        cached: true,
+        fileName: recording.fileName,
+        sizeBytes: recording.sizeBytes,
+        url: recordingDownloadPath(sandboxId, recordingId),
+      })
+    }
+
+    if (recordingId && download) {
+      const recording = await getCachedDaytonaDesktopRecordingFile(
+        sandboxId,
+        recordingId
+      )
+      if (!recording) {
+        return jsonError("Recording is not loaded yet.", 409, {
+          needsMaterialize: true,
+        })
+      }
       return videoResponse(recording, request, inline)
     }
 
@@ -177,9 +215,42 @@ export async function POST(request: Request) {
         await stopDaytonaDesktopRecording(sandboxId, { recordingId })
       )
     }
+    if (action === "materialize") {
+      if (!recordingId) return jsonError("recordingId required", 400)
+      const cached = await getCachedDaytonaDesktopRecordingFile(
+        sandboxId,
+        recordingId
+      )
+      if (cached) {
+        return NextResponse.json({
+          fileName: cached.fileName,
+          ok: true,
+          recordingId,
+          sizeBytes: cached.sizeBytes,
+        })
+      }
+
+      const { sandbox } = await getStartedCurrentUserDaytonaSandbox(sandboxId)
+      const recording = await getDaytonaDesktopRecordingFile(
+        sandboxId,
+        recordingId,
+        { sandbox }
+      )
+      return NextResponse.json({
+        fileName: recording.fileName,
+        ok: true,
+        recordingId,
+        sizeBytes: recording.sizeBytes,
+      })
+    }
 
     return jsonError("invalid recording action", 400)
   } catch (error) {
+    if (error instanceof BillingRequiredError) {
+      await pauseCurrentUserSandboxForBilling(sandboxId)
+      return jsonError(error.message, 402)
+    }
+
     return jsonError(
       error instanceof Error
         ? error.message
