@@ -92,9 +92,14 @@
   --sidebar-ring: oklch(0.708 0 0);
 }
 
-@media (display-mode: standalone) and (max-width: 767px) {
+@media (max-width: 767px) {
   :root {
     --chat-empty-bottom-space: 0.375rem;
+  }
+}
+
+@media (display-mode: standalone) and (max-width: 767px) {
+  :root {
     --chat-composer-dock-bottom-space: 0.375rem;
   }
 }
