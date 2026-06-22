@@ -1,7 +1,6 @@
 "use client"
 
 import { Download, Play } from "lucide-react"
-import { useState } from "react"
 
 import { RecordingVideo } from "@/components/sandbox/recording-video"
 import { recordingRequestUrl } from "@/components/sandbox/recording-video-utils"
@@ -55,7 +54,6 @@ function RecordingRow({
   recording: DesktopRecording
   sandboxId: string
 }) {
-  const [open, setOpen] = useState(false)
   const live = isActiveRecording(recording)
   const meta = formatRecordingMeta(recording)
   const title = recordingTitle(recording)
@@ -68,16 +66,7 @@ function RecordingRow({
     <div
       className={cn("overflow-hidden", cardSurfaceClass, "bg-background/40")}
     >
-      <button
-        type="button"
-        onClick={() => !live && setOpen((value) => !value)}
-        disabled={live}
-        aria-expanded={live ? undefined : open}
-        className={cn(
-          "flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors",
-          !live && "cursor-pointer hover:bg-sidebar-accent/50"
-        )}
-      >
+      <div className="flex w-full items-center gap-3 px-3 py-2.5 text-left">
         <div
           className={cn(
             "grid size-8 shrink-0 place-items-center rounded-md",
@@ -102,15 +91,17 @@ function RecordingRow({
           <SandboxDesktopIconLink
             href={downloadUrl ?? "#"}
             label={`Download ${title}`}
-            onClick={(event) => event.stopPropagation()}
           >
             <Download className="size-3.5" />
           </SandboxDesktopIconLink>
         ) : null}
-      </button>
-      {open && !live ? (
+      </div>
+      {!live ? (
         <div className="border-t border-border/60 bg-muted/30 p-2">
+          {/* Recordings only appear here while the sandbox is running, so
+              auto-load is always safe and never starts a stopped sandbox. */}
           <RecordingVideo
+            autoLoad
             aria-label={`Recording: ${title}`}
             recording={recording}
             sandboxId={sandboxId}

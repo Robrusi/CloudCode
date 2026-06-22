@@ -286,11 +286,46 @@ export async function stopDaytonaDesktopAgentRecording(
   )
 }
 
+function recordingStatusIsActive(status: unknown) {
+  if (typeof status !== "string") return false
+  const value = status.toLowerCase()
+  return value === "active" || value === "recording" || value === "running"
+}
+
+/**
+ * While the sandbox is already running, eagerly download completed recordings
+ * into the on-disk cache so they load instantly (and stay viewable after the
+ * sandbox stops) without anyone clicking "Load recording". Fire-and-forget:
+ * the in-flight map and the cache check keep repeated polls cheap, and we reuse
+ * the started sandbox handle so this never starts a stopped sandbox.
+ */
+function cacheCompletedRecordingsInBackground(
+  sandboxId: string,
+  sandbox: Sandbox,
+  listed: unknown
+) {
+  if (!listed || typeof listed !== "object") return
+  const recordings = (listed as { recordings?: unknown }).recordings
+  if (!Array.isArray(recordings)) return
+  for (const entry of recordings) {
+    if (!entry || typeof entry !== "object") continue
+    const id = (entry as { id?: unknown }).id
+    if (typeof id !== "string" || !id.trim()) continue
+    if (recordingStatusIsActive((entry as { status?: unknown }).status))
+      continue
+    void getDaytonaDesktopRecordingFile(sandboxId, id.trim(), {
+      sandbox,
+    }).catch(() => undefined)
+  }
+}
+
 export async function listDaytonaDesktopRecordings(sandboxId: string) {
   const sandbox = await getDaytonaSandbox(sandboxId)
   await sandbox.refreshData().catch(() => undefined)
   if (sandbox.state !== "started") return { recordings: [] }
-  return await sandbox.computerUse.recording.list()
+  const listed = await sandbox.computerUse.recording.list()
+  cacheCompletedRecordingsInBackground(sandboxId, sandbox, listed)
+  return listed
 }
 
 export async function stopDaytonaDesktopRecording(

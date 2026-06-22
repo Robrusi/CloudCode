@@ -19,6 +19,14 @@ import { fetchJson, requestJson } from "@/lib/http/client-json"
 import { cn } from "@/lib/shared/utils"
 
 type RecordingVideoProps = {
+  /**
+   * When the sandbox is already running, auto-load the recording (caching it in
+   * the background if needed) instead of showing a manual "Load recording"
+   * button. Callers must only set this when loading cannot start a stopped
+   * sandbox — e.g. the recordings panel, which only lists recordings while the
+   * sandbox is running.
+   */
+  autoLoad?: boolean
   className?: string
   recording: RecordingVideoArtifact
   sandboxId?: string | null
@@ -52,6 +60,7 @@ export function RecordingVideo({
 }
 
 function RecordingVideoInner({
+  autoLoad,
   className,
   recording,
   sandboxId,
@@ -64,6 +73,7 @@ function RecordingVideoInner({
   )
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [sourceEnabled, setSourceEnabled] = useState(false)
+  const [pendingAutoLoad, setPendingAutoLoad] = useState(false)
   const playAfterReadyRef = useRef(false)
   const retryTimeoutRef = useRef<number | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -95,6 +105,7 @@ function RecordingVideoInner({
     playAfterReadyRef.current = false
     setErrorMessage(null)
     setSourceEnabled(false)
+    setPendingAutoLoad(false)
     setLoadState("checking")
 
     void fetchJson<{
@@ -115,6 +126,11 @@ function RecordingVideoInner({
           setLoadState("loading")
         } else {
           setLoadState("idle")
+          // When the sandbox is already running (panel context), download and
+          // play the recording automatically instead of waiting for a manual
+          // "Load recording" click. A separate effect performs the one-shot
+          // materialize so it sees the latest callback identity.
+          if (autoLoad) setPendingAutoLoad(true)
         }
       })
       .catch(() => {
@@ -122,7 +138,7 @@ function RecordingVideoInner({
       })
 
     return () => controller.abort()
-  }, [recording.id, resolvedSandboxId])
+  }, [autoLoad, recording.id, resolvedSandboxId])
 
   const scheduleRetry = useCallback(() => {
     clearRetryTimer()
@@ -140,39 +156,55 @@ function RecordingVideoInner({
     }, delay)
   }, [attempt, clearRetryTimer])
 
-  const materializeAndLoad = useCallback(async () => {
-    if (!recording.id || !resolvedSandboxId || loadState === "materializing") {
-      return
-    }
+  const materializeAndLoad = useCallback(
+    async (autoplay = true) => {
+      if (
+        !recording.id ||
+        !resolvedSandboxId ||
+        loadState === "materializing"
+      ) {
+        return
+      }
 
-    clearRetryTimer()
-    setErrorMessage(null)
-    setSourceEnabled(false)
-    setLoadState("materializing")
+      clearRetryTimer()
+      setErrorMessage(null)
+      setSourceEnabled(false)
+      setLoadState("materializing")
 
-    try {
-      await requestJson(
-        "/api/sandbox/desktop/recordings",
-        "POST",
-        {
-          action: "materialize",
-          recordingId: recording.id,
-          sandboxId: resolvedSandboxId,
-        },
-        { fallbackError: "Unable to load recording." }
-      )
-      playAfterReadyRef.current = true
-      setAttempt((value) => value + 1)
-      setSourceEnabled(true)
-      setLoadState("loading")
-    } catch (error) {
-      playAfterReadyRef.current = false
-      setErrorMessage(
-        error instanceof Error ? error.message : "Unable to load recording."
-      )
-      setLoadState("error")
-    }
-  }, [clearRetryTimer, loadState, recording.id, resolvedSandboxId])
+      try {
+        await requestJson(
+          "/api/sandbox/desktop/recordings",
+          "POST",
+          {
+            action: "materialize",
+            recordingId: recording.id,
+            sandboxId: resolvedSandboxId,
+          },
+          { fallbackError: "Unable to load recording." }
+        )
+        playAfterReadyRef.current = autoplay
+        setAttempt((value) => value + 1)
+        setSourceEnabled(true)
+        setLoadState("loading")
+      } catch (error) {
+        playAfterReadyRef.current = false
+        setErrorMessage(
+          error instanceof Error ? error.message : "Unable to load recording."
+        )
+        setLoadState("error")
+      }
+    },
+    [clearRetryTimer, loadState, recording.id, resolvedSandboxId]
+  )
+
+  // One-shot background materialize for `autoLoad` recordings that were not yet
+  // cached. The `pendingAutoLoad` flag is cleared before dispatching so a flaky
+  // download settles into the error state instead of re-triggering a loop.
+  useEffect(() => {
+    if (!pendingAutoLoad || loadState !== "idle") return
+    setPendingAutoLoad(false)
+    void materializeAndLoad(false)
+  }, [loadState, materializeAndLoad, pendingAutoLoad])
 
   const markReady = useCallback(() => {
     clearRetryTimer()
@@ -189,9 +221,9 @@ function RecordingVideoInner({
 
   if (!src) {
     const checking = loadState === "checking"
-    const materializing = loadState === "materializing"
+    const preparing = loadState === "materializing" || pendingAutoLoad
     const failed = loadState === "error"
-    const busy = checking || materializing
+    const busy = checking || preparing
 
     return (
       <div
@@ -217,7 +249,7 @@ function RecordingVideoInner({
                 ? (errorMessage ?? "Recording could not load.")
                 : checking
                   ? "Checking recording..."
-                  : materializing
+                  : preparing
                     ? "Preparing recording..."
                     : "Starts sandbox if needed."}
             </div>
