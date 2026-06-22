@@ -270,7 +270,7 @@ function ChatEmptyState({
   thread: ThreadContent
 }) {
   return (
-    <div className="flex min-h-full flex-col items-center justify-end pb-[calc(var(--chat-empty-bottom-space)+env(safe-area-inset-bottom))] md:min-h-0 md:justify-start md:pt-[22vh] md:pb-0">
+    <div className="flex min-h-full flex-col items-center justify-end pb-[max(var(--chat-empty-bottom-space),env(safe-area-inset-bottom))] md:min-h-0 md:justify-start md:pt-[22vh] md:pb-0">
       <h1 className="text-center text-2xl font-normal tracking-tight text-balance text-foreground/90 md:text-3xl">
         {thread.showOnboarding
           ? thread.userFirstName
@@ -334,7 +334,7 @@ function ChatComposerDock({
   return (
     <div
       ref={composer.ref}
-      className="shrink-0 bg-background px-3 pt-1 pb-[calc(var(--chat-composer-dock-bottom-space)+env(safe-area-inset-bottom))] md:px-4 md:pt-3 md:pb-[calc(1.5rem+env(safe-area-inset-bottom))]"
+      className="shrink-0 bg-background px-3 pt-1 pb-[max(var(--chat-composer-dock-bottom-space),env(safe-area-inset-bottom))] md:px-4 md:pt-3 md:pb-[max(1.5rem,env(safe-area-inset-bottom))]"
     >
       <div className="flex justify-center">
         <ChatComposerInstance composer={composer} />
