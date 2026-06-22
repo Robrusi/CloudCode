@@ -19,14 +19,6 @@ import { fetchJson, requestJson } from "@/lib/http/client-json"
 import { cn } from "@/lib/shared/utils"
 
 type RecordingVideoProps = {
-  /**
-   * When the sandbox is already running, auto-load the recording (caching it in
-   * the background if needed) instead of showing a manual "Load recording"
-   * button. Callers must only set this when loading cannot start a stopped
-   * sandbox — e.g. the recordings panel, which only lists recordings while the
-   * sandbox is running.
-   */
-  autoLoad?: boolean
   className?: string
   recording: RecordingVideoArtifact
   sandboxId?: string | null
@@ -60,7 +52,6 @@ export function RecordingVideo({
 }
 
 function RecordingVideoInner({
-  autoLoad,
   className,
   recording,
   sandboxId,
@@ -110,6 +101,7 @@ function RecordingVideoInner({
 
     void fetchJson<{
       cached?: boolean
+      running?: boolean
     }>(
       `/api/sandbox/desktop/recordings?${new URLSearchParams({
         recordingId: recording.id,
@@ -126,11 +118,12 @@ function RecordingVideoInner({
           setLoadState("loading")
         } else {
           setLoadState("idle")
-          // When the sandbox is already running (panel context), download and
-          // play the recording automatically instead of waiting for a manual
-          // "Load recording" click. A separate effect performs the one-shot
-          // materialize so it sees the latest callback identity.
-          if (autoLoad) setPendingAutoLoad(true)
+          // When the sandbox is already running, download and play the
+          // recording automatically instead of waiting for a manual "Load
+          // recording" click — loading cannot start a stopped sandbox here. A
+          // separate effect performs the one-shot materialize so it sees the
+          // latest callback identity.
+          if (result.running) setPendingAutoLoad(true)
         }
       })
       .catch(() => {
@@ -138,7 +131,7 @@ function RecordingVideoInner({
       })
 
     return () => controller.abort()
-  }, [autoLoad, recording.id, resolvedSandboxId])
+  }, [recording.id, resolvedSandboxId])
 
   const scheduleRetry = useCallback(() => {
     clearRetryTimer()
@@ -197,9 +190,10 @@ function RecordingVideoInner({
     [clearRetryTimer, loadState, recording.id, resolvedSandboxId]
   )
 
-  // One-shot background materialize for `autoLoad` recordings that were not yet
-  // cached. The `pendingAutoLoad` flag is cleared before dispatching so a flaky
-  // download settles into the error state instead of re-triggering a loop.
+  // One-shot background materialize for a not-yet-cached recording whose
+  // sandbox is already running. The `pendingAutoLoad` flag is cleared before
+  // dispatching so a flaky download settles into the error state instead of
+  // re-triggering a loop.
   useEffect(() => {
     if (!pendingAutoLoad || loadState !== "idle") return
     setPendingAutoLoad(false)
@@ -226,49 +220,25 @@ function RecordingVideoInner({
     const busy = checking || preparing
     const disabled = busy || !recording.id || !resolvedSandboxId
 
-    const heading = failed ? "Retry" : busy ? "Loading…" : "Load recording"
-    const caption = failed
-      ? (errorMessage ?? "Recording could not load.")
-      : busy
-        ? "Preparing the recording…"
-        : "Desktop screen recording"
-
     return (
       <div
-        className="relative grid aspect-video place-items-center overflow-hidden rounded-lg border border-border/60 bg-gradient-to-b from-muted/70 to-muted"
-        title={label}
+        className="grid aspect-video place-items-center rounded-lg border border-border/60 bg-muted"
+        title={failed ? (errorMessage ?? "Recording could not load.") : label}
       >
         <button
           type="button"
           onClick={() => void materializeAndLoad()}
           disabled={disabled}
           aria-label={failed ? "Retry loading recording" : "Load recording"}
-          className="group flex flex-col items-center gap-3 rounded-lg px-6 text-center outline-none focus-visible:ring-2 focus-visible:ring-ring/70 disabled:cursor-default"
+          className="grid size-12 place-items-center rounded-full border border-border/70 bg-background/70 text-foreground/80 shadow-sm backdrop-blur transition-transform duration-200 outline-none focus-visible:ring-2 focus-visible:ring-ring/70 enabled:hover:scale-105 enabled:hover:text-foreground enabled:active:scale-95 disabled:cursor-default disabled:text-muted-foreground"
         >
-          <span
-            className={cn(
-              "grid size-14 place-items-center rounded-full border border-border/70 bg-background/70 text-foreground/90 shadow-sm backdrop-blur transition-transform duration-200",
-              busy && "text-muted-foreground",
-              !disabled &&
-                "group-hover:scale-105 group-hover:border-foreground/25 group-hover:text-foreground group-active:scale-95"
-            )}
-          >
-            {busy ? (
-              <Loader2 className="size-5 animate-spin" />
-            ) : failed ? (
-              <RefreshCw className="size-5" />
-            ) : (
-              <Play className="size-5 translate-x-px fill-current" />
-            )}
-          </span>
-          <span className="flex flex-col gap-0.5">
-            <span className="text-sm font-medium text-foreground/90">
-              {heading}
-            </span>
-            <span className="max-w-[22rem] text-xs break-words text-muted-foreground">
-              {caption}
-            </span>
-          </span>
+          {busy ? (
+            <Loader2 className="size-5 animate-spin" />
+          ) : failed ? (
+            <RefreshCw className="size-5" />
+          ) : (
+            <Play className="size-5 translate-x-px fill-current" />
+          )}
         </button>
       </div>
     )

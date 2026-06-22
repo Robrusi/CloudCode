@@ -98,10 +98,7 @@ function RecordingRow({
       </div>
       {!live ? (
         <div className="border-t border-border/60 bg-muted/30 p-2">
-          {/* Recordings only appear here while the sandbox is running, so
-              auto-load is always safe and never starts a stopped sandbox. */}
           <RecordingVideo
-            autoLoad
             aria-label={`Recording: ${title}`}
             recording={recording}
             sandboxId={sandboxId}

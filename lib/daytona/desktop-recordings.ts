@@ -328,6 +328,17 @@ export async function listDaytonaDesktopRecordings(sandboxId: string) {
   return listed
 }
 
+/**
+ * Whether the sandbox is currently running, so a recording can be downloaded
+ * (and played) without starting a stopped sandbox. Used to decide between
+ * auto-loading a recording and showing the manual "Load recording" fallback.
+ */
+export async function isDaytonaDesktopSandboxRunning(sandboxId: string) {
+  const sandbox = await getDaytonaSandbox(sandboxId)
+  await sandbox.refreshData().catch(() => undefined)
+  return sandbox.state === "started"
+}
+
 export async function stopDaytonaDesktopRecording(
   sandboxId: string,
   input: RecordingStopInput

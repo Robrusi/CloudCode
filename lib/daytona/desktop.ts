@@ -19,6 +19,7 @@ import { desktopMcpServerScript } from "@/lib/daytona/desktop-mcp-script"
 export {
   getCachedDaytonaDesktopRecordingFile,
   getDaytonaDesktopRecordingFile,
+  isDaytonaDesktopSandboxRunning,
   listDaytonaDesktopRecordings,
   stopDaytonaDesktopAgentRecording,
   stopDaytonaDesktopRecording,

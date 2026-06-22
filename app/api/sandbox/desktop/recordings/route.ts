@@ -11,6 +11,7 @@ import {
 import {
   getCachedDaytonaDesktopRecordingFile,
   getDaytonaDesktopRecordingFile,
+  isDaytonaDesktopSandboxRunning,
   listDaytonaDesktopRecordings,
   startDaytonaDesktopRecording,
   stopDaytonaDesktopRecording,
@@ -152,7 +153,11 @@ export async function GET(request: Request) {
         recordingId
       )
       if (!recording) {
-        return NextResponse.json({ cached: false })
+        // Report whether the sandbox is already running so the client can
+        // auto-load (and cache) the recording without starting a stopped
+        // sandbox. Only runs on a cache miss to keep the check cheap.
+        const running = await isDaytonaDesktopSandboxRunning(sandboxId)
+        return NextResponse.json({ cached: false, running })
       }
 
       return NextResponse.json({
