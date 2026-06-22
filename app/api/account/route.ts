@@ -30,7 +30,10 @@ export async function DELETE(request: Request) {
     }
 
     const client = await convexHttpClientForSession(session)
-    const { sandboxIds } = await client.mutation(api.users.deleteAccount, {})
+    const { sandboxIds } = (await client.mutation(
+      api.users.deleteAccount,
+      {}
+    )) as { sandboxIds: string[] }
 
     await Promise.all(
       sandboxIds.map((sandboxId) => deleteDaytonaSandboxQuietly(sandboxId))

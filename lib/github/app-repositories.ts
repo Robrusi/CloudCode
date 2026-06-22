@@ -91,7 +91,7 @@ async function createGitHubInstallationAccessToken({
 export async function listGitHubAppInstallationRepositories(
   token: string,
   installationId: string
-) {
+): Promise<GitHubAppRepository[]> {
   const repositories: GitHubAppRepository[] = []
 
   for (let page = 1; ; page += 1) {

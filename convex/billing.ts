@@ -1,6 +1,7 @@
 import { v } from "convex/values"
 
 import { api, internal } from "./_generated/api"
+import type { Doc } from "./_generated/dataModel"
 import {
   action,
   internalMutation,
@@ -9,7 +10,11 @@ import {
 } from "./_generated/server"
 import { getCurrentUser } from "./lib/users"
 import { requireWorkerSecret } from "./lib/workerAuth"
-import { BILLING_FREE_PLAN_ID, type UsageHoursInfo } from "@/lib/billing/model"
+import {
+  BILLING_FREE_PLAN_ID,
+  type BillingPlanId,
+  type UsageHoursInfo,
+} from "@/lib/billing/model"
 import {
   applySandboxObservationMutation,
   localUsageSummary,
@@ -60,6 +65,12 @@ const sandboxSegmentSource = v.union(
   v.literal("webhook")
 )
 
+type EnsureFreePlanResult = {
+  customerId: string
+  planId: BillingPlanId
+  synced: boolean
+}
+
 export const viewer = query({
   args: {},
   handler: async (ctx) => {
@@ -105,6 +116,39 @@ export const syncCurrentUserCustomer = action({
     if (!user) throw new Error("Not authenticated.")
     await ensureAutumnCustomer(ctx, user)
     return { customerId: autumnCustomerId(user._id) }
+  },
+})
+
+export const ensureCurrentUserFreePlan = action({
+  args: {},
+  handler: async (ctx): Promise<EnsureFreePlanResult> => {
+    const user = (await ctx.runQuery(
+      api.users.viewer,
+      {}
+    )) as BillingUser | null
+    if (!user) throw new Error("Not authenticated.")
+
+    const existing = (await ctx.runQuery(
+      internal.billing.customerRecordForUser,
+      {
+        userId: user._id,
+      }
+    )) as Doc<"billingCustomers"> | null
+    if (existing?.planId) {
+      return {
+        customerId: existing.autumnCustomerId,
+        planId: existing.planId,
+        synced: false,
+      }
+    }
+
+    const { customer, customerId } = await ensureAutumnCustomer(ctx, user)
+    const plan = resolveActivePlan(customer)
+    return {
+      customerId,
+      planId: plan.planId ?? BILLING_FREE_PLAN_ID,
+      synced: true,
+    }
   },
 })
 
@@ -426,6 +470,18 @@ export const userForBilling = internalQuery({
   },
   handler: async (ctx, args) => {
     return await ctx.db.get(args.userId)
+  },
+})
+
+export const customerRecordForUser = internalQuery({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("billingCustomers")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .unique()
   },
 })
 

@@ -25,6 +25,7 @@ import {
 } from "@/lib/github/app-status"
 import type {
   GitHubAppOrganization,
+  GitHubAppRepository,
   GitHubAppStatus,
   GitHubAppUserAuth,
   GitHubAppUserStatus,
@@ -302,7 +303,9 @@ export async function saveGitHubAppInstallation(
   })) satisfies StoredGitHubAppInstallation
 }
 
-export async function getCurrentGitHubAppInstallations() {
+export async function getCurrentGitHubAppInstallations(): Promise<
+  StoredGitHubAppInstallation[]
+> {
   const client = await getClient()
   return (await client.query(
     api.githubApp.list,
@@ -331,7 +334,9 @@ async function replaceCurrentGitHubAppInstallations(
   }
 }
 
-export async function syncCurrentGitHubAppUserInstallations() {
+export async function syncCurrentGitHubAppUserInstallations(): Promise<
+  StoredGitHubAppInstallation[]
+> {
   if (!isGitHubAppConfigured() || !isGitHubAppUserAuthConfigured()) {
     return []
   }
@@ -376,7 +381,9 @@ export async function disconnectCurrentGitHubAppUser(): Promise<GitHubDisconnect
   }
 }
 
-async function listGitHubAppUserInstallations(token: string) {
+async function listGitHubAppUserInstallations(
+  token: string
+): Promise<StoredGitHubAppInstallation[]> {
   const installations: StoredGitHubAppInstallation[] = []
 
   for (let page = 1; ; page += 1) {
@@ -427,7 +434,7 @@ export async function listCurrentGitHubAppRepositories() {
     )
   }
 
-  const repositories = (
+  const repositories: GitHubAppRepository[] = (
     await Promise.all(
       installations.map((installation) =>
         listGitHubAppInstallationRepositories(
@@ -439,7 +446,9 @@ export async function listCurrentGitHubAppRepositories() {
   ).flat()
 
   return [
-    ...new Map(repositories.map((repo) => [repo.id, repo])).values(),
+    ...new Map<string, GitHubAppRepository>(
+      repositories.map((repo) => [repo.id, repo])
+    ).values(),
   ].sort((a, b) => a.fullName.localeCompare(b.fullName))
 }
 

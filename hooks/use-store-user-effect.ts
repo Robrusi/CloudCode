@@ -1,15 +1,18 @@
 "use client"
 
 import { useUser } from "@clerk/nextjs"
-import { useConvexAuth, useMutation } from "convex/react"
+import { useAction, useConvexAuth, useMutation } from "convex/react"
 import { useEffect, useState } from "react"
 
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 
+const freePlanEnsures = new Map<string, Promise<void>>()
+
 export function useStoreUserEffect() {
   const { isAuthenticated, isLoading } = useConvexAuth()
   const { user } = useUser()
+  const ensureFreePlan = useAction(api.billing.ensureCurrentUserFreePlan)
   const storeUser = useMutation(api.users.store)
   const [storedUser, setStoredUser] = useState<{
     clerkUserId: string
@@ -26,6 +29,19 @@ export function useStoreUserEffect() {
 
     async function store() {
       const id = await storeUser()
+      try {
+        let ensure = freePlanEnsures.get(clerkUserId)
+        if (!ensure) {
+          ensure = ensureFreePlan({}).then(() => undefined)
+          freePlanEnsures.set(clerkUserId, ensure)
+        }
+        await ensure
+      } catch (error) {
+        console.warn("Unable to ensure signup billing plan.", error)
+      } finally {
+        freePlanEnsures.delete(clerkUserId)
+      }
+
       if (!cancelled) {
         setStoredUser({ clerkUserId, convexUserId: id })
       }
@@ -36,7 +52,7 @@ export function useStoreUserEffect() {
     return () => {
       cancelled = true
     }
-  }, [isAuthenticated, storeUser, user?.id])
+  }, [ensureFreePlan, isAuthenticated, storeUser, user?.id])
 
   const hasStoredCurrentUser = storedUser?.clerkUserId === user?.id
 
