@@ -29,6 +29,55 @@ export const BILLING_PLANS = [
 
 export type BillingPlanId = (typeof BILLING_PLANS)[number]["planId"]
 
+/**
+ * Why a reward / promo code redemption failed, normalized away from Autumn's
+ * internal error codes so the same reason can be surfaced consistently on the
+ * client (Convex redacts raw thrown error messages in production).
+ */
+export type RedeemCodeFailure =
+  | "invalid"
+  | "max_redemptions"
+  | "already_redeemed"
+  | "not_eligible"
+  | "unavailable"
+  | "unknown"
+
+const REDEEM_CODE_FAILURE_MESSAGES: Record<RedeemCodeFailure, string> = {
+  invalid: "That code isn’t valid. Double-check it and try again.",
+  max_redemptions: "This code has reached its redemption limit.",
+  already_redeemed: "You’ve already redeemed this code.",
+  not_eligible: "This code is only available to new customers.",
+  unavailable: "This code can’t be redeemed right now. Please try again later.",
+  unknown: "We couldn’t redeem that code. Please try again.",
+}
+
+export function redeemCodeFailureMessage(reason: RedeemCodeFailure): string {
+  return REDEEM_CODE_FAILURE_MESSAGES[reason]
+}
+
+/** Map an Autumn API error code onto a normalized redemption failure reason. */
+export function redeemCodeFailureFromAutumnCode(
+  autumnCode: string | null | undefined
+): RedeemCodeFailure {
+  switch (autumnCode) {
+    case "reward_not_found":
+    case "reward_program_not_found":
+    case "referral_code_not_found":
+    case "referral_not_found":
+      return "invalid"
+    case "referral_code_max_redemptions_reached":
+      return "max_redemptions"
+    case "customer_already_redeemed_referral_code":
+      return "already_redeemed"
+    case "promo_code_first_time_only":
+      return "not_eligible"
+    case "invalid_reward":
+      return "unavailable"
+    default:
+      return "unknown"
+  }
+}
+
 export type BillingUsageSource = "trigger" | "daytona" | "reconciliation"
 
 export type DaytonaBillingState =

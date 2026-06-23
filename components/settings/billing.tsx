@@ -12,12 +12,14 @@ import {
   statusIdle,
   statusOk,
 } from "@/components/settings/shared"
+import { Input } from "@/components/ui/input"
 import { api } from "@/convex/_generated/api"
 import {
   BILLING_PLANS,
   type BillingPlanId,
   type UsageHoursInfo,
   planIncludedTimeLabel,
+  redeemCodeFailureMessage,
 } from "@/lib/billing/model"
 import { cn } from "@/lib/shared/utils"
 
@@ -34,8 +36,11 @@ type LiveBillingPlan = BillingPlanDetail & {
 type BillingSettingsState = {
   busyPlanId: BillingPlanId | null
   cancelingScheduledPlan: boolean
+  codeInput: string
   error: string
   planDetail: BillingPlanDetail | null
+  redeemFeedback: { ok: boolean; text: string } | null
+  redeemingCode: boolean
   syncing: boolean
   usage: UsageHoursInfo | null
 }
@@ -50,12 +55,20 @@ type BillingSettingsAction =
   | { type: "sync-start" }
   | { planId: BillingPlanId; type: "purchase-start" }
   | { type: "purchase-finish" }
+  | { value: string; type: "code-input" }
+  | { type: "redeem-start" }
+  | { type: "redeem-finish" }
+  | { plan: LiveBillingPlan; type: "redeem-success" }
+  | { message: string; type: "redeem-error" }
 
 const initialBillingSettingsState: BillingSettingsState = {
   busyPlanId: null,
   cancelingScheduledPlan: false,
+  codeInput: "",
   error: "",
   planDetail: null,
+  redeemFeedback: null,
+  redeemingCode: false,
   syncing: true,
   usage: null,
 }
@@ -77,8 +90,30 @@ function billingSettingsReducer(
       return { ...state, cancelingScheduledPlan: false }
     case "cancel-start":
       return { ...state, cancelingScheduledPlan: true, error: "" }
+    case "code-input":
+      return { ...state, codeInput: action.value }
     case "error":
       return { ...state, error: action.error }
+    case "redeem-start":
+      return { ...state, redeemFeedback: null, redeemingCode: true }
+    case "redeem-finish":
+      return { ...state, redeemingCode: false }
+    case "redeem-success":
+      return {
+        ...state,
+        codeInput: "",
+        planDetail: livePlanDetail(action.plan),
+        redeemFeedback: {
+          ok: true,
+          text: "Code redeemed — usage added to your balance.",
+        },
+        usage: action.plan.usage,
+      }
+    case "redeem-error":
+      return {
+        ...state,
+        redeemFeedback: { ok: false, text: action.message },
+      }
     case "plan-loaded":
       return {
         ...state,
@@ -159,6 +194,7 @@ export function BillingSettings() {
     api.billing.cancelCurrentUserScheduledPlan
   )
   const refreshPlan = useAction(api.billing.refreshCurrentUserPlan)
+  const redeemCode = useAction(api.billing.redeemCurrentUserCode)
   const [state, dispatch] = useReducer(
     billingSettingsReducer,
     initialBillingSettingsState
@@ -166,8 +202,11 @@ export function BillingSettings() {
   const {
     busyPlanId,
     cancelingScheduledPlan,
+    codeInput,
     error,
     planDetail,
+    redeemFeedback,
+    redeemingCode,
     syncing,
     usage,
   } = state
@@ -222,6 +261,32 @@ export function BillingSettings() {
       })
     } finally {
       dispatch({ type: "purchase-finish" })
+    }
+  }
+
+  async function submitCode() {
+    const code = codeInput.trim()
+    if (!code || redeemingCode) return
+
+    dispatch({ type: "redeem-start" })
+
+    try {
+      const result = await redeemCode({ code })
+      if (result.ok) {
+        dispatch({ plan: result.plan, type: "redeem-success" })
+      } else {
+        dispatch({
+          message: redeemCodeFailureMessage(result.reason),
+          type: "redeem-error",
+        })
+      }
+    } catch {
+      dispatch({
+        message: redeemCodeFailureMessage("unknown"),
+        type: "redeem-error",
+      })
+    } finally {
+      dispatch({ type: "redeem-finish" })
     }
   }
 
@@ -394,6 +459,66 @@ export function BillingSettings() {
               </div>
             )
           })}
+        </div>
+
+        <div className="space-y-2">
+          <div className="space-y-0.5">
+            <label
+              htmlFor="billing-redeem-code"
+              className="block text-sm font-medium text-foreground"
+            >
+              Redeem a code
+            </label>
+            <p className="text-xs text-muted-foreground">
+              Have a promo or gift code? Add it to top up your usage balance.
+            </p>
+          </div>
+          <form
+            className="flex items-center gap-2"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void submitCode()
+            }}
+          >
+            <Input
+              id="billing-redeem-code"
+              className="flex-1"
+              autoCapitalize="characters"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="Enter a code"
+              value={codeInput}
+              disabled={redeemingCode}
+              onChange={(event) =>
+                dispatch({ type: "code-input", value: event.target.value })
+              }
+            />
+            <button
+              type="submit"
+              disabled={redeemingCode || !codeInput.trim()}
+              className={cn(navPrimary, "h-9")}
+            >
+              {redeemingCode ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : null}
+              Redeem
+            </button>
+          </form>
+          {redeemFeedback ? (
+            <div
+              className={cn(
+                "flex items-center gap-1.5 text-[11px] leading-4",
+                redeemFeedback.ok ? statusOk : "text-destructive"
+              )}
+            >
+              {redeemFeedback.ok ? (
+                <Check className="size-3.5 shrink-0" />
+              ) : (
+                <X className="size-3.5 shrink-0" />
+              )}
+              <span>{redeemFeedback.text}</span>
+            </div>
+          ) : null}
         </div>
       </div>
     </SettingsPage>

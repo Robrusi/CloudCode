@@ -32,8 +32,10 @@ import {
   ensureAutumnCustomer,
   livePlanInfoWithUsage,
   recordUsageEvent,
+  redeemRewardCode,
   trackUsageEvent,
   type BillingUser,
+  type RedeemCodeResult,
 } from "./billingAutumn"
 import {
   enqueueUsageEventInMutation,
@@ -244,6 +246,24 @@ export const refreshCurrentUserPlan = action({
       customer,
       userId: user._id,
     })
+  },
+})
+
+export const redeemCurrentUserCode = action({
+  args: {
+    code: v.string(),
+  },
+  handler: async (ctx, args): Promise<RedeemCodeResult> => {
+    const user = (await ctx.runQuery(
+      api.users.viewer,
+      {}
+    )) as BillingUser | null
+    if (!user) throw new Error("Not authenticated.")
+
+    const code = args.code.trim()
+    if (!code) return { ok: false, reason: "invalid" }
+
+    return await redeemRewardCode(ctx, user, code)
   },
 })
 

@@ -4,7 +4,9 @@ import type { ActionCtx } from "./_generated/server"
 import {
   BILLING_FREE_PLAN_ID,
   BILLING_INFRA_USAGE_FEATURE_ID,
+  redeemCodeFailureFromAutumnCode,
   type BillingUsageSource,
+  type RedeemCodeFailure,
   type UsageHoursInfo,
 } from "@/lib/billing/model"
 import {
@@ -129,6 +131,57 @@ export async function ensureAutumnCustomer(ctx: ActionCtx, user: BillingUser) {
     userId: user._id,
   })
   return { autumn, customer, customerId }
+}
+
+export type RedeemCodeResult =
+  | { ok: true; plan: ActivePlanInfo & { usage: UsageHoursInfo | null } }
+  | { ok: false; reason: RedeemCodeFailure }
+
+/** Pull Autumn's error code out of whatever shape the SDK throws. */
+function autumnErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") return undefined
+
+  const direct = (error as { code?: unknown }).code
+  if (typeof direct === "string") return direct
+
+  // The SDK's AutumnError carries the raw JSON response body.
+  const body = (error as { body?: unknown }).body
+  if (typeof body === "string") {
+    try {
+      const parsed = JSON.parse(body) as { code?: unknown }
+      if (typeof parsed.code === "string") return parsed.code
+    } catch {
+      // Body was not JSON; fall through to undefined.
+    }
+  }
+
+  return undefined
+}
+
+export async function redeemRewardCode(
+  ctx: ActionCtx,
+  user: BillingUser,
+  code: string
+): Promise<RedeemCodeResult> {
+  const { autumn, customerId } = await ensureAutumnCustomer(ctx, user)
+
+  try {
+    await autumn.rewards.redeemCode({ code, customerId })
+  } catch (error) {
+    const reason = redeemCodeFailureFromAutumnCode(autumnErrorCode(error))
+    // Surface unexpected failures in logs so misconfigured rewards are visible.
+    if (reason === "unknown") {
+      console.error("Reward code redemption failed.", error)
+    }
+    return { ok: false, reason }
+  }
+
+  // Re-pull the customer so the granted balance is reflected immediately.
+  const customer = await autumn.customers.getOrCreate(
+    autumnCustomerParams(user)
+  )
+  const plan = await livePlanInfoWithUsage(ctx, { customer, userId: user._id })
+  return { ok: true, plan }
 }
 
 export async function checkRemainingInfraAccess(
