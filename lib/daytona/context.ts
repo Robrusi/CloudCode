@@ -1,12 +1,15 @@
+import { createHash } from "node:crypto"
+
 import type { Sandbox } from "@daytona/sdk"
 
 import {
   runDaytonaCommand,
   shellQuote,
+  writeDaytonaTextFile,
   type DaytonaSandboxPaths,
 } from "@/lib/daytona/sandbox"
 
-const CONTEXT_TOOL_VERSION = "1"
+const CONTEXT_TOOL_VERSION = "2"
 
 type ContextConfigInput = {
   convexUrl?: string
@@ -21,14 +24,40 @@ function base64FileCommand(path: string, content: string) {
   return `printf '%s' ${shellQuote(encoded)} | base64 -d > ${shellQuote(path)}`
 }
 
+function sha256(value: string) {
+  return createHash("sha256").update(value).digest("hex")
+}
+
+export function cloudcodeContextToolVersion() {
+  return CONTEXT_TOOL_VERSION
+}
+
+export function cloudcodeContextStatePath(
+  paths: Pick<DaytonaSandboxPaths, "codexHome">
+) {
+  return `${paths.codexHome}/context/current-run.json`
+}
+
+export function cloudcodeContextToolFingerprint(
+  paths: Pick<DaytonaSandboxPaths, "codexHome" | "home">
+) {
+  return sha256(
+    [
+      CONTEXT_TOOL_VERSION,
+      contextMcpServerScript(),
+      `${paths.codexHome}/context/cloudcode-context-mcp.mjs`,
+      `${paths.home}/.local/bin/cloudcode-notes`,
+      cloudcodeContextStatePath(paths),
+    ].join("\0")
+  )
+}
+
 function contextMcpServerScript() {
   return String.raw`#!/usr/bin/env node
+import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
-const convexUrl = (process.env.CLOUDCODE_CONVEX_URL || "").replace(/\/+$/, "");
-const runId = process.env.CLOUDCODE_RUN_ID || "";
-const threadId = process.env.CLOUDCODE_THREAD_ID || "";
-const notesAccessToken = process.env.CLOUDCODE_NOTES_ACCESS_TOKEN || "";
+const contextStatePath = process.env.CLOUDCODE_CONTEXT_STATE_PATH || "";
 
 function send(message) {
   process.stdout.write(JSON.stringify(message) + "\n");
@@ -46,10 +75,33 @@ function toolError(error) {
   return { content: [{ type: "text", text: message }], isError: true };
 }
 
+function stringValue(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function readContextState() {
+  let state = {};
+  if (contextStatePath) {
+    try {
+      state = JSON.parse(readFileSync(contextStatePath, "utf8"));
+    } catch (error) {
+      throw new Error("Shared notes context is not configured for this run.");
+    }
+  }
+
+  const convexUrl = stringValue(state.convexUrl || process.env.CLOUDCODE_CONVEX_URL).replace(/\/+$/, "");
+  const runId = stringValue(state.runId || process.env.CLOUDCODE_RUN_ID);
+  const threadId = stringValue(state.threadId || process.env.CLOUDCODE_THREAD_ID);
+  const notesAccessToken = stringValue(state.notesAccessToken || process.env.CLOUDCODE_NOTES_ACCESS_TOKEN);
+  return { convexUrl, notesAccessToken, runId, threadId };
+}
+
 function requireContext() {
-  if (!convexUrl || !runId || !threadId || !notesAccessToken) {
+  const state = readContextState();
+  if (!state.convexUrl || !state.runId || !state.threadId || !state.notesAccessToken) {
     throw new Error("Shared notes context is not configured for this run.");
   }
+  return state;
 }
 
 function stringArg(args, key, fallback = "") {
@@ -68,12 +120,17 @@ function numberArg(args, key, fallback = 1) {
 }
 
 function accessArgs() {
-  return { notesAccessToken, runId, threadId };
+  const state = requireContext();
+  return {
+    notesAccessToken: state.notesAccessToken,
+    runId: state.runId,
+    threadId: state.threadId,
+  };
 }
 
 async function convex(kind, path, args) {
-  requireContext();
-  const response = await fetch(convexUrl + "/api/" + kind, {
+  const state = requireContext();
+  const response = await fetch(state.convexUrl + "/api/" + kind, {
     body: JSON.stringify({
       args: [args],
       format: "convex_encoded_json",
@@ -315,12 +372,38 @@ export function cloudcodeContextCodexConfig({
     "startup_timeout_sec = 20",
     "",
     "[mcp_servers.cloudcode_context.env]",
-    `CLOUDCODE_CONVEX_URL = ${JSON.stringify(convexUrl)}`,
-    `CLOUDCODE_RUN_ID = ${JSON.stringify(runId)}`,
-    `CLOUDCODE_THREAD_ID = ${JSON.stringify(threadId)}`,
-    `CLOUDCODE_NOTES_ACCESS_TOKEN = ${JSON.stringify(notesAccessToken)}`,
+    `CLOUDCODE_CONTEXT_STATE_PATH = ${JSON.stringify(cloudcodeContextStatePath(paths))}`,
     "",
   ].join("\n")
+}
+
+export async function writeCloudcodeContextState(
+  sandbox: Sandbox,
+  paths: Pick<DaytonaSandboxPaths, "codexHome">,
+  input: Pick<
+    ContextConfigInput,
+    "convexUrl" | "notesAccessToken" | "runId" | "threadId"
+  >
+) {
+  if (
+    !input.convexUrl ||
+    !input.notesAccessToken ||
+    !input.runId ||
+    !input.threadId
+  ) {
+    return
+  }
+
+  await writeDaytonaTextFile(
+    sandbox,
+    cloudcodeContextStatePath(paths),
+    JSON.stringify({
+      convexUrl: input.convexUrl,
+      notesAccessToken: input.notesAccessToken,
+      runId: input.runId,
+      threadId: input.threadId,
+    })
+  )
 }
 
 export async function installCloudcodeContextTools(
@@ -332,16 +415,19 @@ export async function installCloudcodeContextTools(
   const scriptPath = `${paths.codexHome}/context/cloudcode-context-mcp.mjs`
   const binPath = `${paths.home}/.local/bin/cloudcode-notes`
   const markerPath = `${paths.codexHome}/context/tool-version`
+  const fingerprint = cloudcodeContextToolFingerprint(paths)
 
   const result = await runDaytonaCommand(
     sandbox,
     [
       "set -e",
+      `fingerprint=${shellQuote(fingerprint)}`,
+      `if [ -x ${shellQuote(scriptPath)} ] && [ -L ${shellQuote(binPath)} ] && grep -qxF -- "$fingerprint" ${shellQuote(markerPath)} 2>/dev/null; then exit 0; fi`,
       `mkdir -p ${shellQuote(`${paths.codexHome}/context`)} ${shellQuote(`${paths.home}/.local/bin`)}`,
       base64FileCommand(scriptPath, script),
       `ln -sf ${shellQuote(scriptPath)} ${shellQuote(binPath)}`,
       `chmod +x ${shellQuote(scriptPath)} ${shellQuote(binPath)}`,
-      `printf '%s\\n' ${shellQuote(CONTEXT_TOOL_VERSION)} > ${shellQuote(markerPath)}`,
+      `printf '%s\\n' "$fingerprint" > ${shellQuote(markerPath)}`,
     ].join("\n"),
     { signal, timeoutMs: 10_000 }
   )

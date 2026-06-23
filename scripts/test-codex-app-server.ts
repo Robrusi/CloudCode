@@ -35,7 +35,10 @@ import {
   type CodexRunLog as RunCodexLog,
 } from "@/lib/codex/run-log"
 import { workerRunFinalContent } from "@/lib/codex/run-worker"
-import { cloudcodeContextCodexConfig } from "@/lib/daytona/context"
+import {
+  cloudcodeContextCodexConfig,
+  cloudcodeContextStatePath,
+} from "@/lib/daytona/context"
 import {
   codexAppServerDaemonCommand,
   codexAppServerNotificationRoute,
@@ -366,8 +369,8 @@ const contextMcpConfig = cloudcodeContextCodexConfig({
 })
 assert.ok(contextMcpConfig.includes("[mcp_servers.cloudcode_context]"))
 assert.ok(contextMcpConfig.includes("cloudcode-context-mcp.mjs"))
-assert.ok(contextMcpConfig.includes("CLOUDCODE_RUN_ID"))
-assert.ok(contextMcpConfig.includes("CLOUDCODE_THREAD_ID"))
+assert.ok(contextMcpConfig.includes("CLOUDCODE_CONTEXT_STATE_PATH"))
+assert.ok(contextMcpConfig.includes(cloudcodeContextStatePath(testPaths)))
 assert.equal(
   cloudcodeContextCodexConfig({
     convexUrl: "",

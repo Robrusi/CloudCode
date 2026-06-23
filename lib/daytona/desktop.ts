@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto"
+
 import type { Sandbox } from "@daytona/sdk"
 
 import {
@@ -29,7 +31,7 @@ export {
 
 const DAYTONA_DESKTOP_PORT = 6080
 const DESKTOP_PREVIEW_TTL_SECONDS = 60 * 60
-const DESKTOP_TOOL_VERSION = "9"
+const DESKTOP_TOOL_VERSION = "10"
 const DESKTOP_BROWSER_URL = "about:blank"
 const DESKTOP_READ_TIMEOUT_MS = 8_000
 const DESKTOP_PREVIEW_TIMEOUT_MS = 8_000
@@ -284,6 +286,10 @@ function startDesktopServicesCommand() {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
+}
+
+function sha256(value: string) {
+  return createHash("sha256").update(value).digest("hex")
 }
 
 async function startDesktopServicesFallback(
@@ -544,6 +550,10 @@ function base64FileCommand(path: string, content: string) {
   return `printf '%s' ${shellQuote(encoded)} | base64 -d > ${shellQuote(path)}`
 }
 
+export function daytonaDesktopToolVersion() {
+  return DESKTOP_TOOL_VERSION
+}
+
 function desktopAgentInstructions() {
   return [
     "# Cloudcode Daytona Desktop",
@@ -620,14 +630,43 @@ function desktopCodexConfig(
   ].join("\n")
 }
 
+function desktopToolFingerprint({
+  agentsPath,
+  binPath,
+  config,
+  configPath,
+  instructions,
+  script,
+  scriptPath,
+}: {
+  agentsPath: string
+  binPath: string
+  config: string
+  configPath: string
+  instructions: string
+  script: string
+  scriptPath: string
+}) {
+  return sha256(
+    [
+      DESKTOP_TOOL_VERSION,
+      scriptPath,
+      binPath,
+      agentsPath,
+      configPath,
+      script,
+      instructions,
+      config,
+    ].join("\0")
+  )
+}
+
 export async function installDaytonaDesktopTools(
   sandbox: Sandbox,
   paths: DaytonaSandboxPaths,
   signal?: AbortSignal,
   extras: DaytonaDesktopToolExtras = {}
 ) {
-  await ensureDaytonaDesktopDependencies(sandbox, signal)
-
   const script = desktopMcpServerScript()
   const instructions = [desktopAgentInstructions(), extras.instructions]
     .filter(Boolean)
@@ -644,6 +683,32 @@ export async function installDaytonaDesktopTools(
   const agentsPath = `${paths.codexHome}/AGENTS.md`
   const configPath = `${paths.codexHome}/config.toml`
   const markerPath = `${paths.codexHome}/desktop/tool-version`
+  const fingerprint = desktopToolFingerprint({
+    agentsPath,
+    binPath,
+    config,
+    configPath,
+    instructions,
+    script,
+    scriptPath,
+  })
+
+  const marker = await runDaytonaCommand(
+    sandbox,
+    [
+      "set -e",
+      `fingerprint=${shellQuote(fingerprint)}`,
+      `test -x ${shellQuote(scriptPath)}`,
+      `test -L ${shellQuote(binPath)}`,
+      `test -s ${shellQuote(agentsPath)}`,
+      `test -s ${shellQuote(configPath)}`,
+      `grep -qxF -- "$fingerprint" ${shellQuote(markerPath)}`,
+    ].join("\n"),
+    { signal, timeoutMs: 10_000 }
+  ).catch(() => undefined)
+  if (marker?.exitCode === 0) return
+
+  await ensureDaytonaDesktopDependencies(sandbox, signal)
 
   const result = await runDaytonaCommand(
     sandbox,
@@ -655,7 +720,7 @@ export async function installDaytonaDesktopTools(
       base64FileCommand(configPath, config),
       `ln -sf ${shellQuote(scriptPath)} ${shellQuote(binPath)}`,
       `chmod +x ${shellQuote(scriptPath)} ${shellQuote(binPath)}`,
-      `printf '%s\\n' ${shellQuote(DESKTOP_TOOL_VERSION)} > ${shellQuote(markerPath)}`,
+      `printf '%s\\n' ${shellQuote(fingerprint)} > ${shellQuote(markerPath)}`,
     ].join("\n"),
     { signal, timeoutMs: 10_000 }
   )

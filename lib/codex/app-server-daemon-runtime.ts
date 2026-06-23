@@ -29,6 +29,8 @@ import {
   userMcpCodexConfig,
   type McpServerInput,
 } from "@/lib/daytona/codex-runtime"
+import { cloudcodeContextToolVersion } from "@/lib/daytona/context"
+import { daytonaDesktopToolVersion } from "@/lib/daytona/desktop"
 import type { SandboxGitHubAuth } from "@/lib/sandbox/github-auth"
 import type { SandboxPresetEnvVar } from "@/lib/sandbox/env"
 
@@ -107,8 +109,10 @@ function codexAppServerDaemonEnv({
       CODEX_APP_SERVER_REQUEST_TIMEOUT_MS
     ),
     CLOUDCODE_CODEX_LAUNCHER: paths.codexLauncherPath,
+    CLOUDCODE_CONTEXT_TOOL_VERSION: cloudcodeContextToolVersion(),
     CLOUDCODE_DAEMON_SOCKET: daemonPaths.socketPath,
     CLOUDCODE_DAEMON_STATE: daemonPaths.statePath,
+    CLOUDCODE_DESKTOP_TOOL_VERSION: daytonaDesktopToolVersion(),
     CLOUDCODE_MCP_CONFIG_HASH: sha256(userMcpCodexConfig(mcpServers)),
     CLOUDCODE_REPO_PATH: paths.repoPath,
   }
@@ -138,12 +142,37 @@ function codexAppServerDaemonRequestPath(
   return `${paths.runtimeHome}/codex-app-server/request-${label}-${Date.now()}-${randomBytes(4).toString("hex")}.json`
 }
 
+function codexAppServerDaemonScriptsFingerprint() {
+  return sha256(
+    [
+      CODEX_APP_SERVER_DAEMON_VERSION,
+      sha256(CODEX_APP_SERVER_DAEMON_SCRIPT),
+      sha256(CODEX_APP_SERVER_DAEMON_CLIENT_SCRIPT),
+    ].join("\0")
+  )
+}
+
 async function writeCodexAppServerDaemonScripts(
   sandbox: Sandbox,
   paths: DaytonaSandboxPaths,
   daemonPaths: CodexAppServerDaemonPaths,
   signal?: AbortSignal
 ) {
+  const markerPath = `${paths.runtimeHome}/codex-app-server/scripts.sha256`
+  const fingerprint = codexAppServerDaemonScriptsFingerprint()
+  const marker = await runDaytonaCommand(
+    sandbox,
+    [
+      "set -e",
+      `fingerprint=${shellQuote(fingerprint)}`,
+      `test -s ${shellQuote(daemonPaths.scriptPath)}`,
+      `test -s ${shellQuote(daemonPaths.clientPath)}`,
+      `grep -qxF -- "$fingerprint" ${shellQuote(markerPath)}`,
+    ].join("\n"),
+    { signal, timeoutMs: 10_000 }
+  ).catch(() => undefined)
+  if (marker?.exitCode === 0) return
+
   const mkdir = await runDaytonaCommand(
     sandbox,
     `mkdir -p ${shellQuote(`${paths.runtimeHome}/codex-app-server`)}`,
@@ -177,6 +206,8 @@ async function writeCodexAppServerDaemonScripts(
       `chmod 600 ${shellQuote(daemonPaths.scriptPath)} ${shellQuote(
         daemonPaths.clientPath
       )}`,
+      `printf '%s\\n' ${shellQuote(fingerprint)} > ${shellQuote(markerPath)}`,
+      `chmod 600 ${shellQuote(markerPath)}`,
     ].join("\n"),
     { signal, timeoutMs: 10_000 }
   )
