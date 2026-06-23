@@ -13,6 +13,8 @@ import { BrailleSpinner, SandboxDot } from "@/components/chat/sidebar-status"
 import type { Id } from "@/convex/_generated/dataModel"
 import { cn } from "@/lib/shared/utils"
 
+const THREAD_PREVIEW_COUNT = 6
+
 export function FolderGroup({
   label,
   repoUrl,
@@ -33,7 +35,13 @@ export function FolderGroup({
   onNewChatInRepo: (repoUrl: string) => void
 }) {
   const [open, setOpen] = useState(true)
+  const [expanded, setExpanded] = useState(false)
   const visibleItems = open ? items : items.filter(isSidebarChatRunning)
+  const canExpand = open && visibleItems.length > THREAD_PREVIEW_COUNT
+  const displayedItems =
+    canExpand && !expanded
+      ? visibleItems.slice(0, THREAD_PREVIEW_COUNT)
+      : visibleItems
 
   return (
     <div>
@@ -61,9 +69,9 @@ export function FolderGroup({
           <Plus className="size-3" />
         </button>
       </div>
-      {visibleItems.length > 0 ? (
+      {displayedItems.length > 0 ? (
         <div>
-          {visibleItems.map((chat) => (
+          {displayedItems.map((chat) => (
             <SidebarItem
               key={chat.id}
               chat={chat}
@@ -75,6 +83,18 @@ export function FolderGroup({
             />
           ))}
         </div>
+      ) : null}
+      {canExpand ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          aria-expanded={expanded}
+          className="flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-[0.75rem] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+        >
+          {expanded
+            ? "Show less"
+            : `Show ${visibleItems.length - THREAD_PREVIEW_COUNT} more`}
+        </button>
       ) : null}
     </div>
   )
