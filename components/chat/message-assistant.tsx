@@ -10,6 +10,7 @@ import {
   groupAssistantContent,
   placeToolsBeforeFinalText,
   shouldShowFinalResponseSeparator,
+  withFallbackTools,
 } from "@/components/chat/message-segments"
 import { ToolGroup } from "@/components/chat/message-tools"
 import { toolDetailsFromLogs } from "@/components/chat/tool-details"
@@ -120,7 +121,12 @@ const PendingAssistantBody = memo(function PendingAssistantBody({
 }) {
   const { grouped, hasToolMarkers } = groupAssistantContent(text)
   const fallbackTools = visibleFallbackTools(grouped, logs, hasToolMarkers)
-  const ordered = placeToolsBeforeFinalText(grouped, fallbackTools)
+  // While streaming, render parts in their natural arrival order. Reordering
+  // tools above the last text (placeToolsBeforeFinalText) is a completed-message
+  // presentation; applying it mid-stream hoists each in-progress tool above the
+  // preamble text that precedes it, then drops it back down once the next text
+  // arrives — the visible "jump" the user reported.
+  const ordered = withFallbackTools(grouped, fallbackTools)
 
   return (
     <div className="space-y-3">

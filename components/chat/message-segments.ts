@@ -109,18 +109,22 @@ export function findLastTextSegmentIndex(
   return -1
 }
 
+export function withFallbackTools(
+  grouped: AssistantGroupedSegment[],
+  fallbackTools: ParsedLogDetail[] = [],
+  fallbackKey = "fallback-tools"
+): AssistantGroupedSegment[] {
+  return fallbackTools.length > 0
+    ? [{ details: fallbackTools, key: fallbackKey, kind: "tools" }, ...grouped]
+    : [...grouped]
+}
+
 export function placeToolsBeforeFinalText(
   grouped: AssistantGroupedSegment[],
   fallbackTools: ParsedLogDetail[] = [],
   fallbackKey = "fallback-tools"
 ): AssistantGroupedSegment[] {
-  const segments: AssistantGroupedSegment[] =
-    fallbackTools.length > 0
-      ? [
-          { details: fallbackTools, key: fallbackKey, kind: "tools" },
-          ...grouped,
-        ]
-      : [...grouped]
+  const segments = withFallbackTools(grouped, fallbackTools, fallbackKey)
   const lastTextIndex = findLastTextSegmentIndex(segments)
   if (lastTextIndex === -1) return segments
 
