@@ -63,9 +63,10 @@ export async function workerInputForRun(
   ctx: MutationCtx | QueryCtx,
   run: Doc<"codexRuns">
 ) {
-  const [auth, mcpServers] = await Promise.all([
+  const [auth, mcpServers, user] = await Promise.all([
     requireCodexAuth(ctx, run.userId, run.profile),
     mcpServersForRun(ctx, run.userId),
+    ctx.db.get(run.userId),
   ])
 
   let sandboxPreset:
@@ -111,6 +112,7 @@ export async function workerInputForRun(
   }
 
   return {
+    agentInstructions: user?.agentInstructions,
     auth,
     canceled: false as const,
     mcpServers,

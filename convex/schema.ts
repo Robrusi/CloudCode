@@ -395,6 +395,7 @@ export default defineSchema({
 
   users: defineTable({
     activeCodexProfile: v.optional(v.string()),
+    agentInstructions: v.optional(v.string()),
     createdAt: v.number(),
     email: v.optional(v.string()),
     imageUrl: v.optional(v.string()),

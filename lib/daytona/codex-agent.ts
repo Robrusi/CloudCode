@@ -789,6 +789,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
           instructions: [
             githubConfig ? cloudcodeGitHubAgentInstructions() : undefined,
             contextConfig ? cloudcodeContextAgentInstructions() : undefined,
+            input.agentInstructions?.trim() || undefined,
           ]
             .filter(Boolean)
             .join("\n\n"),

@@ -104,6 +104,7 @@ type WorkerMcpServerRecord = Omit<McpServerInput, "secrets"> & {
 type WorkerRunInputResponse =
   | { canceled: true }
   | {
+      agentInstructions?: string
       auth: WorkerAuthRecord
       canceled: false
       mcpServers?: WorkerMcpServerRecord[]
@@ -375,6 +376,7 @@ export async function startAndLoadWorkerRun(
     authFingerprint: response.auth.fingerprint,
     authJson,
     input: {
+      agentInstructions: response.agentInstructions,
       authJson,
       baseBranch: response.run.baseBranch,
       branchMode: response.run.branchMode,

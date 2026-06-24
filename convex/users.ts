@@ -159,6 +159,31 @@ export const deleteAccount = mutation({
   },
 })
 
+/** Upper bound on user agent instructions; keeps the global AGENTS.md sane. */
+export const MAX_AGENT_INSTRUCTIONS_LENGTH = 10_000
+
+export const setAgentInstructions = mutation({
+  args: { instructions: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const userId = await ensureCurrentUser(ctx)
+    const trimmed = args.instructions.trim()
+
+    if (trimmed.length > MAX_AGENT_INSTRUCTIONS_LENGTH) {
+      throw new Error(
+        `Instructions must be ${MAX_AGENT_INSTRUCTIONS_LENGTH} characters or fewer.`
+      )
+    }
+
+    await ctx.db.patch(userId, {
+      agentInstructions: trimmed ? trimmed : undefined,
+      updatedAt: Date.now(),
+    })
+
+    return null
+  },
+})
+
 export const dismissOnboarding = mutation({
   args: {},
   returns: v.null(),

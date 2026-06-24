@@ -17,6 +17,7 @@ export type SandboxPresetInput = {
 }
 
 export type RunCodexInSandboxInput = {
+  agentInstructions?: string
   authJson: string
   baseBranch?: string
   branchMode?: "auto" | "custom" | "base"

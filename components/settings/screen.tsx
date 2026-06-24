@@ -3,7 +3,7 @@
 import { useQuery } from "convex/react"
 import { useCallback, useEffect, useState } from "react"
 
-import { AppearanceSettings } from "@/components/settings/appearance"
+import { CustomizationSettings } from "@/components/settings/customization"
 import { BillingSettings } from "@/components/settings/billing"
 import { ConnectionsSettings } from "@/components/settings/connections"
 import { McpSettings } from "@/components/settings/mcp"
@@ -88,7 +88,7 @@ export function SettingsScreen({
             />
           ) : null}
           {section === "presets" ? <PresetSettings presets={presets} /> : null}
-          {section === "appearance" ? <AppearanceSettings /> : null}
+          {section === "customization" ? <CustomizationSettings /> : null}
         </div>
       </div>
     </div>
