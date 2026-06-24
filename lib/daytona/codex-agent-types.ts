@@ -61,6 +61,7 @@ export type RunCodexInSandboxResult = {
   branchName: string
   codexThreadId?: string
   desktopRecording?: DaytonaDesktopRecordingArtifact
+  desktopRecordings?: DaytonaDesktopRecordingArtifact[]
   diff: string
   exitCode: number
   lastMessage: string

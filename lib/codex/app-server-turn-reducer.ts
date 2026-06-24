@@ -467,6 +467,7 @@ export function createCodexAppServerTurnReducer({
       case "thread/archived":
       case "thread/unarchived":
       case "thread/closed":
+      case "thread/deleted":
       case "skills/changed":
       case "thread/name/updated":
       case "thread/goal/updated":
@@ -474,6 +475,7 @@ export function createCodexAppServerTurnReducer({
       case "thread/settings/updated":
       case "app/list/updated":
       case "remoteControl/status/changed":
+      case "externalAgentConfig/import/progress":
       case "externalAgentConfig/import/completed":
       case "fs/changed":
       case "fuzzyFileSearch/sessionUpdated":
@@ -486,8 +488,10 @@ export function createCodexAppServerTurnReducer({
       case "thread/realtime/sdp":
       case "thread/realtime/error":
       case "thread/realtime/closed":
+      case "turn/moderationMetadata":
       case "windowsSandbox/setupCompleted":
       case "account/login/completed":
+      case "model/safetyBuffering/updated":
         return
       case "error": {
         const error = objectRecord(params?.error)

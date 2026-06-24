@@ -12,9 +12,10 @@ import {
   updateCodexCli,
 } from "@/lib/daytona/codex-cli-setup"
 import {
-  daytonaDesktopToolVersion,
+  daytonaDesktopToolContentFingerprint,
   installDaytonaDesktopTools,
-  stopDaytonaDesktopAgentRecording,
+  stopDaytonaDesktopAgentRecordings,
+  writeDaytonaDesktopAgentRunState,
   type DaytonaDesktopRecordingArtifact,
 } from "@/lib/daytona/desktop"
 import {
@@ -165,7 +166,7 @@ function hotContinuationFingerprint({
         codexCliVersion: desiredCodexCliVersion(),
         codexDaemonVersion: CODEX_APP_SERVER_DAEMON_VERSION,
         contextToolVersion: cloudcodeContextToolVersion(),
-        desktopToolVersion: daytonaDesktopToolVersion(),
+        desktopToolFingerprint: daytonaDesktopToolContentFingerprint(),
         mcpConfig,
         paths: {
           codexHome: paths.codexHome,
@@ -417,24 +418,28 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
   let stopDaytonaActivityHeartbeat: (() => void) | undefined
   let checkedDesktopAgentRecording = false
   let emittedDesktopRecordingStopError = false
-  let desktopRecording: DaytonaDesktopRecordingArtifact | undefined
+  let desktopRecordings: DaytonaDesktopRecordingArtifact[] = []
 
   async function stopDesktopAgentRecording() {
     if (checkedDesktopAgentRecording) return
 
     try {
-      const recording = await stopDaytonaDesktopAgentRecording(
+      const recordings = await stopDaytonaDesktopAgentRecordings(
         sandbox,
         paths,
-        input.signal
+        input.signal,
+        input.runId
       )
       checkedDesktopAgentRecording = true
-      if (!recording) return
-      desktopRecording = recording
+      if (recordings.length === 0) return
+      desktopRecordings = recordings
 
       await emitLog(input, {
         kind: "setup",
-        message: "Daytona desktop recording ready",
+        message:
+          recordings.length === 1
+            ? "Daytona desktop recording ready"
+            : `Daytona desktop recordings ready (${recordings.length})`,
       })
     } catch (error) {
       if (emittedDesktopRecordingStopError) return
@@ -456,6 +461,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       githubUserEmail: input.githubUserEmail,
       githubUserName: input.githubUserName,
       githubUsername: input.githubUsername,
+      installGlobal: true,
       persistCredentials: true,
       paths,
       repoUrl,
@@ -509,6 +515,12 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       .join("\n")
 
     const finishRun = async () => {
+      await writeDaytonaDesktopAgentRunState(
+        sandbox,
+        paths,
+        input.runId,
+        input.signal
+      )
       const appServerResult = await runCodexViaAppServer({
         codexThreadIdToResume,
         gitAuth,
@@ -546,7 +558,8 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         {
           branchName,
           codexThreadId: appServerResult.codexThreadId,
-          desktopRecording,
+          desktopRecording: desktopRecordings.at(-1),
+          desktopRecordings,
           diff,
           exitCode: appServerResult.exitCode,
           lastMessage: appServerResult.lastMessage,

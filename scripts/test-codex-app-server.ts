@@ -150,6 +150,10 @@ const daytonaCodexAppServerRunSource = await readFile(
   new URL("../lib/daytona/codex-app-server-run.ts", import.meta.url),
   "utf8"
 )
+const sandboxGithubAuthSource = await readFile(
+  new URL("../lib/sandbox/github-auth.ts", import.meta.url),
+  "utf8"
+)
 assert.ok(!daytonaCodexAgentSource.includes("restoredConversationPrompt"))
 assert.ok(!daytonaCodexAgentSource.includes("resumeFallbackPrompt"))
 assert.ok(!daytonaCodexAgentSource.includes("restoring conversation context"))
@@ -161,6 +165,14 @@ assert.ok(
 assert.ok(!daytonaCodexAgentSource.includes("Repo already prepared"))
 assert.ok(
   daytonaCodexAppServerRunSource.includes("authHash: sha256(input.authJson)")
+)
+assert.match(
+  daytonaCodexAgentSource,
+  /setupSandboxGitHubAuth\(\{[\s\S]*installGlobal: true,[\s\S]*persistCredentials: true/
+)
+assert.ok(!sandboxGithubAuthSource.includes("if (!remoteUrl) return null"))
+assert.ok(
+  sandboxGithubAuthSource.includes("GH_CONFIG_DIR: pathsForAuth.ghConfigDir")
 )
 assert.ok(
   daytonaCodexAppServerRunSource.includes(
@@ -965,6 +977,34 @@ const redactedFallbackContent = workerRunFinalContent("", {
 })
 assert.ok(redactedFallbackContent.includes("[redacted auth.json]"))
 assert.ok(!redactedFallbackContent.includes("rt_worker-fallback-token"))
+
+const firstRecordingPath =
+  "/root/.daytona/recordings/11111111-1111-4111-8111-111111111111.mp4"
+const secondRecordingPath =
+  "/root/.daytona/recordings/22222222-2222-4222-8222-222222222222.mp4"
+const multiRecordingContent = workerRunFinalContent("Final answer", {
+  ...authoritativeResult,
+  desktopRecording: {
+    filePath: secondRecordingPath,
+    id: "22222222-2222-4222-8222-222222222222",
+  },
+  desktopRecordings: [
+    {
+      filePath: firstRecordingPath,
+      id: "11111111-1111-4111-8111-111111111111",
+    },
+    {
+      filePath: secondRecordingPath,
+      id: "22222222-2222-4222-8222-222222222222",
+    },
+  ],
+})
+assert.equal(
+  stripInlineToolMarkers(multiRecordingContent),
+  ["Final answer", "", "Videos:", firstRecordingPath, secondRecordingPath].join(
+    "\n"
+  )
+)
 assert.equal(
   normalizeLinkHref("https://example.com/repo/app/page.tsx"),
   "https://example.com/repo/app/page.tsx"

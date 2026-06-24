@@ -24,6 +24,7 @@ import {
 export const DESKTOP_AGENT_RECORDING_STATE_FILE = "active-recording.json"
 export const DESKTOP_AGENT_COMPLETED_RECORDING_STATE_FILE =
   "completed-recording.json"
+export const DESKTOP_AGENT_RUN_STATE_FILE = "current-run.json"
 const DESKTOP_RECORDING_CACHE_DIR = join(tmpdir(), "cloudcode-recordings")
 const DESKTOP_RECORDING_CACHE_TTL_MS = 6 * 60 * 60 * 1000
 const DESKTOP_RECORDING_CACHE_PRUNE_MS = 10 * 60 * 1000
@@ -37,6 +38,7 @@ export type DaytonaDesktopRecordingArtifact = {
   fileName?: string
   filePath?: string
   id: string
+  runId?: string
   sandboxId?: string
   status?: string
 }
@@ -71,10 +73,20 @@ function desktopAgentCompletedRecordingStatePath(paths: DaytonaSandboxPaths) {
   return `${paths.codexHome}/desktop/state/${DESKTOP_AGENT_COMPLETED_RECORDING_STATE_FILE}`
 }
 
+function desktopAgentRunStatePath(paths: DaytonaSandboxPaths) {
+  return `${paths.codexHome}/desktop/state/${DESKTOP_AGENT_RUN_STATE_FILE}`
+}
+
+function normalizedRunId(runId?: string) {
+  const trimmed = runId?.trim()
+  return trimmed || undefined
+}
+
 function recordingArtifact(
   value: unknown,
   sandboxId: string,
-  fallbackId?: string
+  fallbackId?: string,
+  expectedRunId?: string
 ): DaytonaDesktopRecordingArtifact | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return fallbackId ? { id: fallbackId, sandboxId } : undefined
@@ -87,14 +99,61 @@ function recordingArtifact(
       : fallbackId
   if (!id) return undefined
 
+  const runId =
+    typeof record.runId === "string" && record.runId.trim()
+      ? record.runId.trim()
+      : undefined
+  const requiredRunId = normalizedRunId(expectedRunId)
+  if (requiredRunId && runId !== requiredRunId) return undefined
+
   return {
     fileName: typeof record.fileName === "string" ? record.fileName : undefined,
     filePath: typeof record.filePath === "string" ? record.filePath : undefined,
     id,
+    runId,
     sandboxId:
       typeof record.sandboxId === "string" ? record.sandboxId : sandboxId,
     status: typeof record.status === "string" ? record.status : undefined,
   }
+}
+
+function recordingArtifacts(
+  value: unknown,
+  sandboxId: string,
+  expectedRunId?: string
+): DaytonaDesktopRecordingArtifact[] {
+  const values = Array.isArray(value) ? value : [value]
+  const recordings: DaytonaDesktopRecordingArtifact[] = []
+  const seen = new Set<string>()
+
+  for (const entry of values) {
+    const recording = recordingArtifact(
+      entry,
+      sandboxId,
+      undefined,
+      expectedRunId
+    )
+    if (!recording?.id || seen.has(recording.id)) continue
+    seen.add(recording.id)
+    recordings.push(recording)
+  }
+
+  return recordings
+}
+
+function uniqueRecordingArtifacts(
+  recordings: DaytonaDesktopRecordingArtifact[]
+) {
+  const deduped: DaytonaDesktopRecordingArtifact[] = []
+  const seen = new Set<string>()
+
+  for (const recording of recordings) {
+    if (!recording.id || seen.has(recording.id)) continue
+    seen.add(recording.id)
+    deduped.push(recording)
+  }
+
+  return deduped
 }
 
 function desktopRecordingCacheKey(sandboxId: string, recordingId: string) {
@@ -228,9 +287,35 @@ async function clearDesktopAgentRecordingState(
   }).catch(() => undefined)
 }
 
+export async function writeDaytonaDesktopAgentRunState(
+  sandbox: Sandbox,
+  paths: DaytonaSandboxPaths,
+  runId?: string,
+  signal?: AbortSignal
+) {
+  const runStatePath = desktopAgentRunStatePath(paths)
+  const currentRunId = normalizedRunId(runId)
+  const command = currentRunId
+    ? `mkdir -p ${shellQuote(`${paths.codexHome}/desktop/state`)} && printf '%s' ${shellQuote(JSON.stringify({ runId: currentRunId }))} > ${shellQuote(runStatePath)}`
+    : `rm -f ${shellQuote(runStatePath)}`
+  const result = await runDaytonaCommand(sandbox, command, {
+    signal,
+    timeoutMs: 10_000,
+  })
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      result.stderr.trim() ||
+        result.stdout.trim() ||
+        "Unable to write Daytona desktop run state."
+    )
+  }
+}
+
 async function readDesktopAgentRecordingState(
   sandbox: Sandbox,
   statePath: string,
+  expectedRunId?: string,
   signal?: AbortSignal
 ) {
   const result = await runDaytonaCommand(
@@ -244,10 +329,90 @@ async function readDesktopAgentRecordingState(
   }
 
   try {
-    return recordingArtifact(JSON.parse(result.stdout), sandbox.id)
+    return recordingArtifact(
+      JSON.parse(result.stdout),
+      sandbox.id,
+      undefined,
+      expectedRunId
+    )
   } catch {
     return undefined
   }
+}
+
+async function readDesktopAgentCompletedRecordingState(
+  sandbox: Sandbox,
+  statePath: string,
+  expectedRunId?: string,
+  signal?: AbortSignal
+) {
+  const result = await runDaytonaCommand(
+    sandbox,
+    `[ -s ${shellQuote(statePath)} ] && cat ${shellQuote(statePath)} || true`,
+    { signal, timeoutMs: 10_000 }
+  )
+
+  if (result.exitCode !== 0 || !result.stdout.trim()) {
+    return []
+  }
+
+  try {
+    return recordingArtifacts(
+      JSON.parse(result.stdout),
+      sandbox.id,
+      expectedRunId
+    )
+  } catch {
+    return []
+  }
+}
+
+export async function stopDaytonaDesktopAgentRecordings(
+  sandbox: Sandbox,
+  paths: DaytonaSandboxPaths,
+  signal?: AbortSignal,
+  runId?: string
+) {
+  const activeStatePath = desktopAgentRecordingStatePath(paths)
+  const completedStatePath = desktopAgentCompletedRecordingStatePath(paths)
+  const runStatePath = desktopAgentRunStatePath(paths)
+  const expectedRunId = normalizedRunId(runId)
+  const [active, completed] = await Promise.all([
+    readDesktopAgentRecordingState(
+      sandbox,
+      activeStatePath,
+      expectedRunId,
+      signal
+    ),
+    readDesktopAgentCompletedRecordingState(
+      sandbox,
+      completedStatePath,
+      expectedRunId,
+      signal
+    ),
+  ])
+
+  if (!active?.id) {
+    await clearDesktopAgentRecordingState(sandbox, activeStatePath, signal)
+    await clearDesktopAgentRecordingState(sandbox, completedStatePath, signal)
+    await clearDesktopAgentRecordingState(sandbox, runStatePath, signal)
+    return completed
+  }
+
+  const stopped = await sandbox.computerUse.recording.stop(active.id)
+  await clearDesktopAgentRecordingState(sandbox, activeStatePath, signal)
+  await clearDesktopAgentRecordingState(sandbox, completedStatePath, signal)
+  await clearDesktopAgentRecordingState(sandbox, runStatePath, signal)
+  const activeRecording = {
+    ...(recordingArtifact(stopped, sandbox.id, active.id) ?? {
+      ...active,
+      sandboxId: sandbox.id,
+      status: "completed",
+    }),
+    ...(expectedRunId ? { runId: expectedRunId } : {}),
+  }
+
+  return uniqueRecordingArtifacts([...completed, activeRecording])
 }
 
 export async function stopDaytonaDesktopAgentRecording(
@@ -255,35 +420,12 @@ export async function stopDaytonaDesktopAgentRecording(
   paths: DaytonaSandboxPaths,
   signal?: AbortSignal
 ) {
-  const activeStatePath = desktopAgentRecordingStatePath(paths)
-  const completedStatePath = desktopAgentCompletedRecordingStatePath(paths)
-  const active = await readDesktopAgentRecordingState(
+  const recordings = await stopDaytonaDesktopAgentRecordings(
     sandbox,
-    activeStatePath,
+    paths,
     signal
   )
-
-  if (!active?.id) {
-    const completed = await readDesktopAgentRecordingState(
-      sandbox,
-      completedStatePath,
-      signal
-    )
-    await clearDesktopAgentRecordingState(sandbox, activeStatePath, signal)
-    await clearDesktopAgentRecordingState(sandbox, completedStatePath, signal)
-    return completed
-  }
-
-  const stopped = await sandbox.computerUse.recording.stop(active.id)
-  await clearDesktopAgentRecordingState(sandbox, activeStatePath, signal)
-  await clearDesktopAgentRecordingState(sandbox, completedStatePath, signal)
-  return (
-    recordingArtifact(stopped, sandbox.id, active.id) ?? {
-      ...active,
-      sandboxId: sandbox.id,
-      status: "completed",
-    }
-  )
+  return recordings.at(-1)
 }
 
 function recordingStatusIsActive(status: unknown) {

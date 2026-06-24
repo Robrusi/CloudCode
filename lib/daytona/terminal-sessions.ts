@@ -16,7 +16,7 @@ import {
 } from "@/lib/sandbox/github-auth"
 
 const MAX_REPLAY_BYTES = 1_000_000
-const GITHUB_AUTH_VERSION = 7
+const GITHUB_AUTH_VERSION = 8
 const GITHUB_AUTH_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const GITHUB_AUTH_UNAVAILABLE_RECHECK_MS = 60_000
 

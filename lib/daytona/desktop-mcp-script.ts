@@ -2,6 +2,7 @@ import { DESKTOP_BROWSER_COMMAND } from "@/lib/daytona/desktop-dependencies"
 import {
   DESKTOP_AGENT_COMPLETED_RECORDING_STATE_FILE,
   DESKTOP_AGENT_RECORDING_STATE_FILE,
+  DESKTOP_AGENT_RUN_STATE_FILE,
 } from "@/lib/daytona/desktop-recordings"
 
 export function desktopMcpServerScript() {
@@ -21,6 +22,7 @@ const terminalPath = process.env.CLOUDCODE_TERMINAL_PATH || process.env.PATH || 
 const codexHome = process.env.CODEX_HOME || join(terminalHome, ".codex");
 const activeRecordingPath = join(stateDir, ${JSON.stringify(DESKTOP_AGENT_RECORDING_STATE_FILE)});
 const completedRecordingPath = join(stateDir, ${JSON.stringify(DESKTOP_AGENT_COMPLETED_RECORDING_STATE_FILE)});
+const runStatePath = join(stateDir, ${JSON.stringify(DESKTOP_AGENT_RUN_STATE_FILE)});
 const autoRecordedToolNames = new Set([
   "desktop_start",
   "desktop_open_browser",
@@ -251,34 +253,76 @@ async function daytonaRecordingRequest(path, body) {
   return data;
 }
 
-function recordingWithSandbox(recording) {
+function currentRunId() {
+  try {
+    if (!existsSync(runStatePath)) return undefined;
+    const parsed = JSON.parse(readFileSync(runStatePath, "utf8"));
+    const runId = typeof parsed?.runId === "string" ? parsed.runId.trim() : "";
+    return runId || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function recordingWithSandbox(recording, options = {}) {
   if (!recording || typeof recording !== "object") return undefined;
   const id = typeof recording.id === "string" ? recording.id : undefined;
   if (!id) return undefined;
-  return { ...recording, sandboxId: process.env.CLOUDCODE_DAYTONA_SANDBOX_ID };
+  const runId = typeof recording.runId === "string" ? recording.runId.trim() : "";
+  const activeRunId = currentRunId();
+  if (options.requireCurrentRun && activeRunId && runId !== activeRunId) {
+    return undefined;
+  }
+  const resolvedRunId = runId || (options.tagCurrentRun ? activeRunId : undefined);
+  return {
+    ...recording,
+    ...(resolvedRunId ? { runId: resolvedRunId } : {}),
+    sandboxId: process.env.CLOUDCODE_DAYTONA_SANDBOX_ID,
+  };
 }
 
 function readActiveRecording() {
   try {
     if (!existsSync(activeRecordingPath)) return undefined;
-    return recordingWithSandbox(JSON.parse(readFileSync(activeRecordingPath, "utf8")));
+    return recordingWithSandbox(JSON.parse(readFileSync(activeRecordingPath, "utf8")), {
+      requireCurrentRun: true,
+    });
   } catch {
     return undefined;
   }
 }
 
 function rememberActiveRecording(recording) {
-  const active = recordingWithSandbox(recording);
+  const active = recordingWithSandbox(recording, { tagCurrentRun: true });
   if (!active) return undefined;
   writeFileSync(activeRecordingPath, JSON.stringify(active));
   return active;
 }
 
 function rememberCompletedRecording(recording) {
-  const completed = recordingWithSandbox(recording);
+  const completed = recordingWithSandbox(recording, { tagCurrentRun: true });
   if (!completed) return undefined;
-  writeFileSync(completedRecordingPath, JSON.stringify(completed));
+  const existing = readCompletedRecordings().filter(
+    (entry) => entry.id !== completed.id
+  );
+  writeFileSync(completedRecordingPath, JSON.stringify([...existing, completed]));
   return completed;
+}
+
+function readCompletedRecordings() {
+  try {
+    if (!existsSync(completedRecordingPath)) return [];
+    const parsed = JSON.parse(readFileSync(completedRecordingPath, "utf8"));
+    const entries = Array.isArray(parsed) ? parsed : [parsed];
+    return entries.flatMap((entry) => {
+      const recording = recordingWithSandbox(entry, {
+        requireCurrentRun: true,
+      });
+      return recording?.id ? [recording] : [];
+    });
+  } catch {
+    return [];
+  }
 }
 
 function clearActiveRecording(id) {

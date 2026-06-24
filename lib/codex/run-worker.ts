@@ -573,17 +573,20 @@ export function workerRunFinalContent(
 ) {
   const streamed = streamedContent.trim()
   const lastMessage = result.lastMessage.trim()
-  const videoPath =
-    result.desktopRecording?.filePath ||
-    (result.desktopRecording?.id
-      ? `/root/.daytona/recordings/${result.desktopRecording.id}.mp4`
-      : "")
+  const videoPaths = desktopRecordingVideoPaths(result)
 
   const withVideo = (content: string) => {
     const trimmed = content.trim()
-    if (!videoPath) return trimmed
-    if (trimmed.includes(videoPath)) return trimmed
-    return `${trimmed || "(no output)"}\n\nVideo:\n${videoPath}`
+    const missingVideoPaths = videoPaths.filter(
+      (path) => !trimmed.includes(path)
+    )
+    if (missingVideoPaths.length === 0) return trimmed
+
+    const heading =
+      videoPaths.length === 1 && missingVideoPaths.length === 1
+        ? "Video:"
+        : "Videos:"
+    return `${trimmed || "(no output)"}\n\n${heading}\n${missingVideoPaths.join("\n")}`
   }
 
   if (result.lastMessageAuthoritative && lastMessage) {
@@ -605,6 +608,27 @@ export function workerRunFinalContent(
       redactCodexAuthPayloads(result.stderr.trim()) ||
       "(no output)"
   )
+}
+
+function desktopRecordingVideoPaths(result: RunCodexInSandboxResult) {
+  const recordings = [
+    ...(result.desktopRecordings ?? []),
+    ...(result.desktopRecording ? [result.desktopRecording] : []),
+  ]
+  const paths: string[] = []
+  const seen = new Set<string>()
+
+  for (const recording of recordings) {
+    const path =
+      recording.filePath ||
+      (recording.id ? `/root/.daytona/recordings/${recording.id}.mp4` : "")
+    const key = recording.id || path
+    if (!path || seen.has(key)) continue
+    seen.add(key)
+    paths.push(path)
+  }
+
+  return paths
 }
 
 function authoritativeLastMessageContent(

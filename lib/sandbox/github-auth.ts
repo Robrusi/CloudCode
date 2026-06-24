@@ -148,7 +148,10 @@ async function currentRepoGitHubRemote({
       `git -C ${shellQuote(paths.repoPath)} remote get-url origin`,
     ].join("\n"),
     { signal, timeoutMs: 10_000 }
-  ).catch(() => undefined)
+  ).catch((error) => {
+    if (signal?.aborted) throw error
+    return undefined
+  })
 
   if (!result || result.exitCode !== 0) return null
 
@@ -222,8 +225,6 @@ export async function setupSandboxGitHubAuth({
     (repoUrl ? gitHubRemoteUrl(repoUrl) : null) ??
     (await currentRepoGitHubRemote({ paths, sandbox, signal }))
 
-  if (!remoteUrl) return null
-
   const pathsForAuth = credentialPaths(paths)
   const cleanGitUserEmail = githubUserEmail?.trim()
   const cleanGitUserName = githubUserName?.trim()
@@ -295,19 +296,17 @@ export async function setupSandboxGitHubAuth({
     ])
   }
   const helperCommand = credentialHelperCommand(pathsForAuth.tokenPath)
-  const gitConfigEnv: Record<string, string> = installGlobal
-    ? {}
-    : {
-        GIT_CONFIG_COUNT: "4",
-        GIT_CONFIG_KEY_0: "credential.https://github.com.helper",
-        GIT_CONFIG_KEY_1: "credential.https://github.com.useHttpPath",
-        GIT_CONFIG_KEY_2: "url.https://github.com/.insteadOf",
-        GIT_CONFIG_KEY_3: "url.https://github.com/.insteadOf",
-        GIT_CONFIG_VALUE_0: helperCommand,
-        GIT_CONFIG_VALUE_1: "false",
-        GIT_CONFIG_VALUE_2: "git@github.com:",
-        GIT_CONFIG_VALUE_3: "ssh://git@github.com/",
-      }
+  const gitConfigEnv: Record<string, string> = {
+    GIT_CONFIG_COUNT: "4",
+    GIT_CONFIG_KEY_0: "credential.https://github.com.helper",
+    GIT_CONFIG_KEY_1: "credential.https://github.com.useHttpPath",
+    GIT_CONFIG_KEY_2: "url.https://github.com/.insteadOf",
+    GIT_CONFIG_KEY_3: "url.https://github.com/.insteadOf",
+    GIT_CONFIG_VALUE_0: helperCommand,
+    GIT_CONFIG_VALUE_1: "false",
+    GIT_CONFIG_VALUE_2: "git@github.com:",
+    GIT_CONFIG_VALUE_3: "ssh://git@github.com/",
+  }
   const configResult = await runDaytonaCommand(
     sandbox,
     [

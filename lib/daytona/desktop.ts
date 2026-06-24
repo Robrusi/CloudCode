@@ -24,14 +24,15 @@ export {
   isDaytonaDesktopSandboxRunning,
   listDaytonaDesktopRecordings,
   stopDaytonaDesktopAgentRecording,
+  stopDaytonaDesktopAgentRecordings,
   stopDaytonaDesktopRecording,
   type DaytonaDesktopRecordingArtifact,
   type DaytonaDesktopRecordingFile,
+  writeDaytonaDesktopAgentRunState,
 } from "@/lib/daytona/desktop-recordings"
 
 const DAYTONA_DESKTOP_PORT = 6080
 const DESKTOP_PREVIEW_TTL_SECONDS = 60 * 60
-const DESKTOP_TOOL_VERSION = "13"
 const DESKTOP_BROWSER_URL = "about:blank"
 const DESKTOP_READ_TIMEOUT_MS = 8_000
 const DESKTOP_PREVIEW_TIMEOUT_MS = 8_000
@@ -573,15 +574,6 @@ export async function startDaytonaDesktopRecording(
   )
 }
 
-function base64FileCommand(path: string, content: string) {
-  const encoded = Buffer.from(content, "utf8").toString("base64")
-  return `printf '%s' ${shellQuote(encoded)} | base64 -d > ${shellQuote(path)}`
-}
-
-export function daytonaDesktopToolVersion() {
-  return DESKTOP_TOOL_VERSION
-}
-
 function daytonaDesktopAgentsMd() {
   return [
     "# Cloudcode Daytona Desktop",
@@ -598,7 +590,7 @@ function daytonaDesktopAgentsMd() {
     "When opening a local URL for visual verification, confirm the browser actually loaded the app page before reporting success. A successful `desktop_open_browser` call is not verification. If the page shows a browser error, blank page, stale tab, or unreadable screenshot, do not claim verification; fix the loading issue or report it.",
     "If desktop verification requires starting a dev server, watcher, or another long-running process, use `desktop_open_terminal` so it runs in the visible desktop terminal. Keep ordinary shell commands for finite setup and checks.",
     "Do not launch `chromium`, `chromium-browser`, `google-chrome`, `google-chrome-stable`, `firefox`, `x-www-browser`, or `xdg-open` directly; `desktop_open_browser` uses `/usr/local/bin/cloudcode-browser`.",
-    "Daytona Computer Use recording starts automatically before desktop actions and Cloudcode stops it after the run; use `desktop_record_stop` only when an intermediate video artifact is needed before the run ends.",
+    "Daytona Computer Use recording starts automatically before desktop actions and Cloudcode stops it after the run. Cloudcode keeps every stopped desktop recording and attaches all videos at the end; use `desktop_record_stop` only when an intermediate video artifact is needed before the run ends.",
     "",
     "Use the `cloudcode_desktop` MCP tools for GUI tasks:",
     "- `desktop_start` starts or verifies the desktop.",
@@ -606,7 +598,7 @@ function daytonaDesktopAgentsMd() {
     "- `desktop_open_terminal` opens a visible desktop terminal, optionally running a shell command from the repository.",
     "- `desktop_screenshot` returns an image of the current desktop.",
     "- `desktop_click`, `desktop_type`, `desktop_key`, `desktop_hotkey`, and `desktop_scroll` control the desktop.",
-    "- `desktop_record_start` returns the active recording, and `desktop_record_stop` stops it early when an intermediate video is needed.",
+    "- `desktop_record_start` returns the active recording, and `desktop_record_stop` stops it early when an intermediate video is needed. Later desktop actions start a new recording automatically.",
     "",
     "A shell fallback is also available as `cloudcode-computer`, including `cloudcode-computer terminal '<command>'`, but prefer the MCP tools because screenshots are returned as inspectable images.",
     "",
@@ -615,6 +607,11 @@ function daytonaDesktopAgentsMd() {
     "Use the GitHub connector for GitHub actions, including creating pull requests, reading pull requests, inspecting review comments, issues, branches, and checks.",
     "Do not use the `gh` CLI for GitHub operations unless the GitHub connector is unavailable, fails for a connector-specific reason, or the user explicitly asks for `gh`. If falling back to `gh`, say why.",
   ].join("\n")
+}
+
+function base64FileCommand(path: string, content: string) {
+  const encoded = Buffer.from(content, "utf8").toString("base64")
+  return `printf '%s' ${shellQuote(encoded)} | base64 -d > ${shellQuote(path)}`
 }
 
 function desktopCodexConfig(
@@ -642,6 +639,27 @@ function desktopCodexConfig(
   ].join("\n")
 }
 
+export function daytonaDesktopToolContentFingerprint() {
+  return sha256(
+    [
+      desktopMcpServerScript(),
+      daytonaDesktopAgentsMd(),
+      desktopCodexConfig(
+        {
+          codexHome: "$CODEX_HOME",
+          home: "$HOME",
+          repoPath: "$REPO_PATH",
+        },
+        {
+          id: "$DAYTONA_SANDBOX_ID",
+          toolboxProxyUrl: "$DAYTONA_TOOLBOX_BASE_URL",
+        },
+        "$DAYTONA_TOOLBOX_AUTH_KEY"
+      ),
+    ].join("\0")
+  )
+}
+
 function desktopToolFingerprint({
   agentsMd,
   agentsPath,
@@ -661,7 +679,6 @@ function desktopToolFingerprint({
 }) {
   return sha256(
     [
-      DESKTOP_TOOL_VERSION,
       scriptPath,
       binPath,
       agentsPath,
