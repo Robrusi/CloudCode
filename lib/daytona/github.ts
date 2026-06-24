@@ -9,7 +9,7 @@ import {
   type DaytonaSandboxPaths,
 } from "@/lib/daytona/sandbox"
 
-const GITHUB_TOOL_VERSION = "1"
+const GITHUB_TOOL_VERSION = "2"
 
 type GitHubConfigInput = {
   enabled: boolean
@@ -402,6 +402,8 @@ export function cloudcodeGitHubCodexConfig({
 
   return [
     "[mcp_servers.cloudcode_github]",
+    "enabled = true",
+    "required = true",
     `command = ${JSON.stringify(`${paths.codexHome}/github/cloudcode-github-mcp.mjs`)}`,
     "startup_timeout_sec = 20",
     "tool_timeout_sec = 60",

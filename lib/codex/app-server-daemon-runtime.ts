@@ -90,11 +90,13 @@ function wait(ms: number, signal?: AbortSignal) {
 }
 
 function codexAppServerDaemonEnv({
+  builtInMcpConfig,
   gitAuth,
   mcpServers,
   paths,
   presetSecrets,
 }: {
+  builtInMcpConfig?: string
   gitAuth?: SandboxGitHubAuth | null
   mcpServers?: McpServerInput[]
   paths: DaytonaSandboxPaths
@@ -115,7 +117,9 @@ function codexAppServerDaemonEnv({
     CLOUDCODE_DAEMON_STATE: daemonPaths.statePath,
     CLOUDCODE_DESKTOP_TOOL_FINGERPRINT: daytonaDesktopToolContentFingerprint(),
     CLOUDCODE_GITHUB_TOOL_FINGERPRINT: cloudcodeGitHubToolFingerprint(paths),
-    CLOUDCODE_MCP_CONFIG_HASH: sha256(userMcpCodexConfig(mcpServers)),
+    CLOUDCODE_MCP_CONFIG_HASH: sha256(
+      [builtInMcpConfig ?? "", userMcpCodexConfig(mcpServers)].join("\0")
+    ),
     CLOUDCODE_REPO_PATH: paths.repoPath,
   }
   const envHash = sha256(
@@ -362,6 +366,7 @@ async function stopCodexAppServerDaemon({
 }
 
 export async function ensureCodexAppServerDaemon({
+  builtInMcpConfig,
   gitAuth,
   mcpServers,
   onLog,
@@ -370,6 +375,7 @@ export async function ensureCodexAppServerDaemon({
   sandbox,
   signal,
 }: {
+  builtInMcpConfig?: string
   gitAuth?: SandboxGitHubAuth | null
   mcpServers?: McpServerInput[]
   onLog?: (log: CodexAppServerDaemonLog) => void | Promise<void>
@@ -379,6 +385,7 @@ export async function ensureCodexAppServerDaemon({
   signal?: AbortSignal
 }): Promise<CodexAppServerDaemonHandle> {
   const { daemonPaths, env, envHash } = codexAppServerDaemonEnv({
+    builtInMcpConfig,
     gitAuth,
     mcpServers,
     paths,

@@ -98,6 +98,7 @@ function validateDaemonResponsePath(
 }
 
 export async function runCodexViaAppServer({
+  builtInMcpConfig,
   codexThreadIdToResume,
   gitAuth,
   input,
@@ -108,6 +109,7 @@ export async function runCodexViaAppServer({
   sandbox,
   speed,
 }: {
+  builtInMcpConfig?: string
   codexThreadIdToResume?: string
   gitAuth?: SandboxGitHubAuth | null
   input: RunCodexViaAppServerInput
@@ -134,6 +136,7 @@ export async function runCodexViaAppServer({
 
   try {
     const daemon = await ensureCodexAppServerDaemon({
+      builtInMcpConfig,
       gitAuth,
       mcpServers: input.mcpServers,
       onLog: (log) => emitLog(input, log),

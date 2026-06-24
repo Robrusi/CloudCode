@@ -565,6 +565,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         input.signal
       )
       const appServerResult = await runCodexViaAppServer({
+        builtInMcpConfig: mcpConfig,
         codexThreadIdToResume,
         gitAuth,
         input,

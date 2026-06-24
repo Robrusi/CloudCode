@@ -221,6 +221,7 @@ assert.ok(daytonaGitHubSource.includes("pull_request_create"))
 assert.ok(daytonaGitHubSource.includes("Cloudcode GitHub App bot"))
 assert.ok(daytonaCodexAgentSource.includes("installCloudcodeGitHubTools"))
 assert.ok(daytonaCodexAgentSource.includes("writeCloudcodeGitHubState"))
+assert.ok(daytonaCodexAgentSource.includes("builtInMcpConfig: mcpConfig"))
 assert.ok(
   daytonaCodexAgentSource.includes("githubEnabled: Boolean(githubConfig)")
 )
@@ -228,6 +229,10 @@ assert.ok(
   codexAppServerDaemonRuntimeSource.includes(
     "CLOUDCODE_GITHUB_TOOL_FINGERPRINT"
   )
+)
+assert.ok(codexAppServerDaemonRuntimeSource.includes("builtInMcpConfig ??"))
+assert.ok(
+  codexAppServerDaemonRuntimeSource.includes("userMcpCodexConfig(mcpServers)")
 )
 assert.ok(
   daytonaCodexAppServerRunSource.includes(
@@ -453,6 +458,8 @@ const githubMcpConfig = cloudcodeGitHubCodexConfig({
   paths: testPaths,
 })
 assert.ok(githubMcpConfig.includes("[mcp_servers.cloudcode_github]"))
+assert.ok(githubMcpConfig.includes("enabled = true"))
+assert.ok(githubMcpConfig.includes("required = true"))
 assert.ok(githubMcpConfig.includes("cloudcode-github-mcp.mjs"))
 assert.ok(githubMcpConfig.includes("CLOUDCODE_GITHUB_STATE_PATH"))
 assert.ok(githubMcpConfig.includes(cloudcodeGitHubStatePath(testPaths)))
