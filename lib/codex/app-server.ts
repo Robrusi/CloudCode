@@ -112,6 +112,9 @@ export type CodexAppServerTurnResponse = {
 export type CodexAppServerTurn = {
   error?: {
     additionalDetails?: string | null
+    // Structured error discriminant. The string form carries values such as
+    // "usageLimitExceeded"; object forms describe transport failures.
+    codexErrorInfo?: string | Record<string, unknown> | null
     message?: string
   } | null
   id?: string

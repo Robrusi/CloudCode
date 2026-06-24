@@ -1,11 +1,11 @@
-export const CODEX_APP_SERVER_DAEMON_VERSION = "6"
+export const CODEX_APP_SERVER_DAEMON_VERSION = "7"
 
 export const CODEX_APP_SERVER_DAEMON_SCRIPT = String.raw`import { createHash } from "node:crypto"
 import { spawn } from "node:child_process"
 import fs from "node:fs"
 import net from "node:net"
 
-const VERSION = "6"
+const VERSION = "7"
 const REQUEST_TIMEOUT_MS = Number(process.env.CLOUDCODE_APP_SERVER_REQUEST_TIMEOUT_MS || "45000")
 const AUTH_REFRESH_RESPONSE_TIMEOUT_MS = Number(process.env.CLOUDCODE_AUTH_REFRESH_RESPONSE_TIMEOUT_MS || "120000")
 const SOCKET_PATH = requiredEnv("CLOUDCODE_DAEMON_SOCKET")
@@ -135,11 +135,43 @@ function agentMessageFromTurn(turn) {
   return messages.at(-1) || ""
 }
 
+// Minimal user-facing message for out-of-usage failures. Keep in sync with
+// CODEX_USAGE_LIMIT_MESSAGE in lib/codex/usage-errors.ts (this script is a
+// standalone daemon and cannot import from the app).
+const USAGE_LIMIT_MESSAGE = "You're out of Codex usage."
+const USAGE_LIMIT_PATTERNS = [
+  "usagelimitexceeded",
+  "usage_limit_reached",
+  "usage limit reached",
+  "reached your usage limit",
+  "hit your usage limit",
+  "credits_depleted",
+  "credits depleted",
+]
+
+function isUsageLimitError(text) {
+  if (!text) return false
+  const normalized = text.toLowerCase()
+  return USAGE_LIMIT_PATTERNS.some((pattern) => normalized.includes(pattern))
+}
+
+function codexErrorInfoText(info) {
+  if (typeof info === "string") return info
+  const record = objectRecord(info)
+  if (!record) return ""
+  const keys = Object.keys(record)
+  return keys.length ? keys[0] : ""
+}
+
 function turnErrorMessage(turn) {
   const error = objectRecord(turn && turn.error)
   if (!error) return ""
   const message = stringValue(error.message)
   const details = stringValue(error.additionalDetails)
+  const info = codexErrorInfoText(error.codexErrorInfo)
+  if (isUsageLimitError([message, info, details].filter(Boolean).join("\n"))) {
+    return USAGE_LIMIT_MESSAGE
+  }
   return [message, details].filter(Boolean).join("\n")
 }
 

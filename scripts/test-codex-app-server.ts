@@ -219,9 +219,18 @@ assert.ok(daytonaDesktopSource.includes("Use ordinary `git` commands"))
 assert.ok(daytonaDesktopSource.includes("It may not be installed."))
 assert.ok(daytonaGitHubSource.includes("pull_request_create"))
 assert.ok(daytonaGitHubSource.includes("Cloudcode GitHub App bot"))
+assert.ok(daytonaGitHubSource.includes("missingGitHubTokenMessage"))
+assert.ok(daytonaGitHubSource.includes("tokenPath?: string"))
 assert.ok(daytonaCodexAgentSource.includes("installCloudcodeGitHubTools"))
 assert.ok(daytonaCodexAgentSource.includes("writeCloudcodeGitHubState"))
 assert.ok(daytonaCodexAgentSource.includes("builtInMcpConfig: mcpConfig"))
+assert.ok(
+  daytonaCodexAgentSource.includes(
+    "const githubMcpEnabled = Boolean(parseGitHubRepoUrl(repoUrl))"
+  )
+)
+assert.ok(daytonaCodexAgentSource.includes("enabled: githubMcpEnabled"))
+assert.ok(daytonaCodexAgentSource.includes("authenticated: Boolean(gitAuth)"))
 assert.ok(
   daytonaCodexAgentSource.includes("githubEnabled: Boolean(githubConfig)")
 )

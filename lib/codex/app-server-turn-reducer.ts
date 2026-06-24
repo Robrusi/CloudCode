@@ -20,6 +20,10 @@ import {
   finiteNumberValue as numberValue,
   objectRecord,
 } from "@/lib/shared/unknown-values"
+import {
+  CODEX_USAGE_LIMIT_MESSAGE,
+  isCodexUsageLimitError,
+} from "@/lib/codex/usage-errors"
 
 export type CodexAppServerTurnSummary = {
   finalAssistantText: string
@@ -515,8 +519,16 @@ export function createCodexAppServerTurnReducer({
       ""
     const status = completedTurn?.status ?? "inProgress"
     const error = completedTurn?.error
+    const codexErrorInfo =
+      typeof error?.codexErrorInfo === "string" ? error.codexErrorInfo : ""
     const turnError = error
-      ? [error.message, error.additionalDetails].filter(Boolean).join("\n")
+      ? isCodexUsageLimitError(
+          [error.message, codexErrorInfo, error.additionalDetails]
+            .filter(Boolean)
+            .join("\n")
+        )
+        ? CODEX_USAGE_LIMIT_MESSAGE
+        : [error.message, error.additionalDetails].filter(Boolean).join("\n")
       : undefined
 
     return {

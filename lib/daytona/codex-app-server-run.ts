@@ -13,6 +13,7 @@ import {
 import { codexAppServerStderrLogForLine } from "@/lib/codex/app-server-stderr"
 import { isWorkerRunCanceledError } from "@/lib/codex/run-cancel-error"
 import { isCodexRefreshTokenReusedRunResult } from "@/lib/codex/auth-errors"
+import { normalizeCodexUsageLimitError } from "@/lib/codex/usage-errors"
 import {
   codexAppServerNotificationMatchesActiveRoute,
   codexAppServerNotificationRoute,
@@ -371,7 +372,9 @@ export async function runCodexViaAppServer({
     const turnError =
       status === "completed"
         ? ""
-        : summary.turnError || daemonResult.turnError || stderr
+        : normalizeCodexUsageLimitError(
+            summary.turnError || daemonResult.turnError || stderr
+          )
     if (
       isCodexRefreshTokenReusedRunResult({
         exitCode,
@@ -415,7 +418,9 @@ export async function runCodexViaAppServer({
 
     if (safeStdout || safeStderr) {
       throw new CodexAppServerRunError(
-        [message, safeStdout, safeStderr].filter(Boolean).join("\n\n"),
+        normalizeCodexUsageLimitError(
+          [message, safeStdout, safeStderr].filter(Boolean).join("\n\n")
+        ),
         { updatedAuthJson: errorUpdatedAuthJson }
       )
     }

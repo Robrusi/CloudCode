@@ -19,7 +19,7 @@ type GitHubConfigInput = {
 type GitHubStateInput = {
   baseBranch?: string
   repoUrl: string
-  tokenPath: string
+  tokenPath?: string
 }
 
 function base64FileCommand(path: string, content: string) {
@@ -62,6 +62,7 @@ import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 const statePath = process.env.CLOUDCODE_GITHUB_STATE_PATH || "";
+const missingGitHubTokenMessage = "Cloudcode GitHub tools need the GitHub App installed on this repository and your GitHub user authorized before they can access pull requests.";
 
 function send(message) {
   process.stdout.write(JSON.stringify(message) + "\n");
@@ -119,9 +120,9 @@ function readState() {
   }
   const repoUrl = stringValue(state.repoUrl);
   const repoPath = stringValue(state.repoPath);
-  const tokenPath = stringValue(state.tokenPath);
+  const tokenPath = optionalString(state.tokenPath);
   const repo = parseGitHubRepoUrl(repoUrl);
-  if (!repoUrl || !repoPath || !tokenPath || !repo) {
+  if (!repoUrl || !repoPath || !repo) {
     throw new Error("Cloudcode GitHub state is incomplete.");
   }
   return {
@@ -134,6 +135,7 @@ function readState() {
 }
 
 function readToken(tokenPath) {
+  if (!tokenPath) throw new Error(missingGitHubTokenMessage);
   const token = readFileSync(tokenPath, "utf8").trim();
   if (!token) throw new Error("Cloudcode GitHub token is unavailable.");
   return token;
@@ -369,11 +371,17 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 `
 }
 
-export function cloudcodeGitHubAgentInstructions() {
+export function cloudcodeGitHubAgentInstructions({
+  authenticated,
+}: {
+  authenticated: boolean
+}) {
   return [
     "# Cloudcode GitHub",
     "",
-    "Cloudcode provides GitHub pull request tools through the `cloudcode_github` MCP server when GitHub is connected.",
+    authenticated
+      ? "Cloudcode provides GitHub pull request tools through the `cloudcode_github` MCP server for this repository."
+      : "Cloudcode exposes the `cloudcode_github` MCP server for this repository, but pull request tool calls need the GitHub App installed on this repository and your GitHub user authorized.",
     "",
     "Use ordinary `git` commands for repository writes:",
     "- `git status`",
@@ -381,15 +389,25 @@ export function cloudcodeGitHubAgentInstructions() {
     "- `git commit`",
     "- `git push`",
     "",
-    "After pushing a branch, use `cloudcode_github.pull_request_create` to open a pull request as the Cloudcode GitHub App bot.",
+    authenticated
+      ? "After pushing a branch, use `cloudcode_github.pull_request_create` to open a pull request as the Cloudcode GitHub App bot."
+      : "If the user asks for a pull request, explain that GitHub must be connected for this repository before `cloudcode_github.pull_request_create` can succeed.",
     "Do not use the `gh` CLI unless the user explicitly asks for it and `command -v gh` succeeds.",
   ].join("\n")
 }
 
-export function cloudcodeGitHubAgentContext() {
+export function cloudcodeGitHubAgentContext({
+  authenticated,
+}: {
+  authenticated: boolean
+}) {
   return [
-    "Cloudcode provides GitHub pull request tools through the `cloudcode_github` MCP server when GitHub is connected.",
-    "Use git for commit and push, then use `cloudcode_github.pull_request_create` to create pull requests as the Cloudcode GitHub App bot.",
+    authenticated
+      ? "Cloudcode provides GitHub pull request tools through the `cloudcode_github` MCP server for this repository."
+      : "Cloudcode exposes the `cloudcode_github` MCP server for this repository, but pull request tool calls need the GitHub App installed on this repository and your GitHub user authorized.",
+    authenticated
+      ? "Use git for commit and push, then use `cloudcode_github.pull_request_create` to create pull requests as the Cloudcode GitHub App bot."
+      : "If the user asks for a pull request, explain that GitHub must be connected for this repository before `cloudcode_github.pull_request_create` can succeed.",
     "Do not assume the `gh` CLI is installed.",
   ].join("\n")
 }

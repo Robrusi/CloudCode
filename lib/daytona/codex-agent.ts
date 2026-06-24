@@ -84,6 +84,7 @@ import {
   setupSandboxGitHubAuth,
   type SandboxGitHubAuth,
 } from "@/lib/sandbox/github-auth"
+import { parseGitHubRepoUrl } from "@/lib/github/repo"
 import {
   presetSecretEnv,
   userMcpCodexConfig,
@@ -402,6 +403,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     : parseGitRef(input.branchName, "branchName")
   let branchName = requestedBranchName ?? defaultBranchName()
   const githubToken = input.githubToken?.trim()
+  const githubMcpEnabled = Boolean(parseGitHubRepoUrl(repoUrl))
   const speed = parseCodexSpeedOrThrow(input.speed)
   const existingCodexThreadId = parseOpaqueId(
     input.codexThreadId,
@@ -509,7 +511,9 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     )
     const contextBlocks = [
       cloudcodeYamlAgentContext(input.sandboxPreset?.cloudcodeYaml),
-      gitAuth ? cloudcodeGitHubAgentContext() : undefined,
+      githubMcpEnabled
+        ? cloudcodeGitHubAgentContext({ authenticated: Boolean(gitAuth) })
+        : undefined,
       sharedNotesEnabled ? cloudcodeContextAgentContext() : undefined,
       buildImageAttachmentPromptBlock(sandboxImageAttachments),
     ].filter((value): value is string => Boolean(value))
@@ -526,7 +530,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       threadId: input.threadId,
     })
     const githubConfig = cloudcodeGitHubCodexConfig({
-      enabled: Boolean(gitAuth),
+      enabled: githubMcpEnabled,
       paths,
     })
     const mcpConfig = [
@@ -545,7 +549,12 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
               repoUrl,
               tokenPath: gitAuth.tokenPath,
             })
-          : Promise.resolve(),
+          : githubConfig
+            ? writeCloudcodeGitHubState(sandbox, paths, {
+                baseBranch,
+                repoUrl,
+              })
+            : Promise.resolve(),
         contextConfig
           ? writeCloudcodeContextState(sandbox, paths, {
               convexUrl: input.convexUrl,
@@ -787,7 +796,11 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         installDaytonaDesktopTools(sandbox, paths, input.signal, {
           config: mcpConfig,
           instructions: [
-            githubConfig ? cloudcodeGitHubAgentInstructions() : undefined,
+            githubConfig
+              ? cloudcodeGitHubAgentInstructions({
+                  authenticated: Boolean(gitAuth),
+                })
+              : undefined,
             contextConfig ? cloudcodeContextAgentInstructions() : undefined,
             input.agentInstructions?.trim() || undefined,
           ]
