@@ -85,12 +85,12 @@ export function useChatRunActions({
   mergeThreadRunState,
   model,
   onAuthRequired,
+  promoteDraftToThread,
   queueingRunKeys,
   readyDraftAttachments,
   repoUrl,
   runningRunKeysSet,
   saveRunState,
-  setActiveId,
   setAttachmentError,
   setEditingRepo,
   setInput,
@@ -133,12 +133,12 @@ export function useChatRunActions({
   ) => CachedRunState
   model: Model
   onAuthRequired: () => void
+  promoteDraftToThread: (threadId: Id<"threads">) => void
   queueingRunKeys: Set<string>
   readyDraftAttachments: ChatImageAttachment[]
   repoUrl: string
   runningRunKeysSet: Set<string>
   saveRunState: SaveThreadRunState
-  setActiveId: (threadId: Id<"threads">) => void
   setAttachmentError: (message: string) => void
   setEditingRepo: (value: boolean) => void
   setInput: (value: string) => void
@@ -273,7 +273,7 @@ export function useChatRunActions({
         chatId = created.threadId
         assistantMessageId = created.assistantMessageId
         runKey = transferRunKey(runKey, chatId as string)
-        setActiveId(chatId)
+        promoteDraftToThread(chatId)
       } else {
         const appended = await appendRunMessages({
           attachments: attachments.length ? attachments : undefined,

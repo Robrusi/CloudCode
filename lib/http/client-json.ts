@@ -79,6 +79,42 @@ export function requestJson<T>(
   )
 }
 
+function isTransientRequestError(error: unknown) {
+  // Network failures reject before a response arrives (e.g. TypeError) and 5xx
+  // responses are server-side blips — both are worth retrying. Deterministic
+  // 4xx failures (auth, validation, same-origin) will never succeed on retry.
+  if (error instanceof JsonRequestError) {
+    return error.status >= 500
+  }
+  return true
+}
+
+/**
+ * Runs a JSON request with bounded retries on transient failures. Deterministic
+ * client errors (4xx) are surfaced immediately without retrying.
+ */
+export async function retryJsonRequest<T>(
+  request: () => Promise<T>,
+  {
+    attempts = 3,
+    baseDelayMs = 250,
+  }: { attempts?: number; baseDelayMs?: number } = {}
+): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await request()
+    } catch (error) {
+      lastError = error
+      if (attempt >= attempts || !isTransientRequestError(error)) {
+        throw error
+      }
+      await new Promise((resolve) => setTimeout(resolve, baseDelayMs * attempt))
+    }
+  }
+  throw lastError
+}
+
 export function postJson<T>(
   url: string,
   body: unknown,

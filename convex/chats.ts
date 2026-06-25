@@ -525,7 +525,16 @@ export const deleteThread = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
-    const thread = await requireOwnedThread(ctx, args.threadId, userId)
+    const thread = await ctx.db.get(args.threadId)
+    // Idempotent delete: a thread that is already gone is a success, not an
+    // error. This lets the client safely retry a delete whose response was
+    // lost in transit without surfacing a spurious "Thread not found." failure.
+    if (!thread) {
+      return { sandboxIds: [] as string[] }
+    }
+    if (thread.userId !== userId) {
+      throw new Error("Thread not found.")
+    }
     const [messages, runs] = await Promise.all([
       ctx.db
         .query("messages")

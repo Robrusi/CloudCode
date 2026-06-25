@@ -10,6 +10,7 @@ import {
 import { closeBrowserTerminalSession } from "@/components/sandbox/terminal-session"
 import type { ChatRecord } from "@/components/chat/types"
 import type { Id } from "@/convex/_generated/dataModel"
+import { retryJsonRequest } from "@/lib/http/client-json"
 
 type DeleteThread = (args: { threadId: Id<"threads"> }) => Promise<unknown>
 
@@ -25,7 +26,9 @@ export function useChatThreadActions({
   clearQueuedMessages,
   clearRunKey,
   deleteThread,
+  hideThread,
   removeThreadRunState,
+  restoreThread,
   setActiveFilePath,
   setActiveId,
   setDesktopOpen,
@@ -42,7 +45,9 @@ export function useChatThreadActions({
   clearQueuedMessages: (threadKey: string) => void
   clearRunKey: (runKey: string) => void
   deleteThread: DeleteThread
+  hideThread: (threadKey: string) => void
   removeThreadRunState: (threadId: Id<"threads">) => void
+  restoreThread: (threadKey: string) => void
   setActiveFilePath: (path: string | null) => void
   setActiveId: (value: Id<"threads"> | null) => void
   setDesktopOpen: (open: boolean) => void
@@ -56,6 +61,8 @@ export function useChatThreadActions({
   const [pendingDeleteId, setPendingDeleteId] = useState<Id<"threads"> | null>(
     null
   )
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   const pendingDeleteTitle = pendingDeleteId
     ? chats.find((chat) => chat.id === pendingDeleteId)?.title.trim()
@@ -76,28 +83,41 @@ export function useChatThreadActions({
   )
 
   const requestDeleteChat = useCallback((id: Id<"threads">) => {
+    setDeleteError(null)
     setPendingDeleteId(id)
   }, [])
 
   const cancelDeleteChat = useCallback(() => {
     setPendingDeleteId(null)
+    setDeleteError(null)
   }, [])
 
   const confirmDeleteChat = useCallback(() => {
     const id = pendingDeleteId
-    if (!id) return
-    setPendingDeleteId(null)
+    if (!id || deleteBusy) return
+    setDeleteBusy(true)
+    setDeleteError(null)
     void (async () => {
+      const key = id as string
       const sandboxId = threadSandboxId(id)
+      const wasActive = activeId === id
+      // Optimistically remove the thread from the sidebar (and the open view,
+      // since it drops out of the chat list) for instant feedback.
+      hideThread(key)
+      // Cancelling the run and closing the terminal are intended consequences
+      // of a delete; do them up front so an in-flight run stops promptly.
       await cancelCodexRun(id)
-      clearRunKey(id as string)
-      clearQueuedMessages(id as string)
       if (sandboxId) closeBrowserTerminalSession(sandboxId)
 
       try {
-        await deleteThread({ threadId: id })
+        // Retry transient failures so a dropped response or a server blip does
+        // not leave the thread stranded; the server delete is idempotent.
+        await retryJsonRequest(() => deleteThread({ threadId: id }))
+        // Confirmed gone: clear local run bookkeeping and navigate away.
+        clearRunKey(key)
+        clearQueuedMessages(key)
         removeThreadRunState(id)
-        if (activeId === id) {
+        if (wasActive) {
           setActiveId(null)
           setActiveFilePath(null)
           setFilesOpen(false)
@@ -106,8 +126,17 @@ export function useChatThreadActions({
           setSshOpen(false)
           setTerminalOpen(false)
         }
+        setDeleteBusy(false)
+        setPendingDeleteId(null)
       } catch (error) {
-        console.warn("Failed to delete thread sandbox resources.", error)
+        console.warn("Failed to delete thread.", error)
+        // Revert the optimistic removal and keep the dialog open so the user
+        // can retry or back out instead of silently losing the action.
+        restoreThread(key)
+        setDeleteBusy(false)
+        setDeleteError(
+          "Couldn't delete this chat. Check your connection and try again."
+        )
       }
     })()
   }, [
@@ -115,9 +144,12 @@ export function useChatThreadActions({
     cancelCodexRun,
     clearQueuedMessages,
     clearRunKey,
+    deleteBusy,
     deleteThread,
+    hideThread,
     pendingDeleteId,
     removeThreadRunState,
+    restoreThread,
     setActiveFilePath,
     setActiveId,
     setDesktopOpen,
@@ -140,6 +172,8 @@ export function useChatThreadActions({
   return {
     cancelDeleteChat,
     confirmDeleteChat,
+    deleteBusy,
+    deleteError,
     pendingDeleteDisplayTitle,
     pendingDeleteId,
     renameChat,

@@ -60,7 +60,6 @@ type WorkspaceMainPanel = {
 
 type ThreadContent = {
   activeRepoName: string | null
-  activeRunKey: string
   activeSandboxId: string | null
   bottomInset: number
   codexConnected: boolean
@@ -78,6 +77,7 @@ type ThreadContent = {
   scrollable: boolean
   setElement: (element: HTMLDivElement | null) => void
   showOnboarding: boolean
+  threadViewKey: string
   userFirstName: string | null
 }
 
@@ -218,7 +218,7 @@ function ChatThreadContent({
 
   return (
     <div
-      key={thread.activeRunKey}
+      key={thread.threadViewKey}
       ref={thread.setElement}
       onScroll={thread.onScroll}
       className={cn(
@@ -235,7 +235,7 @@ function ChatThreadContent({
             {thread.messages.map((message) =>
               message === setupMessage ? (
                 <RunSetupSummary
-                  key={`setup-${thread.activeRunKey}`}
+                  key={`setup-${thread.threadViewKey}`}
                   createdAt={message.createdAt}
                   logs={logsForMessage(message.id, message.meta?.logs)}
                 />

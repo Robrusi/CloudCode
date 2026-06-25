@@ -4,6 +4,8 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import type { Id } from "@/convex/_generated/dataModel"
 
 export function ChatDialogs({
+  deleteBusy,
+  deleteError,
   pendingDeleteDisplayTitle,
   pendingDeleteId,
   pendingSandboxDelete,
@@ -15,6 +17,8 @@ export function ChatDialogs({
   onConfirmDeleteSandbox,
   onOpenBillingSettings,
 }: {
+  deleteBusy: boolean
+  deleteError: string | null
   pendingDeleteDisplayTitle: string | null
   pendingDeleteId: Id<"threads"> | null
   pendingSandboxDelete: boolean
@@ -38,6 +42,8 @@ export function ChatDialogs({
           }
           confirmLabel="Delete"
           destructive
+          busy={deleteBusy}
+          error={deleteError ?? undefined}
           onCancel={onCancelDeleteChat}
           onConfirm={onConfirmDeleteChat}
         />
