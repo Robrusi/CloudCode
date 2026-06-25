@@ -603,11 +603,15 @@ export function workerRunFinalContent(
     return withVideo(`${streamed}\n\n${lastMessage}`)
   }
 
+  // Prefer the error summary (stderr / normalized turnError) over the raw
+  // app-server event stream (stdout). On a failed turn with no assistant
+  // output — e.g. an out-of-usage error — stdout is the full NDJSON dump and
+  // must never be surfaced to the user; stderr carries the minimal message.
   return withVideo(
     streamed ||
       lastMessage ||
-      redactCodexAuthPayloads(result.stdout.trim()) ||
       redactCodexAuthPayloads(result.stderr.trim()) ||
+      redactCodexAuthPayloads(result.stdout.trim()) ||
       "(no output)"
   )
 }
