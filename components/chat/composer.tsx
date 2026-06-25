@@ -8,6 +8,7 @@ import type {
   KeyboardEvent,
   RefObject,
 } from "react"
+import { useState } from "react"
 
 import { AnimatePresence, motion } from "motion/react"
 
@@ -157,6 +158,12 @@ export function ChatComposer({
   setPresetOpen,
   setThinkingOpen,
 }: ChatComposerProps) {
+  // The settings collapse needs overflow-hidden to clip the height animation,
+  // but the repo/branch/preset menus open upward beyond the panel, so overflow
+  // must be visible while the panel is at rest — otherwise the menus are
+  // clipped and can't be used. Clip only while the height is actually animating.
+  const [settingsAnimating, setSettingsAnimating] = useState(false)
+
   return (
     <div className="pointer-events-auto w-full max-w-3xl rounded-3xl">
       {activeQueuedMessages.length > 0 && activeThreadKey ? (
@@ -249,7 +256,12 @@ export function ChatComposer({
               height: { duration: 0.22, ease: [0.4, 0, 0.2, 1] },
               opacity: { duration: 0.16, ease: "easeOut" },
             }}
-            className="-mt-3 overflow-hidden"
+            onAnimationStart={() => setSettingsAnimating(true)}
+            onAnimationComplete={() => setSettingsAnimating(false)}
+            className={cn(
+              "-mt-3",
+              settingsAnimating ? "overflow-hidden" : "overflow-visible"
+            )}
           >
             <NewChatComposerSettings
               baseBranch={baseBranch}
