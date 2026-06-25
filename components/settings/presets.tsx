@@ -17,7 +17,7 @@ export function PresetSettings({
 
   return (
     <SettingsPage
-      title="Daytona Presets"
+      title="Presets"
       description="Configure sandbox environments, install scripts, and secrets."
       action={
         <button
