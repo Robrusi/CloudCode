@@ -406,6 +406,7 @@ export function BillingSettings() {
             const busy = busyPlanId === plan.planId
             const active = currentPlanId === plan.planId
             const scheduled = planDetail?.scheduledPlanId === plan.planId
+            const comingSoon = plan.priceUsd > 0
 
             return (
               <div key={plan.planId} className="flex items-center gap-3 py-3.5">
@@ -422,6 +423,11 @@ export function BillingSettings() {
                   <span className={cn(statusBadge, statusOk)}>
                     <Check className="size-3.5" />
                     Current plan
+                  </span>
+                ) : comingSoon ? (
+                  <span className={cn(statusBadge, statusIdle)}>
+                    <Clock className="size-3.5" />
+                    Coming soon
                   </span>
                 ) : scheduled ? (
                   <div className="flex shrink-0 items-center gap-2">
