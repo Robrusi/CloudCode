@@ -21,8 +21,8 @@ import {
   objectRecord,
 } from "@/lib/shared/unknown-values"
 import {
-  CODEX_USAGE_LIMIT_MESSAGE,
   isCodexUsageLimitError,
+  summarizeCodexUsageLimitError,
 } from "@/lib/codex/usage-errors"
 
 export type CodexAppServerTurnSummary = {
@@ -527,7 +527,7 @@ export function createCodexAppServerTurnReducer({
             .filter(Boolean)
             .join("\n")
         )
-        ? CODEX_USAGE_LIMIT_MESSAGE
+        ? summarizeCodexUsageLimitError(error.message ?? "")
         : [error.message, error.additionalDetails].filter(Boolean).join("\n")
       : undefined
 

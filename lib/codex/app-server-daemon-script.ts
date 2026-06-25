@@ -1,11 +1,11 @@
-export const CODEX_APP_SERVER_DAEMON_VERSION = "7"
+export const CODEX_APP_SERVER_DAEMON_VERSION = "8"
 
 export const CODEX_APP_SERVER_DAEMON_SCRIPT = String.raw`import { createHash } from "node:crypto"
 import { spawn } from "node:child_process"
 import fs from "node:fs"
 import net from "node:net"
 
-const VERSION = "7"
+const VERSION = "8"
 const REQUEST_TIMEOUT_MS = Number(process.env.CLOUDCODE_APP_SERVER_REQUEST_TIMEOUT_MS || "45000")
 const AUTH_REFRESH_RESPONSE_TIMEOUT_MS = Number(process.env.CLOUDCODE_AUTH_REFRESH_RESPONSE_TIMEOUT_MS || "120000")
 const SOCKET_PATH = requiredEnv("CLOUDCODE_DAEMON_SOCKET")
@@ -135,10 +135,9 @@ function agentMessageFromTurn(turn) {
   return messages.at(-1) || ""
 }
 
-// Minimal user-facing message for out-of-usage failures. Keep in sync with
-// CODEX_USAGE_LIMIT_MESSAGE in lib/codex/usage-errors.ts (this script is a
-// standalone daemon and cannot import from the app).
-const USAGE_LIMIT_MESSAGE = "You're out of Codex usage."
+// Usage-limit handling. Keep in sync with lib/codex/usage-errors.ts (this
+// script is a standalone daemon and cannot import from the app).
+const USAGE_LIMIT_MESSAGE = "You've hit your usage limit."
 const USAGE_LIMIT_PATTERNS = [
   "usagelimitexceeded",
   "usage_limit_reached",
@@ -153,6 +152,24 @@ function isUsageLimitError(text) {
   if (!text) return false
   const normalized = text.toLowerCase()
   return USAGE_LIMIT_PATTERNS.some((pattern) => normalized.includes(pattern))
+}
+
+function summarizeUsageLimit(message) {
+  const withoutUrls = (text) =>
+    text.replace(/\s*\(https?:\/\/[^)]*\)/gi, "").replace(/https?:\/\/\S+/gi, "")
+  const rawLead = message.split(/\b(?:upgrade|visit|try again)\b/i)[0] || ""
+  const lead = withoutUrls(rawLead)
+    .replace(/\s+/g, " ")
+    .replace(/[,\s]+$/, "")
+    .trim()
+  const leadIsUsable =
+    Boolean(lead) && lead.length <= 160 && !lead.includes("{") && !lead.includes('"')
+  const base = leadIsUsable ? lead : USAGE_LIMIT_MESSAGE
+  const withPeriod = /[.!?]$/.test(base) ? base : base + "."
+  const retryMatch = message.match(/\btry again\b[^.{}"]*/i)
+  const retry = retryMatch && retryMatch[0].trim().length <= 60 ? retryMatch[0].trim() : ""
+  if (!retry) return withPeriod
+  return withPeriod + " " + retry.charAt(0).toUpperCase() + retry.slice(1) + "."
 }
 
 function codexErrorInfoText(info) {
@@ -170,7 +187,7 @@ function turnErrorMessage(turn) {
   const details = stringValue(error.additionalDetails)
   const info = codexErrorInfoText(error.codexErrorInfo)
   if (isUsageLimitError([message, info, details].filter(Boolean).join("\n"))) {
-    return USAGE_LIMIT_MESSAGE
+    return summarizeUsageLimit(message)
   }
   return [message, details].filter(Boolean).join("\n")
 }
