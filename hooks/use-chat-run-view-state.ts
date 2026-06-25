@@ -20,6 +20,7 @@ import { useChatLiveRunReveal } from "@/hooks/use-chat-live-run-reveal"
 type UseChatRunViewStateParams = {
   activeId: Id<"threads"> | null
   activeRunKey: string
+  activeThreadLoading: boolean
   chats: ChatRecord[]
   liveRun: LiveRunRecord | null | undefined
   liveRunStates: Record<string, CachedRunState>
@@ -41,6 +42,7 @@ type FinishedLiveRunSnapshot = {
 export function useChatRunViewState({
   activeId,
   activeRunKey,
+  activeThreadLoading,
   chats,
   liveRun,
   liveRunStates,
@@ -204,7 +206,10 @@ export function useChatRunViewState({
     Boolean(active?.pending) || messages.some((message) => message.pending)
   const activeRunPending = activeLocalRunPending || activeMessagePending
   const canStopActiveRun = Boolean(active && activeRunPending)
-  const empty = messages.length === 0
+  // Hold the thread layout while a selected thread's full record (with its
+  // messages) is still loading; otherwise the new-chat empty state flashes in
+  // the gap between selecting a thread and its messages arriving.
+  const empty = messages.length === 0 && !activeThreadLoading
   const threadContentVersion = getThreadContentVersion(messages)
 
   return {

@@ -38,6 +38,7 @@ export function useChatController(): ChatShellProps {
   const {
     activeId,
     activeRunKey,
+    activeThreadLoading,
     appendRunMessages,
     autoSandboxPreset,
     chats,
@@ -198,6 +199,7 @@ export function useChatController(): ChatShellProps {
   } = useChatRunViewState({
     activeId,
     activeRunKey,
+    activeThreadLoading,
     chats,
     liveRun,
     liveRunStates,

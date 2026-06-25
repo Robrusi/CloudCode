@@ -106,6 +106,10 @@ export function useChatRecords() {
     activeId ? { threadId: activeId } : "skip"
   )
   const activeChat = rawActiveChat as ChatRecord | null | undefined
+  // The sidebar list carries no messages, so a freshly selected thread looks
+  // empty until its full record loads. Track that gap so the UI can hold the
+  // thread layout instead of flashing the new-chat empty state.
+  const activeThreadLoading = activeId !== null && rawActiveChat === undefined
   const rawLiveRun = useQuery(
     api.codexRuns.liveForThread,
     activeId ? { threadId: activeId } : "skip"
@@ -155,6 +159,7 @@ export function useChatRecords() {
   return {
     activeId,
     activeRunKey,
+    activeThreadLoading,
     appendRunMessages,
     autoSandboxPreset,
     chats,
