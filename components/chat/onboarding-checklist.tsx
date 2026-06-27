@@ -52,14 +52,12 @@ export function OnboardingChecklist({
   githubConnected,
   githubUserReady,
   onDismiss,
-  onOpenConnectionsSettings,
 }: {
   codexConnected: boolean
   githubAppReady: boolean
   githubConnected: boolean
   githubUserReady: boolean
   onDismiss: () => void
-  onOpenConnectionsSettings: () => void
 }) {
   const doneCount = [codexConnected, githubConnected].filter(Boolean).length
   // The GitHub App install and the user OAuth grant are separate steps; send
@@ -94,13 +92,15 @@ export function OnboardingChecklist({
       <div className="divide-y divide-border/60 border-t border-border/60">
         <StepRow
           icon={<OpenAIIcon className="size-5 shrink-0 text-foreground/80" />}
-          title="Import auth.json"
-          description="Paste ~/.codex/auth.json to authorize Codex runs."
+          title="Sign in with ChatGPT"
+          description="Authorize Codex runs with your ChatGPT account."
           done={codexConnected}
           action={
-            <Button type="button" size="sm" onClick={onOpenConnectionsSettings}>
-              Import
-            </Button>
+            <form action="/api/codex-auth/login" method="get">
+              <Button type="submit" size="sm">
+                Sign in
+              </Button>
+            </form>
           }
         />
         <StepRow

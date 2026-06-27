@@ -25,7 +25,7 @@ export function ConnectionsSettings({
   return (
     <SettingsPage
       title="Connections"
-      description="Import auth.json and connect GitHub to authorize Codex runs and repository access."
+      description="Sign in with ChatGPT and connect GitHub to authorize Codex runs and repository access."
     >
       <div className="divide-y divide-border/60">
         <div className="pb-7">

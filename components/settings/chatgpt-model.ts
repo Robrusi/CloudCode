@@ -198,7 +198,7 @@ export function codexAccountSubtitle(account: CodexAuthAccountStatus) {
     return account.keyHint ? `API key …${account.keyHint}` : "API key"
   }
 
-  if (account.invalidatedAt) return "Fresh auth.json required"
+  if (account.invalidatedAt) return "Sign-in required"
 
   const label =
     account.accountEmail && account.accountName

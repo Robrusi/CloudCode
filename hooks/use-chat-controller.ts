@@ -605,7 +605,6 @@ export function useChatController(): ChatShellProps {
         githubUserReady,
         messages,
         onDismissOnboarding: dismissOnboarding,
-        onOpenConnectionsSettings: () => showSettings("connections"),
         onOpenFile: openFile,
         onOpenFileDiff: openFileDiff,
         onScroll: onThreadScroll,

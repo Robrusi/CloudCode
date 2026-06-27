@@ -76,7 +76,6 @@ type ThreadContent = {
   messages: Message[]
   onDismissOnboarding: () => void
   onOpenFile: (path: string) => void
-  onOpenConnectionsSettings: () => void
   onOpenFileDiff: (path: string, diff: string) => void
   onScroll: UIEventHandler<HTMLDivElement>
   onScrollToLatest: () => void
@@ -377,7 +376,6 @@ function ChatEmptyContent({ thread }: { thread: ThreadContent }) {
             githubConnected={thread.githubConnected}
             githubUserReady={thread.githubUserReady}
             onDismiss={thread.onDismissOnboarding}
-            onOpenConnectionsSettings={thread.onOpenConnectionsSettings}
           />
         </div>
       ) : null}

@@ -1,6 +1,6 @@
 "use client"
 
-import { FileUp, KeyRound } from "lucide-react"
+import { FileUp, KeyRound, LogIn } from "lucide-react"
 import { useReducer } from "react"
 
 import { ChatGPTAccountEditRow } from "@/components/settings/chatgpt-account-edit-row"
@@ -62,11 +62,11 @@ export function ChatGPTConnectionRow({
   )
   const detail = connected
     ? activeAccount?.invalidatedAt
-      ? "Import a fresh auth.json before starting another Codex run."
+      ? "Sign in again before starting another Codex run."
       : activeAccount
         ? `Using ${codexAccountTitle(activeAccount)}`
-        : "auth.json imported. Codex runs are authorized with ChatGPT."
-    : "Import auth.json or add an API key to authorize Codex runs."
+        : "ChatGPT is connected. Codex runs are authorized."
+    : "Sign in with ChatGPT, import auth.json, or add an API key to authorize Codex runs."
   const visibleError = switchError || authError
 
   async function selectProfile(profile: string) {
@@ -227,13 +227,23 @@ export function ChatGPTConnectionRow({
 
   return (
     <div>
-      <div className="flex items-center gap-3">
-        <OpenAIIcon className="size-5 shrink-0 text-foreground/80" />
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-foreground">ChatGPT</div>
-          <div className="text-xs text-muted-foreground">{detail}</div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <OpenAIIcon className="size-5 shrink-0 text-foreground/80" />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium text-foreground">ChatGPT</div>
+            <div className="text-xs text-muted-foreground">{detail}</div>
+          </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5 sm:shrink-0 sm:justify-end">
+          <button
+            type="button"
+            className={navAction}
+            onClick={() => dispatch({ type: "import-open" })}
+          >
+            <FileUp className="size-3.5" />
+            Import auth.json
+          </button>
           <button
             type="button"
             className={navAction}
@@ -242,23 +252,25 @@ export function ChatGPTConnectionRow({
             <KeyRound className="size-3.5" />
             Add API key
           </button>
-          <button
-            type="button"
-            className={
-              connected && !activeAccount?.invalidatedAt
-                ? navAction
-                : navPrimary
-            }
-            onClick={() => dispatch({ type: "import-open" })}
-          >
-            <FileUp className="size-3.5" />
-            Import auth.json
-          </button>
+          <form action="/api/codex-auth/login" method="get">
+            <button
+              type="submit"
+              className={
+                connected && !activeAccount?.invalidatedAt
+                  ? navAction
+                  : navPrimary
+              }
+            >
+              <LogIn className="size-3.5" />
+              Sign in
+            </button>
+          </form>
         </div>
       </div>
       {status?.invalidatedAt ? (
         <div className="mt-2 text-[11px] leading-4 text-destructive">
-          Import a fresh auth.json before starting another Codex run.
+          Sign in again or import a fresh auth.json before starting another
+          Codex run.
         </div>
       ) : visibleError ? (
         <div className="mt-2 text-[11px] leading-4 text-destructive">
