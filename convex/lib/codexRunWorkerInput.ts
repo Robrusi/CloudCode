@@ -1,6 +1,7 @@
 import type { Doc, Id } from "../_generated/dataModel"
 import type { MutationCtx, QueryCtx } from "../_generated/server"
 import { requireCodexAuth } from "./codexRunAuth"
+import { codexRunInput } from "./codexRunRecords"
 import { isBuiltInDefaultPreset } from "./sandboxPresetConstants"
 
 async function mcpServersForRun(
@@ -63,11 +64,19 @@ export async function workerInputForRun(
   ctx: MutationCtx | QueryCtx,
   run: Doc<"codexRuns">
 ) {
-  const [auth, mcpServers, user] = await Promise.all([
+  const [auth, input, mcpServers, user] = await Promise.all([
     requireCodexAuth(ctx, run.userId, run.profile),
+    codexRunInput(ctx, run._id),
     mcpServersForRun(ctx, run.userId),
     ctx.db.get(run.userId),
   ])
+
+  const prompt = input?.prompt ?? run.prompt
+  const notesAccessToken = input?.notesAccessToken ?? run.notesAccessToken
+  if (!prompt) throw new Error("Codex run is missing its prompt.")
+  if (!notesAccessToken) {
+    throw new Error("Codex run is missing its notes access token.")
+  }
 
   let sandboxPreset:
     | {
@@ -116,7 +125,15 @@ export async function workerInputForRun(
     auth,
     canceled: false as const,
     mcpServers,
-    run,
+    run: {
+      ...run,
+      githubToken: input?.githubToken ?? run.githubToken,
+      imageAttachments: input?.imageAttachments ?? run.imageAttachments,
+      notesAccessToken,
+      previousDiff: input?.previousDiff ?? run.previousDiff,
+      prompt,
+      resumeContext: input?.resumeContext ?? run.resumeContext,
+    },
     sandboxIdleMinutes: user?.sandboxIdleMinutes,
     sandboxPreset,
   }

@@ -116,7 +116,7 @@ export default defineSchema({
     previousDiff: v.optional(v.string()),
     notesAccessToken: v.optional(v.string()),
     profile: v.optional(v.string()),
-    prompt: v.string(),
+    prompt: v.optional(v.string()),
     reasoningEffort: thinking,
     repoUrl: v.string(),
     resumeContext: v.optional(v.string()),
@@ -132,9 +132,37 @@ export default defineSchema({
     userId: v.id("users"),
   })
     .index("by_thread_updated", ["threadId", "updatedAt"])
+    .index("by_thread_status_updated", ["threadId", "status", "updatedAt"])
     .index("by_sandbox", ["sandboxId"])
     .index("by_trigger_run", ["triggerRunId"])
     .index("by_user_profile_updated", ["userId", "profile", "updatedAt"])
+    .index("by_user_updated", ["userId", "updatedAt"]),
+
+  codexRunInputs: defineTable({
+    githubToken: v.optional(v.string()),
+    imageAttachments: v.optional(v.array(imageAttachment)),
+    notesAccessToken: v.string(),
+    previousDiff: v.optional(v.string()),
+    prompt: v.string(),
+    resumeContext: v.optional(v.string()),
+    runId: v.id("codexRuns"),
+    userId: v.id("users"),
+  })
+    .index("by_run", ["runId"])
+    .index("by_user", ["userId"]),
+
+  codexRunCheckpoints: defineTable({
+    content: v.string(),
+    contentLength: v.number(),
+    lastStreamId: v.optional(v.string()),
+    logs: v.optional(v.array(runLog)),
+    runId: v.id("codexRuns"),
+    threadId: v.id("threads"),
+    updatedAt: v.number(),
+    userId: v.id("users"),
+  })
+    .index("by_run", ["runId"])
+    .index("by_thread_updated", ["threadId", "updatedAt"])
     .index("by_user_updated", ["userId", "updatedAt"]),
 
   billingCustomers: defineTable({

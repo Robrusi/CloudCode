@@ -21,6 +21,7 @@ import type * as githubApp from "../githubApp.js";
 import type * as lib_codexRunAuth from "../lib/codexRunAuth.js";
 import type * as lib_codexRunLifecycle from "../lib/codexRunLifecycle.js";
 import type * as lib_codexRunLogs from "../lib/codexRunLogs.js";
+import type * as lib_codexRunRecords from "../lib/codexRunRecords.js";
 import type * as lib_codexRunValidators from "../lib/codexRunValidators.js";
 import type * as lib_codexRunWorkerInput from "../lib/codexRunWorkerInput.js";
 import type * as lib_envNameValidation from "../lib/envNameValidation.js";
@@ -61,6 +62,7 @@ declare const fullApi: ApiFromModules<{
   "lib/codexRunAuth": typeof lib_codexRunAuth;
   "lib/codexRunLifecycle": typeof lib_codexRunLifecycle;
   "lib/codexRunLogs": typeof lib_codexRunLogs;
+  "lib/codexRunRecords": typeof lib_codexRunRecords;
   "lib/codexRunValidators": typeof lib_codexRunValidators;
   "lib/codexRunWorkerInput": typeof lib_codexRunWorkerInput;
   "lib/envNameValidation": typeof lib_envNameValidation;

@@ -5,6 +5,7 @@ import {
   compactRunLogs,
   type StoredRunLog,
 } from "./codexRunLogs"
+import { codexRunCheckpoint } from "./codexRunRecords"
 
 export const TERMINAL_RUN_STATUSES = new Set([
   "succeeded",
@@ -12,7 +13,8 @@ export const TERMINAL_RUN_STATUSES = new Set([
   "canceled",
 ])
 
-const ACTIVE_RUN_STATUSES = new Set(["queued", "running", "canceling"])
+const ACTIVE_RUN_STATUS_VALUES = ["queued", "running", "canceling"] as const
+const ACTIVE_RUN_STATUSES = new Set<string>(ACTIVE_RUN_STATUS_VALUES)
 
 export function isActiveCodexRunStatus(status: Doc<"codexRuns">["status"]) {
   return ACTIVE_RUN_STATUSES.has(status)
@@ -22,13 +24,21 @@ export async function activeRunForThread(
   ctx: QueryCtx | MutationCtx,
   threadId: Id<"threads">
 ) {
-  const runs = await ctx.db
-    .query("codexRuns")
-    .withIndex("by_thread_updated", (q) => q.eq("threadId", threadId))
-    .order("desc")
-    .take(12)
+  const runs = await Promise.all(
+    ACTIVE_RUN_STATUS_VALUES.map((status) =>
+      ctx.db
+        .query("codexRuns")
+        .withIndex("by_thread_status_updated", (q) =>
+          q.eq("threadId", threadId).eq("status", status)
+        )
+        .order("desc")
+        .first()
+    )
+  )
 
-  return runs.find((run) => ACTIVE_RUN_STATUSES.has(run.status))
+  return runs
+    .filter((run): run is Doc<"codexRuns"> => Boolean(run))
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0]
 }
 
 export function sandboxIdFromLog(log: StoredRunLog) {
@@ -65,8 +75,10 @@ export async function markRunCanceled(
   const sandboxId = sandboxIdOverride ?? latestSandboxIdForRun(run)
   const sandboxState =
     run.sandboxState ?? (sandboxId ? ("running" as const) : undefined)
-  const canceledContent = run.content?.trim()
-    ? `${run.content.trimEnd()}\n\n${content}`
+  const checkpoint = await codexRunCheckpoint(ctx, run._id)
+  const currentContent = checkpoint?.content ?? run.content ?? ""
+  const canceledContent = currentContent.trim()
+    ? `${currentContent.trimEnd()}\n\n${content}`
     : content
 
   const sandboxPatch = {
@@ -76,7 +88,6 @@ export async function markRunCanceled(
 
   if (!TERMINAL_RUN_STATUSES.has(run.status)) {
     await ctx.db.patch(run._id, {
-      content: canceledContent,
       finishedAt: now,
       ...sandboxPatch,
       status: "canceled",
@@ -98,7 +109,7 @@ export async function markRunCanceled(
     message.pending
   ) {
     const existingMeta = compactMessageMeta(message.meta)
-    const runLogs = compactRunLogs(run.logs)
+    const runLogs = compactRunLogs(checkpoint?.logs ?? run.logs)
     await ctx.db.patch(message._id, {
       content: canceledContent,
       error: false,

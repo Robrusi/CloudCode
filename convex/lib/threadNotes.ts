@@ -1,5 +1,6 @@
 import type { Doc, Id } from "../_generated/dataModel"
 import type { MutationCtx, QueryCtx } from "../_generated/server"
+import { codexRunInput } from "./codexRunRecords"
 
 export const MAX_NOTES_LENGTH = 20_000
 
@@ -11,18 +12,20 @@ export async function requireRunThreadNotesAccess(
     threadId: Id<"threads">
   }
 ) {
-  const [run, thread] = await Promise.all([
+  const [run, input, thread] = await Promise.all([
     ctx.db.get(args.runId),
+    codexRunInput(ctx, args.runId),
     ctx.db.get(args.threadId),
   ])
+  const notesAccessToken = input?.notesAccessToken ?? run?.notesAccessToken
 
   if (
     !run ||
     !thread ||
     run.threadId !== args.threadId ||
     thread.userId !== run.userId ||
-    !run.notesAccessToken ||
-    run.notesAccessToken !== args.notesAccessToken
+    !notesAccessToken ||
+    notesAccessToken !== args.notesAccessToken
   ) {
     throw new Error("Shared notes are unavailable for this run.")
   }

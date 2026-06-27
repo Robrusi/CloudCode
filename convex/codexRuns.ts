@@ -10,6 +10,10 @@ import {
   sandboxIdFromLog,
   TERMINAL_RUN_STATUSES,
 } from "./lib/codexRunLifecycle"
+import {
+  codexRunCheckpoint,
+  upsertCodexRunCheckpoint,
+} from "./lib/codexRunRecords"
 import { findCodexAuth } from "./lib/codexRunAuth"
 import { workerInputForRun } from "./lib/codexRunWorkerInput"
 import {
@@ -92,6 +96,63 @@ export const sandboxAccess = query({
     if (!user) return null
 
     return await sandboxAccessForUser(ctx, args.sandboxId, user._id)
+  },
+})
+
+export const streamAccess = query({
+  args: {
+    runId: v.id("codexRuns"),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx)
+    if (!user) return null
+
+    const run = await ctx.db.get(args.runId)
+    if (!run || run.userId !== user._id) return null
+
+    const [message, checkpoint] = await Promise.all([
+      ctx.db.get(run.assistantMessageId),
+      codexRunCheckpoint(ctx, args.runId),
+    ])
+    const runLogs = compactRunLogs(checkpoint?.logs ?? run.logs)
+    const messageLogs = compactRunLogs(message?.meta?.logs)
+
+    return {
+      checkpointContent: checkpoint?.content ?? run.content ?? "",
+      lastStreamId: checkpoint?.lastStreamId,
+      logs: runLogs.length ? runLogs : messageLogs,
+      runId: run._id,
+      status: run.status,
+      threadId: run.threadId,
+    }
+  },
+})
+
+export const liveCheckpointForRun = query({
+  args: {
+    runId: v.id("codexRuns"),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx)
+    if (!user) return null
+
+    const run = await ctx.db.get(args.runId)
+    if (!run || run.userId !== user._id) return null
+
+    const [message, checkpoint] = await Promise.all([
+      ctx.db.get(run.assistantMessageId),
+      codexRunCheckpoint(ctx, args.runId),
+    ])
+    const runLogs = compactRunLogs(checkpoint?.logs ?? run.logs)
+    const messageLogs = compactRunLogs(message?.meta?.logs)
+
+    return {
+      content: checkpoint?.content ?? run.content ?? message?.content ?? "",
+      lastStreamId: checkpoint?.lastStreamId,
+      logs: runLogs.length ? runLogs : messageLogs,
+      runId: run._id,
+      status: run.status,
+    }
   },
 })
 
@@ -182,26 +243,16 @@ export const create = mutation({
       ...(args.branchMode ? { branchMode: args.branchMode } : {}),
       ...(args.branchName ? { branchName: args.branchName } : {}),
       ...(args.codexThreadId ? { codexThreadId: args.codexThreadId } : {}),
-      content: "",
       createdAt: now,
-      ...(args.githubToken ? { githubToken: args.githubToken } : {}),
       ...(args.githubUserEmail
         ? { githubUserEmail: args.githubUserEmail }
         : {}),
       ...(args.githubUserName ? { githubUserName: args.githubUserName } : {}),
       ...(args.githubUsername ? { githubUsername: args.githubUsername } : {}),
-      ...(args.imageAttachments?.length
-        ? { imageAttachments: args.imageAttachments }
-        : {}),
-      logs: [queuedLog],
       model: args.model,
-      notesAccessToken: args.notesAccessToken,
-      ...(args.previousDiff ? { previousDiff: args.previousDiff } : {}),
       profile: auth.profile,
-      prompt: args.prompt,
       reasoningEffort: args.reasoningEffort,
       repoUrl: args.repoUrl,
-      ...(args.resumeContext ? { resumeContext: args.resumeContext } : {}),
       ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
       sandboxPresetId,
       ...(args.sandboxId ? { sandboxState: "running" as const } : {}),
@@ -211,6 +262,30 @@ export const create = mutation({
       updatedAt: now,
       userId,
     })
+
+    await Promise.all([
+      ctx.db.insert("codexRunInputs", {
+        ...(args.githubToken ? { githubToken: args.githubToken } : {}),
+        ...(args.imageAttachments?.length
+          ? { imageAttachments: args.imageAttachments }
+          : {}),
+        notesAccessToken: args.notesAccessToken,
+        ...(args.previousDiff ? { previousDiff: args.previousDiff } : {}),
+        prompt: args.prompt,
+        ...(args.resumeContext ? { resumeContext: args.resumeContext } : {}),
+        runId,
+        userId,
+      }),
+      upsertCodexRunCheckpoint(
+        ctx,
+        {
+          _id: runId,
+          threadId: args.threadId,
+          userId,
+        },
+        { content: "", logs: [queuedLog] }
+      ),
+    ])
 
     await ctx.db.patch(args.threadId, {
       hasPendingMessage: true,
@@ -476,14 +551,24 @@ export const workerAppendLogs = mutation({
     if (!run) throw new Error("Run not found.")
 
     const sandboxId = args.logs.map(sandboxIdFromLog).find(Boolean)
+    const checkpoint = await codexRunCheckpoint(ctx, args.runId)
     if (run.status === "canceled" || run.status === "canceling") {
       const now = Date.now()
-      await ctx.db.patch(args.runId, {
-        logs: compactRunLogs([...(run.logs ?? []), ...args.logs]),
-        ...(sandboxId ? { sandboxId } : {}),
-        ...(sandboxId ? { sandboxState: run.sandboxState ?? "running" } : {}),
-        updatedAt: now,
-      })
+      await Promise.all([
+        upsertCodexRunCheckpoint(ctx, run, {
+          logs: compactRunLogs([
+            ...(checkpoint?.logs ?? run.logs ?? []),
+            ...args.logs,
+          ]),
+        }),
+        sandboxId
+          ? ctx.db.patch(args.runId, {
+              sandboxId,
+              sandboxState: run.sandboxState ?? "running",
+              updatedAt: now,
+            })
+          : Promise.resolve(),
+      ])
       if (sandboxId) {
         await ctx.db.patch(run.threadId, {
           sandboxId,
@@ -494,14 +579,21 @@ export const workerAppendLogs = mutation({
       return { canceled: true }
     }
 
-    const nextLogs = compactRunLogs([...(run.logs ?? []), ...args.logs])
+    const nextLogs = compactRunLogs([
+      ...(checkpoint?.logs ?? run.logs ?? []),
+      ...args.logs,
+    ])
     const now = Date.now()
-    await ctx.db.patch(args.runId, {
-      logs: nextLogs,
-      ...(sandboxId ? { sandboxId } : {}),
-      ...(sandboxId ? { sandboxState: "running" as const } : {}),
-      updatedAt: now,
-    })
+    await Promise.all([
+      upsertCodexRunCheckpoint(ctx, run, { logs: nextLogs }),
+      sandboxId
+        ? ctx.db.patch(args.runId, {
+            sandboxId,
+            sandboxState: "running" as const,
+            updatedAt: now,
+          })
+        : Promise.resolve(),
+    ])
 
     if (sandboxId) {
       await ctx.db.patch(run.threadId, {
@@ -518,6 +610,7 @@ export const workerAppendLogs = mutation({
 export const workerUpdateContent = mutation({
   args: {
     content: v.string(),
+    lastStreamId: v.optional(v.string()),
     runId: v.id("codexRuns"),
     workerSecret: v.string(),
   },
@@ -529,9 +622,9 @@ export const workerUpdateContent = mutation({
       return { canceled: true }
     }
 
-    await ctx.db.patch(args.runId, {
+    await upsertCodexRunCheckpoint(ctx, run, {
       content: args.content,
-      updatedAt: Date.now(),
+      lastStreamId: args.lastStreamId,
     })
 
     return { canceled: false }
@@ -562,17 +655,20 @@ export const workerComplete = mutation({
 
     const now = Date.now()
     const nextStatus = args.exitCode === 0 ? "succeeded" : "failed"
-    const runLogs = compactRunLogs(run.logs)
-    await ctx.db.patch(args.runId, {
-      ...(args.branchName ? { branchName: args.branchName } : {}),
-      ...(args.codexThreadId ? { codexThreadId: args.codexThreadId } : {}),
-      content: args.content,
-      ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
-      ...(args.sandboxId ? { sandboxState: "running" as const } : {}),
-      finishedAt: now,
-      status: nextStatus,
-      updatedAt: now,
-    })
+    const checkpoint = await codexRunCheckpoint(ctx, args.runId)
+    const runLogs = compactRunLogs(checkpoint?.logs ?? run.logs)
+    await Promise.all([
+      ctx.db.patch(args.runId, {
+        ...(args.branchName ? { branchName: args.branchName } : {}),
+        ...(args.codexThreadId ? { codexThreadId: args.codexThreadId } : {}),
+        ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
+        ...(args.sandboxId ? { sandboxState: "running" as const } : {}),
+        finishedAt: now,
+        status: nextStatus,
+        updatedAt: now,
+      }),
+      upsertCodexRunCheckpoint(ctx, run, { content: args.content }),
+    ])
 
     const message = await ctx.db.get(run.assistantMessageId)
     if (
@@ -633,10 +729,10 @@ export const workerFail = mutation({
     }
 
     const now = Date.now()
-    const runLogs = compactRunLogs(run.logs)
+    const checkpoint = await codexRunCheckpoint(ctx, args.runId)
+    const runLogs = compactRunLogs(checkpoint?.logs ?? run.logs)
     await Promise.all([
       ctx.db.patch(args.runId, {
-        content: args.error,
         error: args.error,
         finishedAt: now,
         ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
@@ -644,6 +740,7 @@ export const workerFail = mutation({
         status: "failed",
         updatedAt: now,
       }),
+      upsertCodexRunCheckpoint(ctx, run, { content: args.error }),
       ctx.db.patch(run.assistantMessageId, {
         content: args.error,
         error: true,

@@ -14,6 +14,7 @@ import {
 } from "@/lib/browser/storage"
 import { requestJson } from "@/lib/http/client-json"
 import type { SandboxPresetRecord } from "@/lib/sandbox/preset-types"
+import { useCodexRunStream } from "@/hooks/use-codex-run-stream"
 
 const EMPTY_CHAT_RECORDS: ChatRecord[] = []
 const EMPTY_SANDBOX_PRESETS: SandboxPresetRecord[] = []
@@ -124,7 +125,9 @@ export function useChatRecords() {
     api.codexRuns.liveForThread,
     activeId ? { threadId: activeId } : "skip"
   )
-  const liveRun = rawLiveRun as LiveRunRecord | null | undefined
+  const liveRun = useCodexRunStream(
+    rawLiveRun as LiveRunRecord | null | undefined
+  )
   const chats = useMemo(() => {
     const merged = (() => {
       if (!activeChat) return chatSummaries

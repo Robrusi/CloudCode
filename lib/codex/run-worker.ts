@@ -441,10 +441,12 @@ export async function appendWorkerRunLogs(
 export async function updateWorkerRunContent(
   client: ConvexHttpClient,
   runId: Id<"codexRuns">,
-  content: string
+  content: string,
+  lastStreamId?: string
 ) {
   const response = await client.mutation(api.codexRuns.workerUpdateContent, {
     content,
+    lastStreamId,
     runId,
     workerSecret: getWorkerSecret(),
   })

@@ -58,6 +58,7 @@ export type LiveRunRecord = {
   codexThreadId?: string
   content: string
   error?: string
+  lastStreamId?: string
   logs: StoredCodexRunLog[]
   pending: boolean
   runId: Id<"codexRuns">

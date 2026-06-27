@@ -31,6 +31,10 @@ import {
   createLogBuffer,
 } from "@/trigger/cloudcode-run-buffers"
 import {
+  codexRunStreamAvailable,
+  createCodexRunStreamPublisher,
+} from "@/lib/codex/run-stream"
+import {
   createBillingAbortController,
   createTriggerUsageMeter,
   observeActiveBillingSandboxSegment,
@@ -208,11 +212,23 @@ export const cloudcodeRun = task({
         })
       sandboxObservations.set(sandboxId, observation)
     }
-    const logBuffer = createLogBuffer(client, payload.runId, (sandboxId) => {
-      latestSandboxId = sandboxId
-      observeSandbox(sandboxId)
-    })
-    const contentBuffer = createContentBuffer(client, payload.runId)
+    const streamPublisher = codexRunStreamAvailable()
+      ? createCodexRunStreamPublisher(payload.runId)
+      : undefined
+    const logBuffer = createLogBuffer(
+      client,
+      payload.runId,
+      (sandboxId) => {
+        latestSandboxId = sandboxId
+        observeSandbox(sandboxId)
+      },
+      streamPublisher
+    )
+    const contentBuffer = createContentBuffer(
+      client,
+      payload.runId,
+      streamPublisher
+    )
 
     try {
       const loaded = await startAndLoadWorkerRun(
@@ -327,6 +343,10 @@ export const cloudcodeRun = task({
 
       const content = workerRunFinalContent(contentBuffer.content, result)
       await completeWorkerRun(client, payload.runId, content, result)
+      streamPublisher?.publishDone(
+        result.exitCode === 0 ? "succeeded" : "failed"
+      )
+      await streamPublisher?.flush()
 
       return {
         canceled: false,
@@ -348,10 +368,14 @@ export const cloudcodeRun = task({
 
       if (signal.aborted || isWorkerRunCanceledError(error)) {
         await cancelWorkerRun(client, payload.runId, latestSandboxId)
+        streamPublisher?.publishDone("canceled")
+        await streamPublisher?.flush()
         return { canceled: true }
       }
 
       if (error instanceof CodexAuthReconnectHandledError) {
+        streamPublisher?.publishError(CODEX_AUTH_RECONNECT_MESSAGE)
+        await streamPublisher?.flush()
         throw error
       }
 
@@ -363,6 +387,8 @@ export const cloudcodeRun = task({
           sandboxId: latestSandboxId,
           userId: loadedUserId,
         })
+        streamPublisher?.publishError(CODEX_AUTH_RECONNECT_MESSAGE)
+        await streamPublisher?.flush()
         throw new Error(CODEX_AUTH_RECONNECT_MESSAGE)
       }
 
@@ -383,14 +409,17 @@ export const cloudcodeRun = task({
         })
       }
 
+      const failureMessage = errorMessage(error)
       await failWorkerRun(
         client,
         payload.runId,
-        errorMessage(error),
+        failureMessage,
         latestSandboxId
       ).catch((failError) => {
         console.warn("Unable to mark Codex run failed.", failError)
       })
+      streamPublisher?.publishError(failureMessage)
+      await streamPublisher?.flush()
       throw error
     } finally {
       usageMeter?.stop()

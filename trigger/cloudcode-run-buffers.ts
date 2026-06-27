@@ -7,11 +7,16 @@ import {
   type WorkerConvexClient,
   type WorkerRunPayload,
 } from "@/lib/codex/run-worker"
+import type { CodexRunStreamPublisher } from "@/lib/codex/run-stream"
 
-const LOG_BATCH_SIZE = 20
-const LOG_FLUSH_DELAY_MS = 350
-const CONTENT_FLUSH_CHAR_THRESHOLD = 32
-const CONTENT_FLUSH_DELAY_MS = 80
+const STREAM_LOG_BATCH_SIZE = 40
+const STREAM_LOG_FLUSH_DELAY_MS = 1_500
+const FALLBACK_LOG_BATCH_SIZE = 20
+const FALLBACK_LOG_FLUSH_DELAY_MS = 350
+const STREAM_CONTENT_FLUSH_CHAR_THRESHOLD = 4_096
+const STREAM_CONTENT_FLUSH_DELAY_MS = 1_500
+const FALLBACK_CONTENT_FLUSH_CHAR_THRESHOLD = 32
+const FALLBACK_CONTENT_FLUSH_DELAY_MS = 80
 const FINAL_FLUSH_TIMEOUT_MS = 5_000
 const MUTATION_RETRY_DELAYS_MS = [100, 300, 900]
 
@@ -54,8 +59,15 @@ async function withMutationRetries<T>(
 export function createLogBuffer(
   client: WorkerConvexClient,
   runId: WorkerRunPayload["runId"],
-  onSandboxId: (sandboxId: string) => void
+  onSandboxId: (sandboxId: string) => void,
+  streamPublisher?: CodexRunStreamPublisher
 ) {
+  const logBatchSize = streamPublisher
+    ? STREAM_LOG_BATCH_SIZE
+    : FALLBACK_LOG_BATCH_SIZE
+  const logFlushDelayMs = streamPublisher
+    ? STREAM_LOG_FLUSH_DELAY_MS
+    : FALLBACK_LOG_FLUSH_DELAY_MS
   let flushTimer: ReturnType<typeof setTimeout> | undefined
   let flushPromise: Promise<void> | undefined
   let flushError: unknown
@@ -70,7 +82,7 @@ export function createLogBuffer(
   const flush = () => {
     if (flushPromise) return flushPromise
     clearFlushTimer()
-    const logs = pending.splice(0, LOG_BATCH_SIZE)
+    const logs = pending.splice(0, logBatchSize)
     if (logs.length === 0) return Promise.resolve()
 
     flushPromise = withMutationRetries("append run logs", () =>
@@ -103,7 +115,7 @@ export function createLogBuffer(
     flushTimer = setTimeout(() => {
       flushTimer = undefined
       void flush()
-    }, LOG_FLUSH_DELAY_MS)
+    }, logFlushDelayMs)
   }
 
   return {
@@ -113,12 +125,14 @@ export function createLogBuffer(
       if (sandboxId) onSandboxId(sandboxId)
       if (!shouldPersistRunLog(log)) return
 
-      pending.push({ ...log, time: Date.now() })
+      const storedLog = { ...log, time: Date.now() }
+      streamPublisher?.publishLog(storedLog)
+      pending.push(storedLog)
       if (sandboxId) {
         void flush().catch((error) => {
           flushError = error
         })
-      } else if (pending.length >= LOG_BATCH_SIZE) {
+      } else if (pending.length >= logBatchSize) {
         void flush().catch((error) => {
           flushError = error
         })
@@ -164,8 +178,15 @@ export function createLogBuffer(
 
 export function createContentBuffer(
   client: WorkerConvexClient,
-  runId: WorkerRunPayload["runId"]
+  runId: WorkerRunPayload["runId"],
+  streamPublisher?: CodexRunStreamPublisher
 ) {
+  const contentFlushCharThreshold = streamPublisher
+    ? STREAM_CONTENT_FLUSH_CHAR_THRESHOLD
+    : FALLBACK_CONTENT_FLUSH_CHAR_THRESHOLD
+  const contentFlushDelayMs = streamPublisher
+    ? STREAM_CONTENT_FLUSH_DELAY_MS
+    : FALLBACK_CONTENT_FLUSH_DELAY_MS
   let content = ""
   let flushedContent = ""
   let flushTimer: ReturnType<typeof setTimeout> | undefined
@@ -183,10 +204,25 @@ export function createContentBuffer(
     clearFlushTimer()
     if (content === flushedContent) return Promise.resolve()
     const snapshot = content
+    const checkpoint =
+      streamPublisher === undefined
+        ? withMutationRetries("update run content", () =>
+            updateWorkerRunContent(client, runId, snapshot)
+          ).then(() => undefined)
+        : streamPublisher
+            .flush()
+            .then(() =>
+              withMutationRetries("update run content", () =>
+                updateWorkerRunContent(
+                  client,
+                  runId,
+                  snapshot,
+                  streamPublisher.latestId
+                )
+              ).then(() => undefined)
+            )
 
-    flushPromise = withMutationRetries("update run content", () =>
-      updateWorkerRunContent(client, runId, snapshot)
-    )
+    flushPromise = checkpoint
       .then(() => {
         flushedContent = snapshot
         flushError = undefined
@@ -207,7 +243,7 @@ export function createContentBuffer(
     return flushPromise
   }
 
-  const scheduleFlush = (delay = CONTENT_FLUSH_DELAY_MS) => {
+  const scheduleFlush = (delay = contentFlushDelayMs) => {
     if (flushTimer) return
     flushTimer = setTimeout(() => {
       flushTimer = undefined
@@ -221,9 +257,10 @@ export function createContentBuffer(
     if (isWorkerRunCanceledError(flushError)) throw flushError
     if (!value) return
     content += value
+    streamPublisher?.publishContentDelta(value)
     if (
       options.immediate ||
-      content.length - flushedContent.length >= CONTENT_FLUSH_CHAR_THRESHOLD
+      content.length - flushedContent.length >= contentFlushCharThreshold
     ) {
       void flush().catch((error) => {
         flushError = error
