@@ -1,22 +1,29 @@
-# Cloudcode
+# CloudCode
 
-Cloudcode is a Next.js app for running Codex on GitHub repositories inside
-Daytona sandboxes. It uses Clerk for sign-in, ChatGPT OAuth for Codex auth, a
-GitHub App for repository access, Convex for app data, and Trigger.dev for
-background Codex runs.
+<p align="center">
+  <img alt="image" src="/public/Readme.png" />
+</p>
+
+<p align="center">
+  <a href="https://github.com/robrusi/cloudcode"><img alt="badge" src="https://shieldcn.dev/github/robrusi/cloudcode/stars.svg?variant=secondary" /></a>
+  <a href="https://x.com/robrusinek"><img alt="follow" src="https://shieldcn.dev/x/follow/robrusinek.svg?variant=secondary" /></a>
+</p>
+
+Cloudcode is a platform for running Codex in sandboxes.
+
+- It has every tool it needs (desktop, terminal, etc)
+- Outputs videos of UI changes it tested in the desktop
+- Full enviroment setup
+- Configure MCP servers for external integrations
+- Share project notes so agents and humans can share context
+- Connect over SSH.
+
+
 
 ## Demo
 
 [Watch the demo](https://drive.google.com/file/d/1TXkPj7NiCo4qouHJE5VemrvAAb7LsD-o/view?usp=sharing)
 
-## Features
-
-- Run Codex against GitHub repositories in isolated Daytona sandboxes.
-- Use persistent sandbox terminals.
-- Connect over SSH.
-- Share project notes so agents and humans can share context.
-- Configure MCP servers for external integrations.
-- Computer use workflows for browser-driven tasks and visual inspection.
 
 ## Setup
 
@@ -67,3 +74,7 @@ pnpm typecheck
 pnpm format:check
 pnpm daytona:snapshot -- --name cloudcode-batteries-included
 ```
+
+<p align="center">
+  <img alt="chart" src="https://shieldcn.dev/chart/github/stars/robrusi/cloudcode.svg" />
+</p>
