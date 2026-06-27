@@ -18,7 +18,7 @@ import {
   SettingsConfirmDialog,
 } from "@/components/settings/shared"
 import { OpenAIIcon } from "@/components/ui/brand-icons"
-import { useCodexAuthPopup } from "@/hooks/use-codex-auth-popup"
+import { useCodexAuthWindow } from "@/hooks/use-codex-auth-window"
 import type {
   CodexAuthAccountStatus,
   CodexAuthOverview,
@@ -42,7 +42,7 @@ export function ChatGPTConnectionRow({
     error: loginError,
     opening: loginOpening,
     start: startLogin,
-  } = useCodexAuthPopup({
+  } = useCodexAuthWindow({
     onComplete: onCodexAuthChanged,
   })
   const {

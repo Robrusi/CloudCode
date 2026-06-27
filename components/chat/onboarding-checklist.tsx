@@ -4,7 +4,7 @@ import { Check } from "lucide-react"
 
 import { GitHubIcon, OpenAIIcon } from "@/components/ui/brand-icons"
 import { Button } from "@/components/ui/button"
-import { useCodexAuthPopup } from "@/hooks/use-codex-auth-popup"
+import { useCodexAuthWindow } from "@/hooks/use-codex-auth-window"
 import { cardSurfaceClass } from "@/components/ui/surface"
 import { cn } from "@/lib/shared/utils"
 
@@ -66,7 +66,7 @@ export function OnboardingChecklist({
     error: codexLoginError,
     opening: codexLoginOpening,
     start: startCodexLogin,
-  } = useCodexAuthPopup({
+  } = useCodexAuthWindow({
     onComplete: onCodexAuthChanged,
   })
   const doneCount = [codexConnected, githubConnected].filter(Boolean).length

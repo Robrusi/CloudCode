@@ -2,19 +2,19 @@ import { NextRequest, NextResponse } from "next/server"
 
 import { getConvexAuthToken } from "@/lib/codex/auth"
 import {
-  CODEX_OAUTH_STATE_COOKIE,
-  CODEX_OAUTH_STATE_COOKIE_PATH,
-  codexOAuthPopupHtml,
-  createCodexHostedOAuthLogin,
+  CODEX_DEVICE_AUTH_COOKIE,
+  CODEX_DEVICE_AUTH_COOKIE_PATH,
+  codexAuthWindowHtml,
+  createCodexDeviceLoginSession,
   createCodexOAuthLoginUrl,
-  encodeCodexHostedOAuthSession,
+  encodeCodexDeviceLoginSession,
 } from "@/lib/codex/oauth"
 
 export const runtime = "nodejs"
 
 function html(message: string, targetOrigin: string) {
   return new NextResponse(
-    codexOAuthPopupHtml({
+    codexAuthWindowHtml({
       error: message,
       message,
       status: "error",
@@ -56,22 +56,18 @@ export async function GET(request: NextRequest) {
       return NextResponse.redirect(loginUrl)
     }
 
-    const redirectUri = new URL("/api/codex-auth/callback", url.origin)
-      .toString()
-      .replace(/\/$/, "")
-    const { loginUrl, session } = createCodexHostedOAuthLogin({
-      appOrigin: url.origin,
-      redirectUri,
-    })
-    const response = NextResponse.redirect(loginUrl)
+    const session = await createCodexDeviceLoginSession()
+    const response = NextResponse.redirect(
+      new URL("/api/codex-auth/device", url.origin)
+    )
 
     response.cookies.set(
-      CODEX_OAUTH_STATE_COOKIE,
-      encodeCodexHostedOAuthSession(session),
+      CODEX_DEVICE_AUTH_COOKIE,
+      encodeCodexDeviceLoginSession(session),
       {
         httpOnly: true,
         maxAge: Math.max(1, Math.ceil((session.expiresAt - Date.now()) / 1000)),
-        path: CODEX_OAUTH_STATE_COOKIE_PATH,
+        path: CODEX_DEVICE_AUTH_COOKIE_PATH,
         sameSite: "lax",
         secure: url.protocol === "https:",
       }

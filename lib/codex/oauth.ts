@@ -23,10 +23,10 @@ const CODEX_OAUTH_ORIGINATOR =
   process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE ?? "codex_cli_rs"
 const CODEX_OAUTH_SCOPE =
   "openid profile email offline_access api.connectors.read api.connectors.invoke"
-const CODEX_HOSTED_OAUTH_SESSION_TTL_MS = 15 * 60 * 1000
+const CODEX_DEVICE_AUTH_TTL_MS = 15 * 60 * 1000
 
-export const CODEX_OAUTH_STATE_COOKIE = "cloudcode_codex_oauth"
-export const CODEX_OAUTH_STATE_COOKIE_PATH = "/api/codex-auth"
+export const CODEX_DEVICE_AUTH_COOKIE = "cloudcode_codex_device_auth"
+export const CODEX_DEVICE_AUTH_COOKIE_PATH = "/api/codex-auth"
 
 type CodexOAuthTokens = {
   accessToken: string
@@ -49,12 +49,17 @@ type CodexOAuthCallbackServerState = {
   server: Server
 }
 
-export type CodexHostedOAuthSession = {
-  appOrigin: string
-  codeVerifier: string
+export type CodexDeviceLoginSession = {
+  deviceAuthId: string
   expiresAt: number
-  redirectUri: string
-  state: string
+  intervalSeconds: number
+  userCode: string
+  verificationUrl: string
+}
+
+type CodexDeviceTokenResponse = {
+  authorizationCode: string
+  codeVerifier: string
 }
 
 const globalCodexOAuthState = globalThis as typeof globalThis & {
@@ -84,10 +89,6 @@ function createPkce() {
 
 function createState() {
   return base64UrlRandom(32)
-}
-
-function hostedOAuthClientConfigured() {
-  return Boolean(process.env.OPENAI_CODEX_CLIENT_ID)
 }
 
 function buildCodexOAuthAuthorizeUrl({
@@ -191,7 +192,18 @@ function optionalString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
 }
 
-function hostedOAuthCookieSecret() {
+async function readJsonResponse(response: Response): Promise<unknown> {
+  const text = await response.text()
+  if (!text) return {}
+
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    return { message: text }
+  }
+}
+
+function authWindowCookieSecret() {
   const secret =
     process.env.CODEX_OAUTH_COOKIE_SECRET ??
     process.env.CLERK_SECRET_KEY ??
@@ -202,15 +214,15 @@ function hostedOAuthCookieSecret() {
 
   if (!secret) {
     throw new Error(
-      "Set CODEX_OAUTH_COOKIE_SECRET or CLERK_SECRET_KEY before using hosted ChatGPT popup sign-in."
+      "Set CODEX_OAUTH_COOKIE_SECRET or CLERK_SECRET_KEY before using hosted ChatGPT device sign-in."
     )
   }
 
   return secret
 }
 
-function signHostedOAuthCookiePayload(payload: string) {
-  return createHmac("sha256", hostedOAuthCookieSecret())
+function signAuthWindowCookiePayload(payload: string) {
+  return createHmac("sha256", authWindowCookieSecret())
     .update(payload)
     .digest("base64url")
 }
@@ -225,23 +237,23 @@ function signaturesMatch(actual: string, expected: string) {
   )
 }
 
-export function encodeCodexHostedOAuthSession(
-  session: CodexHostedOAuthSession
+export function encodeCodexDeviceLoginSession(
+  session: CodexDeviceLoginSession
 ) {
   const payload = Buffer.from(JSON.stringify(session), "utf8").toString(
     "base64url"
   )
-  const signature = signHostedOAuthCookiePayload(payload)
+  const signature = signAuthWindowCookiePayload(payload)
 
   return `${payload}.${signature}`
 }
 
-export function decodeCodexHostedOAuthSession(value?: string) {
+export function decodeCodexDeviceLoginSession(value?: string) {
   if (!value) return null
   const [payload, signature, ...extraParts] = value.split(".")
 
   if (!payload || !signature || extraParts.length > 0) return null
-  if (!signaturesMatch(signature, signHostedOAuthCookiePayload(payload))) {
+  if (!signaturesMatch(signature, signAuthWindowCookiePayload(payload))) {
     return null
   }
 
@@ -254,78 +266,166 @@ export function decodeCodexHostedOAuthSession(value?: string) {
 
   if (!parsed || typeof parsed !== "object") return null
   const record = parsed as Record<string, unknown>
-  const appOrigin = optionalString(record.appOrigin)
-  const codeVerifier = optionalString(record.codeVerifier)
-  const redirectUri = optionalString(record.redirectUri)
-  const state = optionalString(record.state)
+  const deviceAuthId = optionalString(record.deviceAuthId)
+  const userCode = optionalString(record.userCode)
+  const verificationUrl = optionalString(record.verificationUrl)
   const expiresAt =
     typeof record.expiresAt === "number" && Number.isFinite(record.expiresAt)
       ? record.expiresAt
       : undefined
+  const intervalSeconds =
+    typeof record.intervalSeconds === "number" &&
+    Number.isFinite(record.intervalSeconds) &&
+    record.intervalSeconds > 0
+      ? record.intervalSeconds
+      : 5
 
-  if (!appOrigin || !codeVerifier || !redirectUri || !state || !expiresAt) {
+  if (!deviceAuthId || !userCode || !verificationUrl || !expiresAt) {
     return null
   }
 
   return {
-    appOrigin,
-    codeVerifier,
+    deviceAuthId,
     expiresAt,
-    redirectUri,
-    state,
-  } satisfies CodexHostedOAuthSession
+    intervalSeconds,
+    userCode,
+    verificationUrl,
+  } satisfies CodexDeviceLoginSession
 }
 
-export function createCodexHostedOAuthLogin({
-  appOrigin,
-  redirectUri,
-}: {
-  appOrigin: string
-  redirectUri: string
-}) {
-  if (!hostedOAuthClientConfigured()) {
+function deviceAuthErrorMessage(data: unknown, fallback: string) {
+  return tokenErrorMessage(data, fallback)
+}
+
+async function requestCodexDeviceCode(): Promise<CodexDeviceLoginSession> {
+  const issuer = issuerBaseUrl()
+  const response = await fetch(`${issuer}/api/accounts/deviceauth/usercode`, {
+    body: JSON.stringify({
+      client_id: codexOAuthClientId(),
+    }),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  })
+  const data = await readJsonResponse(response)
+
+  if (!response.ok) {
     throw new Error(
-      `Hosted ChatGPT popup sign-in requires OPENAI_CODEX_CLIENT_ID configured for redirect URI ${redirectUri}. The bundled Codex CLI OAuth client only supports localhost callbacks.`
+      deviceAuthErrorMessage(
+        data,
+        `ChatGPT device sign-in could not start (${response.status}).`
+      )
     )
   }
 
-  const { codeChallenge, codeVerifier } = createPkce()
-  const state = createState()
-  const session: CodexHostedOAuthSession = {
-    appOrigin,
-    codeVerifier,
-    expiresAt: Date.now() + CODEX_HOSTED_OAUTH_SESSION_TTL_MS,
-    redirectUri,
-    state,
+  if (!data || typeof data !== "object") {
+    throw new Error("ChatGPT device sign-in response was malformed.")
+  }
+
+  const record = data as Record<string, unknown>
+  const deviceAuthId = optionalString(record.device_auth_id)
+  const userCode =
+    optionalString(record.user_code) ?? optionalString(record.usercode)
+  const interval =
+    typeof record.interval === "number"
+      ? record.interval
+      : typeof record.interval === "string"
+        ? Number.parseInt(record.interval, 10)
+        : 5
+
+  if (!deviceAuthId || !userCode) {
+    throw new Error("ChatGPT device sign-in response was missing a code.")
   }
 
   return {
-    loginUrl: buildCodexOAuthAuthorizeUrl({
-      codeChallenge,
-      redirectUri,
-      state,
-    }),
-    session,
+    deviceAuthId,
+    expiresAt: Date.now() + CODEX_DEVICE_AUTH_TTL_MS,
+    intervalSeconds: Number.isFinite(interval) && interval > 0 ? interval : 5,
+    userCode,
+    verificationUrl: `${issuer}/codex/device`,
   }
 }
 
-export async function completeCodexHostedOAuthLogin({
-  code,
+async function pollCodexDeviceCode({
+  deviceAuthId,
+  userCode,
+}: Pick<CodexDeviceLoginSession, "deviceAuthId" | "userCode">): Promise<
+  | { status: "complete"; token: CodexDeviceTokenResponse }
+  | { status: "pending" }
+> {
+  const issuer = issuerBaseUrl()
+  const response = await fetch(`${issuer}/api/accounts/deviceauth/token`, {
+    body: JSON.stringify({
+      device_auth_id: deviceAuthId,
+      user_code: userCode,
+    }),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  })
+  const data = await readJsonResponse(response)
+
+  if (response.status === 403 || response.status === 404) {
+    return { status: "pending" }
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      deviceAuthErrorMessage(
+        data,
+        `ChatGPT device sign-in failed (${response.status}).`
+      )
+    )
+  }
+
+  if (!data || typeof data !== "object") {
+    throw new Error("ChatGPT device token response was malformed.")
+  }
+
+  const record = data as Record<string, unknown>
+  const authorizationCode = optionalString(record.authorization_code)
+  const codeVerifier = optionalString(record.code_verifier)
+
+  if (!authorizationCode || !codeVerifier) {
+    throw new Error("ChatGPT device token response was missing its code.")
+  }
+
+  return {
+    status: "complete",
+    token: {
+      authorizationCode,
+      codeVerifier,
+    },
+  }
+}
+
+export async function createCodexDeviceLoginSession() {
+  return await requestCodexDeviceCode()
+}
+
+export async function completeCodexDeviceLogin({
   convexToken,
   session,
 }: {
-  code: string
   convexToken: string
-  session: CodexHostedOAuthSession
+  session: CodexDeviceLoginSession
 }) {
   if (session.expiresAt < Date.now()) {
-    throw new Error("ChatGPT sign-in expired. Please try again.")
+    throw new Error("ChatGPT device sign-in expired. Start sign-in again.")
+  }
+
+  const poll = await pollCodexDeviceCode(session)
+  if (poll.status === "pending") {
+    return {
+      retryAfterMs: session.intervalSeconds * 1000,
+      status: "pending" as const,
+    }
   }
 
   const tokens = await exchangeCodexOAuthCode({
-    code,
-    codeVerifier: session.codeVerifier,
-    redirectUri: session.redirectUri,
+    code: poll.token.authorizationCode,
+    codeVerifier: poll.token.codeVerifier,
+    redirectUri: `${issuerBaseUrl()}/deviceauth/callback`,
   })
 
   await saveCodexOAuthTokens({
@@ -333,9 +433,11 @@ export async function completeCodexHostedOAuthLogin({
     convexToken,
     useAccountProfile: true,
   })
+
+  return { status: "complete" as const }
 }
 
-export function codexOAuthPopupHtml({
+export function codexAuthWindowHtml({
   error,
   message,
   status,
@@ -423,7 +525,7 @@ function writeHtml(
     "content-type": "text/html; charset=utf-8",
   })
   response.end(
-    codexOAuthPopupHtml({
+    codexAuthWindowHtml({
       error: status >= 400 ? message : undefined,
       message,
       status: status >= 400 ? "error" : "complete",
