@@ -1,4 +1,5 @@
 import {
+  BILLING_FREE_PLAN_ID,
   BILLING_INFRA_USAGE_FEATURE_ID,
   BILLING_PLANS,
   DAYTONA_REFERENCE_SANDBOX_RESOURCES,
@@ -19,6 +20,7 @@ export type ActivePlanInfo = {
 
 export type AutumnPlanSubscription = {
   addOn?: boolean
+  autoEnable?: boolean
   canceledAt?: number | null
   currentPeriodEnd?: number | null
   id?: string
@@ -69,9 +71,24 @@ function basePlanSubscriptions(customer: AutumnCustomerWithPlan) {
   )
 }
 
+export function hasBasePlanSubscription(customer: AutumnCustomerWithPlan) {
+  return basePlanSubscriptions(customer).length > 0
+}
+
 export function activeBasePlanSubscription(customer: AutumnCustomerWithPlan) {
   return highestRankedSubscription(
     basePlanSubscriptions(customer).filter((entry) => entry.status === "active")
+  )
+}
+
+export function autoEnabledScheduledFreeBasePlanSubscriptions(
+  customer: AutumnCustomerWithPlan
+) {
+  return basePlanSubscriptions(customer).filter(
+    (entry) =>
+      entry.planId === BILLING_FREE_PLAN_ID &&
+      entry.status === "scheduled" &&
+      entry.autoEnable === true
   )
 }
 

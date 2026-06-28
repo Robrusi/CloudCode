@@ -11,7 +11,9 @@ import {
 } from "@/lib/billing/model"
 import {
   activeBasePlanSubscription,
+  autoEnabledScheduledFreeBasePlanSubscriptions,
   computeUsageHours,
+  hasBasePlanSubscription,
   resolveActivePlan,
   type ActivePlanInfo,
   type AutumnPlanSubscription,
@@ -46,15 +48,49 @@ async function autumnClient() {
   return new Autumn({ secretKey, timeoutMs: 15_000 })
 }
 
+type AutumnClient = Awaited<ReturnType<typeof autumnClient>>
+type AutumnCustomer = Awaited<
+  ReturnType<AutumnClient["customers"]["getOrCreate"]>
+>
+
 export function autumnCustomerParams(user: BillingUser) {
   return {
-    autoEnablePlanId: BILLING_FREE_PLAN_ID,
     customerId: autumnCustomerId(user._id),
     email: user.email,
     fingerprint: user.subject || user.tokenIdentifier,
     metadata: { convexUserId: user._id },
     name: user.name,
   }
+}
+
+async function cancelAutoEnabledFreeDowngrades({
+  autumn,
+  customer,
+  customerId,
+  user,
+}: {
+  autumn: AutumnClient
+  customer: AutumnCustomer
+  customerId: string
+  user: BillingUser
+}) {
+  const active = activeBasePlanSubscription(customer)
+  if (!active || active.planId === BILLING_FREE_PLAN_ID) return customer
+
+  const scheduled = autoEnabledScheduledFreeBasePlanSubscriptions(customer)
+  if (scheduled.length === 0) return customer
+
+  for (const subscription of scheduled) {
+    await autumn.billing.update({
+      cancelAction: "cancel_immediately",
+      customerId,
+      noBillingChanges: true,
+      planId: subscription.planId,
+      ...(subscription.id ? { subscriptionId: subscription.id } : {}),
+    })
+  }
+
+  return await autumn.customers.getOrCreate(autumnCustomerParams(user))
 }
 
 export async function livePlanInfoWithUsage(
@@ -98,9 +134,15 @@ export async function ensureAutumnCustomer(ctx: ActionCtx, user: BillingUser) {
   const customerId = autumnCustomerId(user._id)
   const autumn = await autumnClient()
   let customer = await autumn.customers.getOrCreate(autumnCustomerParams(user))
+  customer = await cancelAutoEnabledFreeDowngrades({
+    autumn,
+    customer,
+    customerId,
+    user,
+  })
   let plan = resolveActivePlan(customer)
 
-  if (!activeBasePlanSubscription(customer)) {
+  if (!hasBasePlanSubscription(customer)) {
     const response = await autumn.billing.attach({
       customerId,
       planId: BILLING_FREE_PLAN_ID,
