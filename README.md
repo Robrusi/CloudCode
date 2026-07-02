@@ -18,12 +18,9 @@ Cloudcode is a platform for running Codex in sandboxes.
 - Share project notes so agents and humans can share context
 - Connect over SSH.
 
-
-
 ## Demo
 
 [Watch the demo](https://drive.google.com/file/d/1TXkPj7NiCo4qouHJE5VemrvAAb7LsD-o/view?usp=sharing)
-
 
 ## Setup
 

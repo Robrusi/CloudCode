@@ -1,7 +1,10 @@
 import { DESKTOP_BROWSER_COMMAND } from "@/lib/daytona/desktop-dependencies"
+import {
+  daytonaRecordingClientScriptFragment,
+  playwrightRuntimeScriptFragment,
+  PLAYWRIGHT_TEST_VERSION,
+} from "@/lib/daytona/mcp-script-shared"
 import type { DaytonaSandboxPaths } from "@/lib/daytona/sandbox"
-
-const PLAYWRIGHT_TEST_VERSION = "1.61.0"
 
 /**
  * Environment shared by the Cloudcode UI-tests runner whether it is launched as
@@ -41,7 +44,7 @@ export function uiTestsServerEnv({
 
 export function uiTestsMcpServerScript() {
   return String.raw`#!/usr/bin/env node
-import { execFile, execSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -68,7 +71,8 @@ import {
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
-const PLAYWRIGHT_VERSION = ${JSON.stringify(PLAYWRIGHT_TEST_VERSION)};
+${playwrightRuntimeScriptFragment()}
+${daytonaRecordingClientScriptFragment()}
 const repoPath = resolve(process.env.CLOUDCODE_REPO_PATH || process.cwd());
 const testDir = resolve(
   process.env.CLOUDCODE_UI_TEST_DIR || join(repoPath, ".cloudcode", "tests")
@@ -126,18 +130,6 @@ function text(message, structuredContent) {
 function toolError(error) {
   const message = error instanceof Error ? error.message : String(error);
   return { content: [{ type: "text", text: message }], isError: true };
-}
-
-function commandExists(command) {
-  try {
-    execSync("command -v " + shellQuote(command), {
-      shell: "/bin/bash",
-      stdio: "ignore",
-    });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function exec(command, args = [], options = {}) {
@@ -331,10 +323,79 @@ function runCounts(events) {
   return { failed, passed, skipped };
 }
 
+// A "running" result older than this is a crashed runner, not a live run.
+const RUN_STALE_MS = 20 * 60 * 1000;
+const KEEP_RUNS = 20;
+const runLockPath = join(resultsDir, "run.lock");
+
+function normalizeStoredRun(result) {
+  if (!result || result.status !== "running") return result;
+  const lastTouched = result.updatedAt ?? result.createdAt ?? 0;
+  if (Date.now() - lastTouched < RUN_STALE_MS) return result;
+  return {
+    ...result,
+    error:
+      result.error ||
+      "The runner exited before writing a result for this run.",
+    status: "failed",
+  };
+}
+
 function currentRunResult(runId) {
   const resultPath = join(resultsDir, runId, "result.json");
   if (!existsSync(resultPath)) return null;
-  return jsonFile(resultPath, null);
+  return normalizeStoredRun(jsonFile(resultPath, null));
+}
+
+function acquireRunLock(runId) {
+  const existing = jsonFile(runLockPath, null);
+  if (existing && typeof existing.pid === "number") {
+    let alive = false;
+    try {
+      process.kill(existing.pid, 0);
+      alive = true;
+    } catch {
+    }
+    const startedAt =
+      typeof existing.startedAt === "number" ? existing.startedAt : 0;
+    if (alive && Date.now() - startedAt < RUN_STALE_MS) {
+      throw new Error(
+        "A Cloudcode UI test run is already in progress" +
+          (typeof existing.runId === "string" && existing.runId
+            ? " (" + existing.runId + ")"
+            : "") +
+          ". Wait for it to finish before starting another run."
+      );
+    }
+  }
+  writeJson(runLockPath, { pid: process.pid, runId, startedAt: Date.now() });
+}
+
+function releaseRunLock() {
+  try {
+    unlinkSync(runLockPath);
+  } catch {
+  }
+}
+
+function pruneRuns() {
+  if (!existsSync(resultsDir)) return;
+  const runs = readdirSync(resultsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith("uitest-"))
+    .map((entry) => {
+      const result = jsonFile(join(resultsDir, entry.name, "result.json"), null);
+      return {
+        name: entry.name,
+        updatedAt: result?.updatedAt ?? result?.createdAt ?? 0,
+      };
+    })
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  for (const run of runs.slice(KEEP_RUNS)) {
+    try {
+      rmSync(join(resultsDir, run.name), { force: true, recursive: true });
+    } catch {
+    }
+  }
 }
 
 async function ensureDesktop() {
@@ -376,48 +437,6 @@ function normalizePositiveInteger(value, fallback) {
     : fallback;
 }
 
-function daytonaToolboxBaseUrl() {
-  const rawBaseUrl = process.env.CLOUDCODE_DAYTONA_TOOLBOX_BASE_URL;
-  const sandboxId = process.env.CLOUDCODE_DAYTONA_SANDBOX_ID;
-  const authKey = process.env.CLOUDCODE_DAYTONA_TOOLBOX_AUTH_KEY;
-  if (!rawBaseUrl || !sandboxId || !authKey) {
-    throw new Error(
-      "Daytona recording is unavailable because toolbox context is missing."
-    );
-  }
-  const baseUrl = rawBaseUrl.endsWith("/") ? rawBaseUrl.slice(0, -1) : rawBaseUrl;
-  const sandboxBaseUrl = baseUrl.endsWith("/" + sandboxId)
-    ? baseUrl
-    : baseUrl + "/" + sandboxId;
-  return sandboxBaseUrl + "?DAYTONA_SANDBOX_AUTH_KEY=" + encodeURIComponent(authKey);
-}
-
-async function daytonaRecordingRequest(path, body) {
-  const baseUrl = daytonaToolboxBaseUrl();
-  const separator = path.includes("?") ? "&" : "?";
-  const [proxyBaseUrl, authQuery] = baseUrl.split("?");
-  const response = await fetch(proxyBaseUrl + path + separator + authQuery, {
-    body: JSON.stringify(body),
-    headers: { "content-type": "application/json" },
-    method: "POST",
-  });
-  const textBody = await response.text();
-  let data = {};
-  if (textBody) {
-    try {
-      data = JSON.parse(textBody);
-    } catch {
-      data = { message: textBody };
-    }
-  }
-  if (!response.ok) {
-    const message =
-      data?.message || data?.error || textBody || "Daytona recording request failed.";
-    throw new Error(message);
-  }
-  return data;
-}
-
 function safeRecordingName(label) {
   const base = (label || "ui-test")
     .replace(/[^\w.-]+/g, "-")
@@ -446,7 +465,7 @@ function recordingFromPayload(payload) {
 
 async function startRecording(label) {
   const recording = recordingFromPayload(
-    await daytonaRecordingRequest("/computeruse/recordings/start", {
+    await cloudcodeDaytonaRecordingRequest("/computeruse/recordings/start", {
       label: safeRecordingName(label),
     })
   );
@@ -458,94 +477,13 @@ async function startRecording(label) {
 
 async function stopRecording(recordingId) {
   if (!recordingId) throw new Error("recording id required");
-  const stopped = await daytonaRecordingRequest("/computeruse/recordings/stop", {
+  const stopped = await cloudcodeDaytonaRecordingRequest("/computeruse/recordings/stop", {
     id: recordingId,
   });
   return recordingFromPayload({ id: recordingId, ...stopped }) ?? {
     id: recordingId,
     sandboxId: process.env.CLOUDCODE_DAYTONA_SANDBOX_ID,
   };
-}
-
-function playwrightPackageJsonPath(root = runtimeRoot) {
-  return join(
-    root,
-    "node_modules",
-    "@playwright",
-    "test",
-    "package.json"
-  );
-}
-
-function playwrightCliPath(root = runtimeRoot) {
-  return join(
-    root,
-    "node_modules",
-    "@playwright",
-    "test",
-    "cli.js"
-  );
-}
-
-function installedPlaywrightRuntime(root) {
-  const packageJsonPath = playwrightPackageJsonPath(root);
-  const cliPath = playwrightCliPath(root);
-  const installed = jsonFile(packageJsonPath, null);
-  if (typeof installed?.version !== "string" || !existsSync(cliPath)) {
-    return undefined;
-  }
-  return {
-    cliPath,
-    nodePath: join(root, "node_modules"),
-    packageJsonPath,
-    root,
-    version: installed.version,
-  };
-}
-
-async function resolvePlaywrightRuntime() {
-  const repoRuntime = installedPlaywrightRuntime(repoPath);
-  if (repoRuntime) return repoRuntime;
-
-  const preparedRuntime = installedPlaywrightRuntime(runtimeRoot);
-  if (preparedRuntime?.version === PLAYWRIGHT_VERSION) return preparedRuntime;
-
-  mkdirSync(runtimeRoot, { recursive: true });
-  if (!commandExists("npm")) {
-    throw new Error("npm is required to prepare the Cloudcode UI test runner.");
-  }
-  writeJson(join(runtimeRoot, "package.json"), {
-    private: true,
-    dependencies: {
-      "@playwright/test": PLAYWRIGHT_VERSION,
-    },
-  });
-  const result = await exec(
-    "npm",
-    [
-      "install",
-      "--prefix",
-      runtimeRoot,
-      "--no-audit",
-      "--no-fund",
-      "@playwright/test@" + PLAYWRIGHT_VERSION,
-    ],
-    {
-      env: { PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1" },
-      timeout: 180_000,
-    }
-  );
-  const runtime = installedPlaywrightRuntime(runtimeRoot);
-  if (result.exitCode !== 0 || !runtime) {
-    throw new Error(
-      truncate(
-        result.stderr.trim() ||
-          result.stdout.trim() ||
-          "Unable to install @playwright/test."
-      )
-    );
-  }
-  return runtime;
 }
 
 async function commandOutput(command, args = []) {
@@ -701,10 +639,17 @@ async function runUiTests(args = {}) {
     throw new Error("No tests found in .cloudcode/tests.");
   }
   enforceSourceGuardrails(guardedTestFiles(normalized, discovered));
-  const playwrightRuntime = await resolvePlaywrightRuntime();
-  const desktop = await ensureDesktop();
-  const browser = await chromiumExecutable();
   const runId = "uitest-" + randomUUID();
+  acquireRunLock(runId);
+  try {
+    return await executeUiTestRun(runId, normalized);
+  } finally {
+    releaseRunLock();
+    pruneRuns();
+  }
+}
+
+async function executeUiTestRun(runId, normalized) {
   const runDir = join(resultsDir, runId);
   const eventsPath = join(runDir, "events.jsonl");
   const resultPath = join(runDir, "result.json");
@@ -712,14 +657,45 @@ async function runUiTests(args = {}) {
   const outputDir = join(runDir, "playwright-output");
   mkdirSync(runDir, { recursive: true });
   writeFileSync(eventsPath, "", "utf8");
-  writeJson(resultPath, {
+  const startedResult = {
     baseUrl: normalized.baseUrl,
     createdAt: Date.now(),
     runId,
     status: "running",
     testPath: normalized.testPath ? safeRelativePath(normalized.testPath) : null,
-  });
+  };
+  writeJson(resultPath, startedResult);
 
+  try {
+    return await recordedUiTestRun(runId, normalized, {
+      configPath,
+      eventsPath,
+      outputDir,
+      resultPath,
+    });
+  } catch (error) {
+    // Persist the failure so the run never lingers as "running" in the UI.
+    writeJson(resultPath, {
+      ...startedResult,
+      error: truncate(error instanceof Error ? error.message : String(error)),
+      status: "failed",
+      updatedAt: Date.now(),
+    });
+    throw error;
+  }
+}
+
+async function recordedUiTestRun(
+  runId,
+  normalized,
+  { configPath, eventsPath, outputDir, resultPath }
+) {
+  const playwrightRuntime = await resolveCloudcodePlaywrightRuntime({
+    repoPath,
+    runtimeRoot,
+  });
+  const desktop = await ensureDesktop();
+  const browser = await chromiumExecutable();
   const packageLink = linkCloudcodeTestPackage();
   let recordingStartMs = Date.now();
   let recording;
@@ -788,6 +764,9 @@ async function runUiTests(args = {}) {
   const counts = runCounts(events);
   const status =
     playwright?.exitCode === 0 && counts.failed === 0 ? "passed" : "failed";
+  const timedOut = Boolean(playwright?.signal);
+  const failureDetail =
+    playwright?.stderr || playwright?.stdout || "UI tests failed.";
   const result = {
     baseUrl: normalized.baseUrl,
     createdAt: recordingStartMs,
@@ -799,7 +778,12 @@ async function runUiTests(args = {}) {
     },
     error:
       status === "failed"
-        ? truncate(playwright?.stderr || playwright?.stdout || "UI tests failed.")
+        ? truncate(
+            timedOut
+              ? "The UI test run exceeded its time budget and was killed. Increase timeoutMs or narrow the run with testPath/grep.\n" +
+                  failureDetail
+              : failureDetail
+          )
         : undefined,
     events,
     exitCode: playwright?.exitCode ?? 1,
@@ -861,7 +845,40 @@ function summarizeRun(result) {
   };
 }
 
-async function callTool(name, args = {}) {
+// Event types worth returning to the agent; raw stdout/events stay on disk for
+// the Cloudcode tests panel, which reads full results through the CLI.
+const MCP_EVENT_TYPES = new Set([
+  "annotation",
+  "run_begin",
+  "run_end",
+  "step_end",
+  "step_error",
+  "test_begin",
+  "test_end",
+  "verification_error",
+]);
+
+function compactRunForMcp(result) {
+  if (!result || typeof result !== "object") return result;
+  const { events, stderr, stdout, ...rest } = result;
+  const compactEvents = (Array.isArray(events) ? events : [])
+    .filter((event) => MCP_EVENT_TYPES.has(event?.type))
+    .slice(-80);
+  return {
+    ...rest,
+    events: compactEvents,
+    ...(result.status === "failed"
+      ? {
+          stderr: truncate(stderr ?? "", 4000),
+          stdout: truncate(stdout ?? "", 2000),
+        }
+      : {}),
+  };
+}
+
+async function callTool(name, args = {}, options = {}) {
+  const runResult = (result) =>
+    text(resultSummary(result), options.full ? result : compactRunForMcp(result));
   switch (name) {
     case "ui_tests_list": {
       const tests = discoverTests();
@@ -873,15 +890,14 @@ async function callTool(name, args = {}) {
       );
     }
     case "ui_tests_run": {
-      const result = await runUiTests(args);
-      return text(resultSummary(result), result);
+      return runResult(await runUiTests(args));
     }
     case "ui_tests_status": {
       const runId = typeof args?.runId === "string" ? args.runId.trim() : "";
       if (!runId) throw new Error("runId required");
       const result = currentRunResult(runId);
       if (!result) throw new Error("Unknown UI test run: " + runId);
-      return text(resultSummary(result), result);
+      return runResult(result);
     }
     case "ui_tests_result": {
       const runId = typeof args?.runId === "string" ? args.runId.trim() : "";
@@ -891,7 +907,7 @@ async function callTool(name, args = {}) {
       if (!result) {
         throw new Error(runId ? "Unknown UI test run: " + runId : "No UI test runs found.");
       }
-      return text(resultSummary(result), result);
+      return runResult(result);
     }
     case "ui_tests_runs": {
       const runs = listRuns().map(summarizeRun).filter(Boolean);
@@ -917,7 +933,7 @@ const tools = [
   {
     name: "ui_tests_run",
     description:
-      "Run deterministic Cloudcode UI tests as a headed, recorded browser flow in the Daytona desktop. The run sizes the browser to the actual desktop, starts a fresh isolated recording for the test execution, and returns that completed recording artifact.",
+      "Run deterministic Cloudcode UI tests as a headed, recorded browser flow in the Daytona desktop. Only use this when the user explicitly asked for deterministic, recorded UI tests; it is not the default verification path for UI changes. The run sizes the browser to the actual desktop, starts a fresh isolated recording for the test execution, and returns that completed recording artifact.",
     inputSchema: {
       type: "object",
       properties: {
@@ -968,7 +984,7 @@ async function handle(message) {
             capabilities: { tools: {} },
             serverInfo: { name: "cloudcode-ui-tests", version: "1.0.0" },
             instructions:
-              "Use .cloudcode/tests for deterministic UI tests. Import { test, expect } from @cloudcode/test, use step and annotate for video annotations, and run tests with ui_tests_run. The runner uses headed Playwright in the Daytona desktop, sizes the browser to the actual desktop, and records only the isolated UI test execution. Write normal Playwright against the real app: page.goto for navigation, role/label/text locators for controls, locator/page/keyboard actions for interaction, and expect(...) for verification. Every test must use step(), perform at least one action inside a step, and make an expect(...) assertion after the last action. Do not rehearse the same flow with cloudcode_desktop first, and do not create screenshot or trace artifacts for this flow.",
+              "Deterministic Cloudcode UI tests are opt-in: only write or run .cloudcode/tests specs when the user explicitly asked for a deterministic, recorded test of a flow. Do not use these tools as the default way to verify UI changes; for ordinary verification navigate the app with the cloudcode_desktop browser tools instead. When the user has asked: import { test, expect } from @cloudcode/test, use step and annotate for video annotations, and run tests with ui_tests_run. The runner uses headed Playwright in the Daytona desktop, sizes the browser to the actual desktop, and records only the isolated UI test execution. Write normal Playwright against the real app: page.goto for navigation, role/label/text locators for controls, locator/page/keyboard actions for interaction, and expect(...) for verification. Every test must use step(), perform at least one action inside a step, and make an expect(...) assertion after the last action. Do not rehearse the same flow manually first, and do not create screenshot or trace artifacts for this flow.",
           },
         });
       }
@@ -1032,7 +1048,7 @@ async function cli() {
     else if (arg === "--timeout-ms") args.timeoutMs = Number(rest[(i += 1)]);
     else if (!args.testPath) args.testPath = arg;
   }
-  const result = await callTool(toolName, args);
+  const result = await callTool(toolName, args, { full: true });
   console.log(JSON.stringify(result.structuredContent ?? result, null, 2));
 }
 

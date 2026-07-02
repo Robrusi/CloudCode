@@ -4,6 +4,10 @@ import {
   DESKTOP_AGENT_RECORDING_STATE_FILE,
   DESKTOP_AGENT_RUN_STATE_FILE,
 } from "@/lib/daytona/desktop-recordings"
+import {
+  daytonaRecordingClientScriptFragment,
+  playwrightRuntimeScriptFragment,
+} from "@/lib/daytona/mcp-script-shared"
 
 export function desktopMcpServerScript() {
   return String.raw`#!/usr/bin/env node
@@ -13,6 +17,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
+${playwrightRuntimeScriptFragment()}
+${daytonaRecordingClientScriptFragment()}
 const repoPath = process.env.CLOUDCODE_REPO_PATH || process.cwd();
 const miseTrustedPaths = process.env.MISE_TRUSTED_CONFIG_PATHS || repoPath;
 const stateDir = process.env.CLOUDCODE_DESKTOP_STATE_DIR || join(homedir(), ".cache", "cloudcode-desktop");
@@ -20,6 +26,13 @@ const cloudcodeBrowserCommand = process.env.CLOUDCODE_BROWSER_COMMAND || ${JSON.
 const terminalHome = process.env.CLOUDCODE_TERMINAL_HOME || homedir();
 const terminalPath = process.env.CLOUDCODE_TERMINAL_PATH || process.env.PATH || "";
 const codexHome = process.env.CODEX_HOME || join(terminalHome, ".codex");
+const browserProfileDir =
+  process.env.CLOUDCODE_BROWSER_PROFILE ||
+  join(process.env.HOME || homedir(), ".cache", "cloudcode-chromium");
+const browserCdpPort = Number(process.env.CLOUDCODE_BROWSER_CDP_PORT || "9377");
+const playwrightRuntimeRoot =
+  process.env.CLOUDCODE_PLAYWRIGHT_RUNTIME_DIR ||
+  join(codexHome, "ui-tests", "runtime");
 const activeRecordingPath = join(stateDir, ${JSON.stringify(DESKTOP_AGENT_RECORDING_STATE_FILE)});
 const completedRecordingPath = join(stateDir, ${JSON.stringify(DESKTOP_AGENT_COMPLETED_RECORDING_STATE_FILE)});
 const runStatePath = join(stateDir, ${JSON.stringify(DESKTOP_AGENT_RUN_STATE_FILE)});
@@ -226,43 +239,6 @@ function desktopTerminalEnv(display) {
   };
 }
 
-function daytonaToolboxBaseUrl() {
-  const rawBaseUrl = process.env.CLOUDCODE_DAYTONA_TOOLBOX_BASE_URL;
-  const sandboxId = process.env.CLOUDCODE_DAYTONA_SANDBOX_ID;
-  const authKey = process.env.CLOUDCODE_DAYTONA_TOOLBOX_AUTH_KEY;
-  if (!rawBaseUrl || !sandboxId || !authKey) {
-    throw new Error("Daytona recording is unavailable because toolbox context is missing.");
-  }
-  const baseUrl = rawBaseUrl.endsWith("/") ? rawBaseUrl.slice(0, -1) : rawBaseUrl;
-  const sandboxBaseUrl = baseUrl.endsWith("/" + sandboxId) ? baseUrl : baseUrl + "/" + sandboxId;
-  return sandboxBaseUrl + "?DAYTONA_SANDBOX_AUTH_KEY=" + encodeURIComponent(authKey);
-}
-
-async function daytonaRecordingRequest(path, body) {
-  const baseUrl = daytonaToolboxBaseUrl();
-  const separator = path.includes("?") ? "&" : "?";
-  const [proxyBaseUrl, authQuery] = baseUrl.split("?");
-  const response = await fetch(proxyBaseUrl + path + separator + authQuery, {
-    body: JSON.stringify(body),
-    headers: { "content-type": "application/json" },
-    method: "POST",
-  });
-  const textBody = await response.text();
-  let data = {};
-  if (textBody) {
-    try {
-      data = JSON.parse(textBody);
-    } catch {
-      data = { message: textBody };
-    }
-  }
-  if (!response.ok) {
-    const message = data?.message || data?.error || textBody || "Daytona recording request failed.";
-    throw new Error(message);
-  }
-  return data;
-}
-
 function currentRunId() {
   try {
     if (!existsSync(runStatePath)) return undefined;
@@ -347,7 +323,7 @@ function clearActiveRecording(id) {
 async function startRecording(args) {
   await ensureDesktop();
   const label = safeRecordingName(stringArg(args, "label"));
-  const recording = await daytonaRecordingRequest("/computeruse/recordings/start", { label });
+  const recording = await cloudcodeDaytonaRecordingRequest("/computeruse/recordings/start", { label });
   return { ...recording, sandboxId: process.env.CLOUDCODE_DAYTONA_SANDBOX_ID };
 }
 
@@ -356,7 +332,7 @@ async function stopRecording(args) {
   const id = stringArg(args, "id") || stringArg(args, "recordingId") || active?.id;
   if (!id) throw new Error("recording id required");
   const remember = boolArg(args, "remember", true);
-  const recording = await daytonaRecordingRequest("/computeruse/recordings/stop", { id });
+  const recording = await cloudcodeDaytonaRecordingRequest("/computeruse/recordings/stop", { id });
   clearActiveRecording(id);
   const stopped = { id, ...recording, sandboxId: process.env.CLOUDCODE_DAYTONA_SANDBOX_ID };
   return remember ? rememberCompletedRecording(stopped) : recordingWithSandbox(stopped, { tagCurrentRun: true });
@@ -369,7 +345,9 @@ async function openBrowser(args) {
     throw new Error("Cloudcode Browser is not installed at " + cloudcodeBrowserCommand + ".");
   }
   const logPath = join(stateDir, "browser.log");
-  const child = spawn(cloudcodeBrowserCommand, [url], {
+  // Always expose the automation endpoint so the browser_* tools can attach to
+  // the same headed browser instance later.
+  const child = spawn(cloudcodeBrowserCommand, ["--remote-debugging-port=" + browserCdpPort, url], {
     detached: true,
     env: { ...process.env, DISPLAY: display },
     stdio: ["ignore", "ignore", "pipe"],
@@ -462,6 +440,201 @@ async function openTerminal(args) {
   throw new Error((log || savedLog).trim() || "Terminal did not open.");
 }
 
+// ---------------------------------------------------------------------------
+// Playwright-driven browser navigation.
+//
+// These tools attach Playwright over CDP to the headed Cloudcode Browser on
+// the desktop display, so every action is a real, trusted input event on a
+// visible page - the same thing a human does. Only user-level interactions are
+// exposed: no evaluate, no network interception, no storage mutation.
+// ---------------------------------------------------------------------------
+
+const BROWSER_ACTION_TIMEOUT_MS = 10_000;
+const BROWSER_SNAPSHOT_MAX_CHARS = 24_000;
+
+function truncateText(value, max) {
+  if (typeof value !== "string") return "";
+  return value.length > max ? value.slice(0, max - 3) + "..." : value;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function cdpEndpointAlive() {
+  try {
+    const response = await fetch(
+      "http://127.0.0.1:" + browserCdpPort + "/json/version",
+      { signal: AbortSignal.timeout(1_500) }
+    );
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function launchCdpBrowser(display) {
+  if (!commandExists(cloudcodeBrowserCommand)) {
+    throw new Error("Cloudcode Browser is not installed at " + cloudcodeBrowserCommand + ".");
+  }
+  // A Chromium instance launched without the debugging flag can never expose
+  // it afterwards, so replace any instance already using the shared profile.
+  await shell(
+    "pkill -f -- " + shellQuote("--user-data-dir=" + browserProfileDir) + " >/dev/null 2>&1 || true",
+    { timeout: 5_000 }
+  ).catch(() => "");
+  await sleep(500);
+  const logPath = join(stateDir, "browser-cdp.log");
+  const child = spawn(
+    cloudcodeBrowserCommand,
+    ["--remote-debugging-port=" + browserCdpPort, "about:blank"],
+    {
+      detached: true,
+      env: { ...process.env, DISPLAY: display },
+      stdio: ["ignore", "ignore", "pipe"],
+    }
+  );
+  let log = "";
+  child.stderr.on("data", (chunk) => {
+    log += chunk.toString();
+    if (log.length > 20_000) log = log.slice(-20_000);
+    writeFileSync(logPath, log);
+  });
+  child.unref();
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    if (await cdpEndpointAlive()) return;
+    await sleep(300);
+  }
+  throw new Error(
+    ("Cloudcode Browser did not expose its automation endpoint.\n" + log).trim()
+  );
+}
+
+let browserSession = null;
+
+async function connectBrowserSession() {
+  if (browserSession?.browser?.isConnected()) return browserSession;
+  const runtime = await resolveCloudcodePlaywrightRuntime({
+    repoPath,
+    runtimeRoot: playwrightRuntimeRoot,
+  });
+  const playwright = requireCloudcodePlaywrightCore(runtime);
+  const browser = await playwright.chromium.connectOverCDP(
+    "http://127.0.0.1:" + browserCdpPort,
+    { timeout: 10_000 }
+  );
+  const context = browser.contexts()[0] ?? (await browser.newContext());
+  browserSession = { browser, context, page: undefined };
+  return browserSession;
+}
+
+async function browserPage() {
+  const display = await ensureDesktop();
+  if (!(await cdpEndpointAlive())) {
+    browserSession = null;
+    await launchCdpBrowser(display);
+  }
+  let session;
+  try {
+    session = await connectBrowserSession();
+  } catch {
+    browserSession = null;
+    await launchCdpBrowser(display);
+    session = await connectBrowserSession();
+  }
+  if (!session.page || session.page.isClosed()) {
+    const pages = session.context.pages().filter((page) => !page.isClosed());
+    session.page = pages.at(-1) ?? (await session.context.newPage());
+  }
+  await session.page.bringToFront().catch(() => undefined);
+  return { display, page: session.page };
+}
+
+const browserTargetKeys = ["role", "label", "placeholder", "testId", "selector"];
+
+function hasBrowserTarget(args, { allowText = true } = {}) {
+  if (allowText && stringArg(args, "text").trim()) return true;
+  return browserTargetKeys.some((key) => stringArg(args, key).trim());
+}
+
+function buildBrowserLocator(page, args, { allowText = true } = {}) {
+  const exact = boolArg(args, "exact", false);
+  const role = stringArg(args, "role").trim();
+  const label = stringArg(args, "label").trim();
+  const placeholder = stringArg(args, "placeholder").trim();
+  const textValue = allowText ? stringArg(args, "text").trim() : "";
+  const testId = stringArg(args, "testId").trim();
+  const selector = stringArg(args, "selector").trim();
+  let locator;
+  if (role) {
+    const name = stringArg(args, "name").trim();
+    locator = page.getByRole(role, name ? { exact, name } : {});
+  } else if (label) {
+    locator = page.getByLabel(label, { exact });
+  } else if (placeholder) {
+    locator = page.getByPlaceholder(placeholder, { exact });
+  } else if (textValue) {
+    locator = page.getByText(textValue, { exact });
+  } else if (testId) {
+    locator = page.getByTestId(testId);
+  } else if (selector) {
+    locator = page.locator(selector);
+  } else {
+    throw new Error(
+      "Target an element with role (plus name), label, placeholder, text, testId, or selector."
+    );
+  }
+  const nth = args?.nth;
+  if (typeof nth === "number" && Number.isFinite(nth)) {
+    locator = locator.nth(Math.round(nth));
+  }
+  return locator;
+}
+
+function describeBrowserTarget(args) {
+  const role = stringArg(args, "role").trim();
+  const name = stringArg(args, "name").trim();
+  if (role) return role + (name ? ' "' + name + '"' : "");
+  for (const key of ["label", "placeholder", "text", "testId", "selector"]) {
+    const value = stringArg(args, key).trim();
+    if (value) return key + ' "' + value + '"';
+  }
+  return "element";
+}
+
+async function browserPageState(page) {
+  let snapshot = "";
+  try {
+    snapshot = await page.locator("body").ariaSnapshot({ timeout: 5_000 });
+  } catch {
+  }
+  const title = await page.title().catch(() => "");
+  return {
+    snapshot: truncateText(snapshot, BROWSER_SNAPSHOT_MAX_CHARS),
+    title,
+    url: page.url(),
+  };
+}
+
+async function browserResult(message, page) {
+  const state = await browserPageState(page);
+  const parts = [
+    message,
+    "URL: " + state.url + (state.title ? " - " + state.title : ""),
+  ];
+  if (state.snapshot) {
+    parts.push("Page snapshot (accessibility tree):\n" + state.snapshot);
+  }
+  return text(parts.join("\n\n"), { title: state.title, url: state.url });
+}
+
+async function settleAfterAction(page) {
+  await page
+    .waitForLoadState("domcontentloaded", { timeout: 5_000 })
+    .catch(() => undefined);
+}
+
 async function callTool(name, args = {}) {
   const recorded = (result) => result;
 
@@ -551,10 +724,155 @@ async function callTool(name, args = {}) {
       const recording = await stopRecording(args);
       return text("Daytona recording stopped.", { id: recording?.id, recording });
     }
+    case "browser_open": {
+      const { display, page } = await browserPage();
+      const url = stringArg(args, "url").trim();
+      if (url) {
+        await page.goto(url, { timeout: 30_000, waitUntil: "domcontentloaded" });
+        await page
+          .waitForLoadState("load", { timeout: 10_000 })
+          .catch(() => undefined);
+      }
+      return await browserResult(
+        (url ? "Opened " + url : "Attached to the desktop browser") +
+          " on " + display + ".",
+        page
+      );
+    }
+    case "browser_snapshot": {
+      const { page } = await browserPage();
+      return await browserResult("Current page state.", page);
+    }
+    case "browser_click": {
+      const { page } = await browserPage();
+      const locator = buildBrowserLocator(page, args);
+      const button = stringArg(args, "button", "left");
+      await locator.click({
+        button: button === "right" ? "right" : button === "middle" ? "middle" : "left",
+        clickCount: boolArg(args, "double") ? 2 : 1,
+        timeout: BROWSER_ACTION_TIMEOUT_MS,
+      });
+      await settleAfterAction(page);
+      return await browserResult("Clicked " + describeBrowserTarget(args) + ".", page);
+    }
+    case "browser_type": {
+      const { page } = await browserPage();
+      const value = stringArg(args, "text");
+      if (!value) throw new Error("text required");
+      if (hasBrowserTarget(args, { allowText: false })) {
+        const locator = buildBrowserLocator(page, args, { allowText: false });
+        await locator.click({ timeout: BROWSER_ACTION_TIMEOUT_MS });
+        if (boolArg(args, "clear")) {
+          await locator.press("ControlOrMeta+a", { timeout: BROWSER_ACTION_TIMEOUT_MS });
+          await locator.press("Delete", { timeout: BROWSER_ACTION_TIMEOUT_MS });
+        }
+        await locator.pressSequentially(value, {
+          delay: 25,
+          timeout: Math.max(BROWSER_ACTION_TIMEOUT_MS, value.length * 50 + 5_000),
+        });
+      } else {
+        await page.keyboard.type(value, { delay: 25 });
+      }
+      if (boolArg(args, "pressEnter")) {
+        await page.keyboard.press("Enter");
+        await settleAfterAction(page);
+      }
+      return await browserResult("Typed " + value.length + " characters.", page);
+    }
+    case "browser_press": {
+      const { page } = await browserPage();
+      const key = stringArg(args, "key").trim();
+      if (!key) throw new Error("key required");
+      await page.keyboard.press(key);
+      await settleAfterAction(page);
+      return await browserResult("Pressed " + key + ".", page);
+    }
+    case "browser_scroll": {
+      const { page } = await browserPage();
+      const direction = stringArg(args, "direction", "down");
+      const amount = Math.max(1, Math.min(20, Math.round(numberArg(args, "amount", 4))));
+      const delta = amount * 120;
+      const dx = direction === "left" ? -delta : direction === "right" ? delta : 0;
+      const dy = direction === "up" ? -delta : direction === "down" ? delta : 0;
+      await page.mouse.wheel(dx, dy);
+      return await browserResult(
+        "Scrolled " + direction + " " + amount + " ticks.",
+        page
+      );
+    }
+    case "browser_back": {
+      const { page } = await browserPage();
+      await page.goBack({ timeout: 15_000, waitUntil: "domcontentloaded" });
+      return await browserResult("Navigated back.", page);
+    }
+    case "browser_reload": {
+      const { page } = await browserPage();
+      await page.reload({ timeout: 30_000, waitUntil: "domcontentloaded" });
+      return await browserResult("Reloaded the page.", page);
+    }
+    case "browser_wait_for": {
+      const { page } = await browserPage();
+      const value = stringArg(args, "text").trim();
+      if (!value) throw new Error("text required");
+      const timeout = Math.min(
+        Math.max(Math.round(numberArg(args, "timeoutMs", 10_000)), 1_000),
+        60_000
+      );
+      const hidden = boolArg(args, "hidden", false);
+      await page
+        .getByText(value)
+        .first()
+        .waitFor({ state: hidden ? "hidden" : "visible", timeout });
+      return await browserResult(
+        '"' + value + '" is now ' + (hidden ? "hidden" : "visible") + ".",
+        page
+      );
+    }
+    case "browser_screenshot": {
+      const { page } = await browserPage();
+      const buffer = await page.screenshot({ timeout: 10_000, type: "png" });
+      const title = await page.title().catch(() => "");
+      return {
+        content: [
+          {
+            type: "text",
+            text: "Browser page screenshot captured (" + page.url() + ").",
+          },
+          {
+            type: "image",
+            data: Buffer.from(buffer).toString("base64"),
+            mimeType: "image/png",
+          },
+        ],
+        structuredContent: { title, url: page.url() },
+      };
+    }
     default:
       throw new Error("Unknown desktop tool: " + name);
   }
 }
+
+const browserTargetProperties = {
+  role: {
+    type: "string",
+    description: "ARIA role of the element, such as button, link, textbox, or checkbox. Combine with name.",
+  },
+  name: { type: "string", description: "Accessible name to match together with role." },
+  label: { type: "string", description: "Match a form control by its label text." },
+  placeholder: { type: "string", description: "Match an input by its placeholder text." },
+  text: { type: "string", description: "Match an element by its visible text." },
+  testId: { type: "string", description: "Match an element by data-testid." },
+  selector: {
+    type: "string",
+    description: "CSS selector fallback when no accessible target works.",
+  },
+  exact: { type: "boolean", description: "Require an exact text/name match." },
+  nth: { type: "number", description: "Zero-based index when several elements match." },
+};
+
+// browser_type uses "text" for the typed value, so it cannot target by text.
+const { text: _browserTypeTextTarget, ...browserTypeTargetProperties } =
+  browserTargetProperties;
 
 const tools = [
   {
@@ -681,6 +999,102 @@ const tools = [
       },
     },
   },
+  {
+    name: "browser_open",
+    description:
+      "Open the desktop browser (Playwright-driven, headed, visible on the desktop) and navigate to a URL like a user entering it in the address bar. This is the default way to verify UI changes in the running app. Returns the page URL, title, and accessibility snapshot.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "URL to open; omit to attach to the current tab." },
+      },
+    },
+  },
+  {
+    name: "browser_snapshot",
+    description:
+      "Read the current page state: URL, title, and an accessibility snapshot of the visible UI. Use the snapshot's roles and names to target browser_click and browser_type.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "browser_click",
+    description:
+      "Click a visible element in the desktop browser with a real mouse click, targeted by role+name, label, placeholder, text, testId, or selector.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...browserTargetProperties,
+        button: { type: "string", enum: ["left", "middle", "right"] },
+        double: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "browser_type",
+    description:
+      "Type text with real key presses. With a target, the element is clicked first (optionally cleared); without one, typing goes to the focused element.",
+    inputSchema: {
+      type: "object",
+      required: ["text"],
+      properties: {
+        ...browserTypeTargetProperties,
+        text: { type: "string", description: "The text to type." },
+        clear: { type: "boolean", description: "Select-all and delete before typing." },
+        pressEnter: { type: "boolean", description: "Press Enter after typing." },
+      },
+    },
+  },
+  {
+    name: "browser_press",
+    description:
+      "Press a key or combination in the desktop browser, such as Enter, Escape, Tab, or ControlOrMeta+a.",
+    inputSchema: {
+      type: "object",
+      required: ["key"],
+      properties: { key: { type: "string" } },
+    },
+  },
+  {
+    name: "browser_scroll",
+    description: "Scroll the page with real mouse-wheel ticks.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        direction: { type: "string", enum: ["up", "down", "left", "right"] },
+        amount: { type: "number", description: "Wheel ticks, 1-20 (default 4)." },
+      },
+    },
+  },
+  {
+    name: "browser_back",
+    description: "Navigate back in the desktop browser history, like the back button.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "browser_reload",
+    description: "Reload the current page in the desktop browser.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "browser_wait_for",
+    description:
+      "Wait until the given text is visible (or hidden) on the page. Use for async UI instead of fixed sleeps.",
+    inputSchema: {
+      type: "object",
+      required: ["text"],
+      properties: {
+        text: { type: "string" },
+        hidden: { type: "boolean" },
+        timeoutMs: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "browser_screenshot",
+    description:
+      "Capture a screenshot of the current browser page. Only needed when visual appearance (layout, styling, rendering) is what you are verifying; functional outcomes are already covered by the snapshot each browser action returns.",
+    inputSchema: { type: "object", properties: {} },
+  },
 ];
 
 async function handle(message) {
@@ -695,7 +1109,7 @@ async function handle(message) {
           protocolVersion: params?.protocolVersion || "2025-06-18",
           capabilities: { tools: {} },
           serverInfo: { name: "cloudcode-desktop", version: "1.0.0" },
-          instructions: "Use these tools for manual visual desktop work in the Daytona sandbox. Open URLs only with desktop_open_browser, which launches Cloudcode Browser at /usr/local/bin/cloudcode-browser. Use desktop_open_terminal for long-running dev servers, watchers, and other processes needed during desktop testing. Desktop actions do not record automatically. Use desktop_record_start and desktop_record_stop only when an explicit manual desktop recording is needed. Start with desktop_start, inspect with desktop_screenshot, then act with click/type/key tools. Take another screenshot after each meaningful action. For manual UI verification, never bypass visible controls with javascript: URLs, direct DOM mutation, localStorage edits, console commands, injected scripts, or headless assertions unless the user explicitly asks. Confirm local app pages actually loaded in the browser screenshot before reporting verification; browser errors, blank page, stale tab, unavailable screenshots, or unreadable screenshots mean the behavior is unverified.",
+          instructions: "Tools for GUI and browser work in the Daytona sandbox desktop. To verify UI changes in the running app, use the browser_* tools: they drive the headed desktop browser through Playwright with real, trusted input on visible elements, the way a user browses. Derive the flow from the code you changed and execute it directly as a sequence of actions - for example browser_open the sign-in page, browser_type the email and password, browser_click submit, then confirm the dashboard from the returned page state. Every browser action returns the resulting URL, title, and accessibility snapshot; verify outcomes from that returned state instead of screenshotting after each step, and use browser_wait_for for async UI. Reach for browser_screenshot only when visual appearance (layout, styling, rendering) is what you are verifying or the snapshot is inconclusive. Never cheat during verification: no javascript: URLs, DOM mutation, storage edits, console commands, injected scripts, or API calls that fake UI state; only visible interactions count, and if a state is unreachable that way, report it instead of faking it. Use the coordinate tools (desktop_click, desktop_type, desktop_key, desktop_scroll with desktop_screenshot) only for things outside the web page, such as native dialogs, window management, or non-browser applications. Use desktop_open_terminal for long-running dev servers and watchers, and desktop_open_browser only to show a page to the user manually. Desktop actions do not record automatically; use desktop_record_start and desktop_record_stop only when an explicit manual desktop recording is needed. A blank page, browser error, stale tab, or unreadable snapshot means the behavior is unverified.",
         },
       });
       return;
