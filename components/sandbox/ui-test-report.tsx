@@ -35,6 +35,11 @@ import {
 import { IconButton } from "@/components/ui/icon-button"
 import { cn } from "@/lib/shared/utils"
 
+// Below this offset the first test simply absorbs the leading gap; above it
+// the runner startup gets its own neutral segment so the bar still maps
+// linearly onto the full recording.
+const STARTUP_SEGMENT_MIN_MS = 1500
+
 function buildSegments(
   entries: TimelineEntry[],
   durationMs: number
@@ -48,13 +53,29 @@ function buildSegments(
     ...tests.flatMap((test) => [test.atMs, ...test.steps.map((s) => s.atMs)]),
     0
   )
-  return tests.map((test, index) => ({
+  const segments: PlayerSegment[] = tests.map((test, index) => ({
     endMs: tests[index + 1]?.atMs ?? Math.max(lastAt, test.atMs + 1000),
     id: test.id,
     startMs: test.atMs,
     status: test.status,
     title: test.title,
   }))
+  if (segments.length === 0) return segments
+
+  // The recording starts before the browser does; without accounting for that
+  // lead-in, every segment is shifted relative to the video timeline.
+  if (segments[0].startMs > STARTUP_SEGMENT_MIN_MS) {
+    segments.unshift({
+      endMs: segments[0].startMs,
+      id: "startup",
+      startMs: 0,
+      status: "running",
+      title: "Starting browser",
+    })
+  } else {
+    segments[0] = { ...segments[0], startMs: 0 }
+  }
+  return segments
 }
 
 export function UiTestReport({

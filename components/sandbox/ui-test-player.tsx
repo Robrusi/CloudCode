@@ -283,6 +283,7 @@ export function UiTestPlayer({
           {downloadUrl ? (
             <IconButton
               size="sm"
+              nativeButton={false}
               render={
                 <a
                   href={downloadUrl}

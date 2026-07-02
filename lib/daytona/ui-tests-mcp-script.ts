@@ -576,6 +576,8 @@ function writePlaywrightConfig({
     "    deviceScaleFactor: 1,",
     "    launchOptions: {",
     "      executablePath: " + JSON.stringify(browser) + ",",
+    "      // Pace every action so the recorded flow is watchable by a human.",
+    "      slowMo: 200,",
     "      args: [",
     "        '--window-position=0,0',",
     "        " + JSON.stringify("--window-size=" + screenWidth + "," + screenHeight) + ",",
@@ -1123,6 +1125,11 @@ const overlayScript = [
   "  var status = payload.status ? ' - ' + payload.status : '';",
   "  eyebrow.textContent = (payload.kind || 'ui test') + status;",
   "  title.textContent = payload.title;",
+  "  if (payload.kind === 'result') {",
+  "    root.style.background = payload.status === 'passed' ? 'rgba(20,83,45,.92)' : 'rgba(127,29,29,.92)';",
+  "  } else {",
+  "    root.style.background = 'rgba(15,17,21,.88)';",
+  "  }",
   "  root.style.display = 'block';",
   "  if (payload.kind === 'annotation') hideTimer = setTimeout(function(){ root.style.display = 'none'; }, payload.durationMs || 2600);",
   "};",
@@ -1322,8 +1329,17 @@ async function validateStructuredTest(state) {
   }
 }
 
-async function shortFinalPause() {
-  await new Promise((resolve) => setTimeout(resolve, 750));
+// How long the pass/fail verdict stays on screen before the browser closes,
+// so the recording ends on the visible outcome instead of cutting off.
+const RESULT_HOLD_MS = 2500;
+
+async function showTestResult(page, title, status) {
+  await setOverlay(page, {
+    kind: "result",
+    status,
+    title: (status === "passed" ? "Passed - " : "Failed - ") + title,
+  });
+  await new Promise((resolve) => setTimeout(resolve, RESULT_HOLD_MS));
 }
 
 function shortcutError(method, replacement) {
@@ -1490,7 +1506,7 @@ function installUiGuard(page) {
 
 const test = base.test.extend({
   _cloudcodeVerification: [
-    async ({}, use, testInfo) => {
+    async ({ page }, use, testInfo) => {
       const previousState = activeTestState;
       const state = createTestState(testInfo);
       activeTestState = state;
@@ -1500,16 +1516,20 @@ const test = base.test.extend({
       } catch (error) {
         testError = error;
       }
-      if (testError) {
-        activeTestState = previousState;
-        throw testError;
+      if (!testError) {
+        try {
+          await validateStructuredTest(state);
+        } catch (error) {
+          testError = error;
+        }
       }
-      try {
-        await validateStructuredTest(state);
-        await shortFinalPause();
-      } finally {
-        activeTestState = previousState;
-      }
+      activeTestState = previousState;
+      await showTestResult(
+        page,
+        testInfo.title,
+        testError ? "failed" : "passed"
+      );
+      if (testError) throw testError;
     },
     { auto: true },
   ],

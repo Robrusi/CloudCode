@@ -643,11 +643,6 @@ function daytonaDesktopAgentsMd() {
   ].join("\n")
 }
 
-function base64FileCommand(path: string, content: string) {
-  const encoded = Buffer.from(content, "utf8").toString("base64")
-  return `printf '%s' ${shellQuote(encoded)} | base64 -d > ${shellQuote(path)}`
-}
-
 function desktopCodexConfig(
   paths: Pick<DaytonaSandboxPaths, "codexHome" | "home" | "repoPath">,
   sandbox: Pick<Sandbox, "id" | "toolboxProxyUrl">,
@@ -826,19 +821,42 @@ export async function installDaytonaDesktopTools(
 
   await ensureDaytonaDesktopDependencies(sandbox, signal)
 
+  // The generated scripts are far larger than Linux's per-argument limit
+  // (MAX_ARG_STRLEN, ~128KB), so upload them through the filesystem API and
+  // keep the shell commands down to mkdir/symlink/marker plumbing.
+  const prepare = await runDaytonaCommand(
+    sandbox,
+    `mkdir -p ${shellQuote(`${paths.codexHome}/desktop/state`)} ${shellQuote(`${paths.codexHome}/ui-tests`)} ${shellQuote(uiTestsPackageDir)} ${shellQuote(`${paths.home}/.local/bin`)}`,
+    { signal, timeoutMs: 10_000 }
+  )
+  if (prepare.exitCode !== 0) {
+    throw new Error(
+      prepare.stderr.trim() ||
+        prepare.stdout.trim() ||
+        "Unable to prepare Daytona desktop tool directories."
+    )
+  }
+
+  await sandbox.fs.uploadFiles(
+    [
+      { content: script, path: scriptPath },
+      { content: uiTestsScript, path: uiTestsScriptPath },
+      { content: uiTestsPackageJson, path: uiTestsPackageJsonPath },
+      { content: uiTestsPackageIndex, path: uiTestsPackageIndexPath },
+      { content: uiTestsPackageTypes, path: uiTestsPackageTypesPath },
+      { content: uiTestsReporter, path: uiTestsReporterPath },
+      { content: agentsMd, path: agentsMdPath },
+      { content: config, path: configPath },
+    ].map(({ content, path }) => ({
+      destination: path,
+      source: Buffer.from(content, "utf8"),
+    }))
+  )
+
   const result = await runDaytonaCommand(
     sandbox,
     [
       "set -e",
-      `mkdir -p ${shellQuote(`${paths.codexHome}/desktop/state`)} ${shellQuote(`${paths.codexHome}/ui-tests`)} ${shellQuote(uiTestsPackageDir)} ${shellQuote(`${paths.home}/.local/bin`)}`,
-      base64FileCommand(scriptPath, script),
-      base64FileCommand(uiTestsScriptPath, uiTestsScript),
-      base64FileCommand(uiTestsPackageJsonPath, uiTestsPackageJson),
-      base64FileCommand(uiTestsPackageIndexPath, uiTestsPackageIndex),
-      base64FileCommand(uiTestsPackageTypesPath, uiTestsPackageTypes),
-      base64FileCommand(uiTestsReporterPath, uiTestsReporter),
-      base64FileCommand(agentsMdPath, agentsMd),
-      base64FileCommand(configPath, config),
       `ln -sf ${shellQuote(scriptPath)} ${shellQuote(binPath)}`,
       `ln -sf ${shellQuote(uiTestsScriptPath)} ${shellQuote(uiTestsBinPath)}`,
       `chmod +x ${shellQuote(scriptPath)} ${shellQuote(binPath)} ${shellQuote(uiTestsScriptPath)} ${shellQuote(uiTestsBinPath)}`,
