@@ -1,7 +1,6 @@
 import type {
   DaytonaUiTestEvent,
   DaytonaUiTestFile,
-  DaytonaUiTestRun,
   DaytonaUiTestRunSummary,
 } from "@/lib/daytona/ui-tests"
 
@@ -32,13 +31,17 @@ export type TimelineStep = {
   title: string
 }
 
+export type TimelineTestItem =
+  | ({ kind: "step" } & TimelineStep)
+  | { atMs: number; id: string; kind: "annotation"; title: string }
+
 export type TimelineEntry =
   | {
       atMs: number
       id: string
       kind: "test"
       status: UiTestStatus
-      steps: TimelineStep[]
+      items: TimelineTestItem[]
       title: string
     }
   | {
@@ -68,8 +71,9 @@ function eventOrder(event: DaytonaUiTestEvent, index: number) {
 
 /**
  * Fold the flat reporter/overlay event stream into the nested test → step
- * timeline rendered beside the recording. Annotations become standalone rows so
- * narration such as "Navigating to local dev server" reads inline with tests.
+ * timeline rendered beside the recording. Steps are anchored at their
+ * step_begin time so annotations emitted while a step runs interleave
+ * chronologically inside their owning test instead of dangling below it.
  */
 export function buildUiTestTimeline(
   events: DaytonaUiTestEvent[] | undefined
@@ -84,10 +88,14 @@ export function buildUiTestTimeline(
 
   const entries: TimelineEntry[] = []
   const steps: TimelineStep[] = []
+  const stepStarts = new Map<string, number[]>()
   let currentTest: Extract<TimelineEntry, { kind: "test" }> | null = null
   let testSeq = 0
   let stepSeq = 0
   let annotationSeq = 0
+
+  const stepKey = (test: string | undefined, title: string) =>
+    `${test ?? ""}::${title}`
 
   for (const { event } of ordered) {
     const atMs = Math.max(0, event.atMs ?? 0)
@@ -99,22 +107,31 @@ export function buildUiTestTimeline(
           id: `test-${testSeq++}`,
           kind: "test",
           status: "running",
-          steps: [],
+          items: [],
           title: title || "Untitled test",
         }
         entries.push(currentTest)
         break
       }
+      case "step_begin": {
+        if (!title) break
+        const key = stepKey(event.test, title)
+        const starts = stepStarts.get(key) ?? []
+        starts.push(atMs)
+        stepStarts.set(key, starts)
+        break
+      }
       case "step_end": {
         if (!currentTest || !title) break
+        const startedAt = stepStarts.get(stepKey(event.test, title))?.shift()
         const step: TimelineStep = {
-          atMs,
+          atMs: startedAt ?? atMs,
           error: event.error,
           id: `step-${stepSeq++}`,
           status: normalizeStatus(event.status),
           title,
         }
-        currentTest.steps.push(step)
+        currentTest.items.push({ kind: "step", ...step })
         steps.push(step)
         break
       }
@@ -124,12 +141,16 @@ export function buildUiTestTimeline(
       }
       case "annotation": {
         if (!title) break
-        entries.push({
+        const annotation = {
           atMs,
           id: `annotation-${annotationSeq++}`,
-          kind: "annotation",
           title,
-        })
+        }
+        if (currentTest) {
+          currentTest.items.push({ kind: "annotation", ...annotation })
+        } else {
+          entries.push({ kind: "annotation", ...annotation })
+        }
         break
       }
       default:
@@ -137,8 +158,45 @@ export function buildUiTestTimeline(
     }
   }
 
+  for (const entry of entries) {
+    if (entry.kind === "test") {
+      entry.items.sort((a, b) => a.atMs - b.atMs)
+    }
+  }
   steps.sort((a, b) => a.atMs - b.atMs)
   return { entries, steps }
+}
+
+/**
+ * Step-level outcome counts: one entry per step that ran, so the header reads
+ * "what worked and what did not" rather than whole-test tallies. A test that
+ * failed outside any step (e.g. its final assertion) counts as one failure.
+ */
+export function timelineStepCounts(
+  timeline: UiTestTimeline
+): { failed: number; passed: number } | null {
+  const tests = timeline.entries.filter(
+    (entry): entry is Extract<TimelineEntry, { kind: "test" }> =>
+      entry.kind === "test"
+  )
+  if (!tests.length) return null
+
+  let passed = 0
+  let failed = 0
+  for (const test of tests) {
+    let testHasFailedStep = false
+    for (const item of test.items) {
+      if (item.kind !== "step") continue
+      if (item.status === "passed") {
+        passed += 1
+      } else if (item.status !== "skipped") {
+        failed += 1
+        testHasFailedStep = true
+      }
+    }
+    if (test.status === "failed" && !testHasFailedStep) failed += 1
+  }
+  return { failed, passed }
 }
 
 /** The latest step whose start is at or before the playhead, for highlighting. */
@@ -228,12 +286,9 @@ export type UiTestsPanelState = {
   error: string | null
   loaded: boolean
   loading: boolean
-  report: DaytonaUiTestRun | null
-  reportError: string | null
-  reportLoading: boolean
+  openingRunId: string | null
   running: boolean
   runs: DaytonaUiTestRunSummary[]
-  selectedTestPath: string | null
   testDir: string | null
   tests: DaytonaUiTestFile[]
 }
@@ -245,10 +300,9 @@ export type UiTestsPanelAction =
   | { type: "run-start"; testPath: string }
   | { type: "run-settled" }
   | { type: "run-error"; error: string }
-  | { type: "select"; testPath: string | null }
-  | { type: "report-start" }
-  | { type: "report-success"; report: DaytonaUiTestRun }
-  | { type: "report-error"; error: string }
+  | { type: "open-start"; runId: string }
+  | { type: "open-settled" }
+  | { type: "open-error"; error: string }
   | { type: "clear-error" }
 
 export const initialUiTestsPanelState: UiTestsPanelState = {
@@ -256,12 +310,9 @@ export const initialUiTestsPanelState: UiTestsPanelState = {
   error: null,
   loaded: false,
   loading: false,
-  report: null,
-  reportError: null,
-  reportLoading: false,
+  openingRunId: null,
   running: false,
   runs: [],
-  selectedTestPath: null,
   testDir: null,
   tests: [],
 }
@@ -292,24 +343,12 @@ export function uiTestsPanelReducer(
       return { ...state, busyRunPath: null }
     case "run-error":
       return { ...state, busyRunPath: null, error: action.error }
-    case "select":
-      return {
-        ...state,
-        report: null,
-        reportError: null,
-        selectedTestPath: action.testPath,
-      }
-    case "report-start":
-      return { ...state, reportError: null, reportLoading: true }
-    case "report-success":
-      return {
-        ...state,
-        report: action.report,
-        reportError: null,
-        reportLoading: false,
-      }
-    case "report-error":
-      return { ...state, reportError: action.error, reportLoading: false }
+    case "open-start":
+      return { ...state, error: null, openingRunId: action.runId }
+    case "open-settled":
+      return { ...state, openingRunId: null }
+    case "open-error":
+      return { ...state, error: action.error, openingRunId: null }
     case "clear-error":
       return { ...state, error: null }
   }

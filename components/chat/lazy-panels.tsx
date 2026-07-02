@@ -46,3 +46,11 @@ export const ChatContextPanel = dynamic(
     ),
   { ssr: false }
 )
+
+export const UiTestReportMainPanel = dynamic(
+  () =>
+    import("@/components/sandbox/ui-test-report").then(
+      (mod) => mod.UiTestReportMainPanel
+    ),
+  { ssr: false }
+)

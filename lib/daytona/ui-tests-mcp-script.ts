@@ -273,6 +273,26 @@ const sourceGuardrails = [
     pattern: /\brequest\.(?:delete|get|patch|post|put)\s*\(/,
     message: "Do not call backend APIs from UI tests to set up or fake the workflow.",
   },
+  {
+    pattern: /\.waitForTimeout\s*\(/,
+    message: "Do not sleep; web-first assertions such as await expect(locator).toBeVisible() auto-wait and retry.",
+  },
+  {
+    pattern: /\.waitForLoadState\s*\(/,
+    message: "Do not wait for load states like networkidle; assert the UI you expect instead, e.g. await expect(page.getByRole(...)).toBeVisible().",
+  },
+  {
+    pattern: /\.waitFor(?:Selector|Function|Event|Request|Response|URL)\s*\(/,
+    message: "Do not use waitFor* helpers; use locators with await expect(...).toBeVisible() or toHaveURL(), which auto-wait.",
+  },
+  {
+    pattern: /\.(?:innerText|innerHTML|allInnerTexts|allTextContents)\s*\(|\.textContent\s*\(/,
+    message: "Do not scrape page text into variables; assert directly with await expect(locator).toHaveText(...) or toContainText(...).",
+  },
+  {
+    pattern: /\.\$\$?(?:eval)?\s*\(/,
+    message: "Do not use $/$$/$eval selectors or element handles; use getByRole/getByLabel/getByText locators.",
+  },
 ];
 
 function guardedTestFiles(normalized, discovered) {
@@ -320,7 +340,25 @@ function runCounts(events) {
   const failed = tests.filter(
     (event) => event.status && event.status !== "passed" && event.status !== "skipped"
   ).length;
-  return { failed, passed, skipped };
+
+  // Step-level counts: what actually worked and what did not, one entry per
+  // step. A test that failed outside any step (e.g. its final assertion)
+  // still surfaces as one failed part.
+  const steps = events.filter((event) => event.type === "step_end");
+  const stepsPassed = steps.filter((event) => event.status === "passed").length;
+  let stepsFailed = steps.filter(
+    (event) => event.status && event.status !== "passed"
+  ).length;
+  for (const test of tests) {
+    if (!test.status || test.status === "passed" || test.status === "skipped") {
+      continue;
+    }
+    const hasFailedStep = steps.some(
+      (step) => step.test === test.title && step.status !== "passed"
+    );
+    if (!hasFailedStep) stepsFailed += 1;
+  }
+  return { failed, passed, skipped, stepsFailed, stepsPassed };
 }
 
 // A "running" result older than this is a crashed runner, not a live run.
@@ -624,14 +662,16 @@ function normalizeRunArgs(args) {
 function resultSummary(result) {
   const status = result.status === "passed" ? "passed" : "failed";
   const counts = [
-    result.passed + " passed",
-    result.failed + " failed",
+    (result.stepsPassed ?? result.passed) + " passed",
+    (result.stepsFailed ?? result.failed) + " failed",
     result.skipped + " skipped",
   ].join(", ");
   const recording = result.recording?.id
     ? " Recording: " + result.recording.id + "."
     : "";
-  return "Cloudcode UI test run " + status + ": " + counts + "." + recording;
+  return (
+    "Cloudcode UI test run " + status + " (steps: " + counts + ")." + recording
+  );
 }
 
 async function runUiTests(args = {}) {
@@ -796,6 +836,8 @@ async function recordedUiTestRun(
     screen: layout.screen,
     skipped: counts.skipped,
     status,
+    stepsFailed: counts.stepsFailed,
+    stepsPassed: counts.stepsPassed,
     stderr: truncate(playwright?.stderr ?? "", 12000),
     stdout: truncate(playwright?.stdout ?? "", 12000),
     stopRecordingError: stopRecordingError || undefined,
@@ -841,6 +883,8 @@ function summarizeRun(result) {
     runId: result.runId,
     skipped: result.skipped ?? 0,
     status: result.status,
+    stepsFailed: result.stepsFailed,
+    stepsPassed: result.stepsPassed,
     testPath: result.testPath ?? null,
     updatedAt: result.updatedAt ?? result.createdAt ?? null,
     viewport: result.viewport,
@@ -986,7 +1030,7 @@ async function handle(message) {
             capabilities: { tools: {} },
             serverInfo: { name: "cloudcode-ui-tests", version: "1.0.0" },
             instructions:
-              "Deterministic Cloudcode UI tests are opt-in: only write or run .cloudcode/tests specs when the user explicitly asked for a deterministic, recorded test of a flow. Do not use these tools as the default way to verify UI changes; for ordinary verification navigate the app with the cloudcode_desktop browser tools instead. When the user has asked: import { test, expect } from @cloudcode/test, use step and annotate for video annotations, and run tests with ui_tests_run. The runner uses headed Playwright in the Daytona desktop, sizes the browser to the actual desktop, and records only the isolated UI test execution. Write normal Playwright against the real app: page.goto for navigation, role/label/text locators for controls, locator/page/keyboard actions for interaction, and expect(...) for verification. Every test must use step(), perform at least one action inside a step, and make an expect(...) assertion after the last action. Do not rehearse the same flow manually first, and do not create screenshot or trace artifacts for this flow.",
+              "Deterministic Cloudcode UI tests are opt-in: only write or run .cloudcode/tests specs when the user explicitly asked for a deterministic, recorded test of a flow. Do not use these tools as the default way to verify UI changes; for ordinary verification navigate the app with the cloudcode_desktop browser tools instead. When the user has asked: import { test, expect } from @cloudcode/test, use step and annotate for video annotations, and run tests with ui_tests_run. The runner uses headed Playwright in the Daytona desktop, sizes the browser to the actual desktop, and records only the isolated UI test execution. Write the spec exactly like this and it passes first try: navigate with page.goto using a relative path (baseURL is set); find controls with getByRole/getByLabel/getByPlaceholder/getByText; act with locator.click/fill/press; assert only with await expect(locator or page).toBeVisible/toHaveText/toContainText/toHaveValue/toHaveCount/toHaveURL, which auto-wait, so never add manual timeouts, waitForTimeout, waitForLoadState, networkidle, or waitFor* helpers; never scrape text with innerText/textContent into variables and never pass plain strings or numbers to expect() - all of these are rejected at runtime. Every test must use step(), perform at least one action inside a step, and make an expect(...) assertion after the last action. Do not rehearse the same flow manually first, and do not create screenshot or trace artifacts for this flow.",
           },
         });
       }
@@ -1183,15 +1227,32 @@ async function setOverlay(page, payload) {
 const guardedPages = new WeakSet();
 const rawPages = new WeakMap();
 const guardedLocators = new WeakMap();
-const blockedPageMethods = [
-  "addInitScript",
-  "evaluate",
-  "evaluateHandle",
-  "route",
-  "routeFromHAR",
-  "setContent",
-  "unroute",
-];
+const VISIBLE_UI_REPLACEMENT = "visible page/locator actions and expect(...) assertions";
+const AUTO_WAIT_REPLACEMENT = "web-first assertions such as await expect(locator).toBeVisible(), which auto-wait and retry";
+const TEXT_ASSERT_REPLACEMENT = "await expect(locator).toHaveText(...) or toContainText(...), which auto-wait and retry";
+const LOCATOR_REPLACEMENT = "getByRole/getByLabel/getByPlaceholder/getByText locators";
+const blockedPageMethods = {
+  $: LOCATOR_REPLACEMENT,
+  $$: LOCATOR_REPLACEMENT,
+  $eval: LOCATOR_REPLACEMENT,
+  $$eval: LOCATOR_REPLACEMENT,
+  addInitScript: VISIBLE_UI_REPLACEMENT,
+  content: TEXT_ASSERT_REPLACEMENT,
+  evaluate: VISIBLE_UI_REPLACEMENT,
+  evaluateHandle: VISIBLE_UI_REPLACEMENT,
+  route: VISIBLE_UI_REPLACEMENT,
+  routeFromHAR: VISIBLE_UI_REPLACEMENT,
+  setContent: VISIBLE_UI_REPLACEMENT,
+  unroute: VISIBLE_UI_REPLACEMENT,
+  waitForEvent: AUTO_WAIT_REPLACEMENT,
+  waitForFunction: AUTO_WAIT_REPLACEMENT,
+  waitForLoadState: "an assertion on the UI you expect after navigation, e.g. await expect(page.getByRole(...)).toBeVisible()",
+  waitForRequest: AUTO_WAIT_REPLACEMENT,
+  waitForResponse: AUTO_WAIT_REPLACEMENT,
+  waitForSelector: AUTO_WAIT_REPLACEMENT,
+  waitForTimeout: AUTO_WAIT_REPLACEMENT,
+  waitForURL: "await expect(page).toHaveURL(...)",
+};
 const pageActionMethods = new Set(["goBack", "goForward", "goto", "reload"]);
 const pageLocatorMethods = [
   "frameLocator",
@@ -1220,12 +1281,19 @@ const locatorActionMethods = new Set([
   "type",
   "uncheck",
 ]);
-const blockedLocatorMethods = new Set([
-  "dispatchEvent",
-  "evaluate",
-  "evaluateAll",
-  "evaluateHandle",
-]);
+const blockedLocatorMethods = {
+  allInnerTexts: TEXT_ASSERT_REPLACEMENT,
+  allTextContents: TEXT_ASSERT_REPLACEMENT,
+  dispatchEvent: "visible Playwright actions such as click, fill, press, or type",
+  elementHandle: LOCATOR_REPLACEMENT,
+  elementHandles: LOCATOR_REPLACEMENT,
+  evaluate: VISIBLE_UI_REPLACEMENT,
+  evaluateAll: VISIBLE_UI_REPLACEMENT,
+  evaluateHandle: VISIBLE_UI_REPLACEMENT,
+  innerHTML: TEXT_ASSERT_REPLACEMENT,
+  innerText: TEXT_ASSERT_REPLACEMENT,
+  textContent: TEXT_ASSERT_REPLACEMENT,
+};
 const keyboardActionMethods = new Set(["down", "press", "type", "up"]);
 
 let activeTestState = null;
@@ -1373,9 +1441,27 @@ function wrapMatcher(matcher, label) {
   });
 }
 
+function isUiAssertionSubject(value) {
+  if (!value || typeof value !== "object") return false;
+  // Page.
+  if (typeof value.goto === "function") return true;
+  // Locator (including guarded proxies).
+  return typeof value.click === "function" && typeof value.count === "function";
+}
+
+function assertUiExpectSubject(subject) {
+  if (isUiAssertionSubject(subject)) return;
+  throw new Error(
+    "Cloudcode deterministic UI tests must assert the visible UI: pass a locator or the page to expect(...), " +
+      'e.g. await expect(page.getByText("Thanks for joining")).toBeVisible() or await expect(page).toHaveURL(/dashboard/). ' +
+      "Do not assert scraped strings, counts, or other plain values."
+  );
+}
+
 function wrapExpect(expectFn, label = "expect") {
   return new Proxy(expectFn, {
     apply(target, thisArg, args) {
+      assertUiExpectSubject(args[0]);
       return wrapMatcher(Reflect.apply(target, thisArg, args), label);
     },
     get(target, prop, receiver) {
@@ -1383,8 +1469,18 @@ function wrapExpect(expectFn, label = "expect") {
       if (prop === "configure" && typeof value === "function") {
         return (...args) => wrapExpect(value.apply(target, args), label + ".configure");
       }
-      if ((prop === "soft" || prop === "poll") && typeof value === "function") {
-        return (...args) => wrapMatcher(value.apply(target, args), label + "." + String(prop));
+      if (prop === "soft" && typeof value === "function") {
+        return (...args) => {
+          assertUiExpectSubject(args[0]);
+          return wrapMatcher(value.apply(target, args), label + ".soft");
+        };
+      }
+      if (prop === "poll" && typeof value === "function") {
+        return () => {
+          throw new Error(
+            "Cloudcode deterministic UI tests do not use expect.poll; assert the visible UI directly with await expect(locator).toBeVisible()/toHaveText(...)."
+          );
+        };
       }
       return value;
     },
@@ -1407,9 +1503,9 @@ function guardLocator(locator) {
   const guarded = new Proxy(locator, {
     get(target, prop, receiver) {
       const value = Reflect.get(target, prop, receiver);
-      if (typeof prop === "string" && blockedLocatorMethods.has(prop)) {
+      if (typeof prop === "string" && Object.hasOwn(blockedLocatorMethods, prop)) {
         return () => {
-          throw shortcutError("locator." + prop + "()", "visible locator actions and expect(...) assertions");
+          throw shortcutError("locator." + prop + "()", blockedLocatorMethods[prop]);
         };
       }
       if (typeof value !== "function") return value;
@@ -1454,7 +1550,7 @@ function installUiGuard(page) {
     evaluate: page.evaluate.bind(page),
     goto: page.goto.bind(page),
   };
-  for (const name of blockedPageMethods) {
+  for (const name of Object.keys(blockedPageMethods)) {
     if (typeof page[name] === "function") raw[name] = page[name].bind(page);
   }
   for (const name of pageActionMethods) {
@@ -1469,11 +1565,11 @@ function installUiGuard(page) {
   rawPages.set(page, raw);
   guardedPages.add(page);
 
-  for (const name of blockedPageMethods) {
+  for (const name of Object.keys(blockedPageMethods)) {
     if (typeof raw[name] !== "function") continue;
     defineMethod(page, name, (...args) => {
       if (raw.depth > 0) return raw[name](...args);
-      throw shortcutError("page." + name + "()", "visible page/locator actions and expect(...) assertions");
+      throw shortcutError("page." + name + "()", blockedPageMethods[name]);
     });
   }
   for (const name of pageActionMethods) {

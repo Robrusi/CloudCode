@@ -61,6 +61,8 @@ export type DaytonaUiTestRunSummary = {
   runId: string
   skipped?: number
   status?: string
+  stepsFailed?: number
+  stepsPassed?: number
   testPath?: string | null
   updatedAt?: number | null
   viewport?: {

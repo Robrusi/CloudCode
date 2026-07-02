@@ -13,6 +13,7 @@ import {
 import {
   FileEditorPanel,
   SandboxTerminalPanel,
+  UiTestReportMainPanel,
 } from "@/components/chat/lazy-panels"
 import { MessageBlock } from "@/components/chat/message"
 import { logsForMessage } from "@/components/chat/message-model"
@@ -23,6 +24,7 @@ import { SettingsScreen } from "@/components/settings/screen"
 import type { Message } from "@/components/chat/types"
 import { OnboardingChecklist } from "@/components/chat/onboarding-checklist"
 import type { FileBrowserOpenMode } from "@/components/files/browser"
+import type { UiTestRunView } from "@/hooks/use-chat-workspace-panels"
 import type { CodexAuthOverview } from "@/lib/codex/auth-types"
 import type { GitHubAuthStatus } from "@/lib/github/auth"
 import type { SandboxPresetRecord } from "@/lib/sandbox/preset-types"
@@ -58,8 +60,10 @@ type WorkspaceMainPanel = {
   onCloseAllDiffs: () => void
   onCloseFileEditor: () => void
   onCloseNotes: () => void
+  onCloseUiTestRun: () => void
   onOpenFile: (path: string) => void
   onSaveNotes: (notes: string) => void
+  uiTestRun: UiTestRunView | null
 }
 
 type ThreadContent = {
@@ -175,7 +179,8 @@ export function ChatMainContent({
   const panelOpen =
     Boolean(workspace.activeFilePath) ||
     workspace.allDiffsOpen ||
-    workspace.notesOpen
+    workspace.notesOpen ||
+    Boolean(workspace.uiTestRun)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -251,6 +256,16 @@ function ChatMainArea({
         notesThreadId={workspace.notesThreadId}
         onSave={workspace.onSaveNotes}
         onClose={workspace.onCloseNotes}
+      />
+    )
+  }
+
+  if (workspace.uiTestRun) {
+    return (
+      <UiTestReportMainPanel
+        run={workspace.uiTestRun.run}
+        sandboxId={workspace.uiTestRun.sandboxId}
+        onClose={workspace.onCloseUiTestRun}
       />
     )
   }

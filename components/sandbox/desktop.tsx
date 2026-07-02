@@ -15,18 +15,25 @@ import {
 import { RecordingsView } from "@/components/sandbox/desktop-recordings"
 import { DesktopView } from "@/components/sandbox/desktop-view"
 import { SandboxUiTestsView } from "@/components/sandbox/ui-tests"
+import type { DaytonaUiTestRun } from "@/components/sandbox/ui-tests-model"
 import { ResizableSidePanel } from "@/components/layout/resizable-side-panel"
 import { SidePanelTabButton } from "@/components/layout/side-panel-tabs"
 import { fetchJson, postJson } from "@/lib/http/client-json"
 
 export function SandboxDesktopPanel({
   open,
+  openUiTestRun,
   sandboxId,
   onClose,
+  onCloseUiTestRun,
+  onOpenUiTestRun,
 }: {
   open: boolean
+  openUiTestRun: DaytonaUiTestRun | null
   sandboxId: string | null
   onClose: () => void
+  onCloseUiTestRun: () => void
+  onOpenUiTestRun: (run: DaytonaUiTestRun) => void
 }) {
   const [state, dispatch] = useReducer(
     desktopPanelReducer,
@@ -221,7 +228,13 @@ export function SandboxDesktopPanel({
         ) : view === "recordings" ? (
           <RecordingsView recordings={recordings} sandboxId={sandboxId} />
         ) : (
-          <SandboxUiTestsView active={view === "tests"} sandboxId={sandboxId} />
+          <SandboxUiTestsView
+            active={view === "tests"}
+            sandboxId={sandboxId}
+            onCloseReport={onCloseUiTestRun}
+            onOpenReport={onOpenUiTestRun}
+            openRun={openUiTestRun}
+          />
         )}
       </div>
     </ResizableSidePanel>

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react"
 
 import type { FileBrowserOpenMode } from "@/components/files/browser"
+import type { DaytonaUiTestRun } from "@/components/sandbox/ui-tests-model"
 import { TERMINAL_OPEN_KEY } from "@/components/chat/storage"
 import {
   readBrowserStorage,
@@ -11,6 +12,11 @@ import {
 } from "@/lib/browser/storage"
 
 export type ChatToolPanelId = "context" | "desktop" | "files" | "github" | "ssh"
+
+export type UiTestRunView = {
+  run: DaytonaUiTestRun
+  sandboxId: string | null
+}
 
 export function useChatWorkspacePanels() {
   const [filesOpen, setFilesOpen] = useState(false)
@@ -29,6 +35,7 @@ export function useChatWorkspacePanels() {
   const [activeFileDiff, setActiveFileDiff] = useState<string | null>(null)
   const [allDiffsOpen, setAllDiffsOpen] = useState(false)
   const [notesOpen, setNotesOpen] = useState(false)
+  const [uiTestRun, setUiTestRun] = useState<UiTestRunView | null>(null)
   const [diffStyle, setDiffStyle] = useState<"unified" | "split">("unified")
 
   useEffect(() => {
@@ -48,6 +55,7 @@ export function useChatWorkspacePanels() {
     setActiveFilePath(null)
     closeToolPanels()
     setNotesOpen(false)
+    setUiTestRun(null)
     setTerminalOpen(false)
   }, [closeToolPanels])
 
@@ -67,6 +75,7 @@ export function useChatWorkspacePanels() {
       setActiveFileDiff(diff)
       setAllDiffsOpen(false)
       setNotesOpen(false)
+      setUiTestRun(null)
     },
     []
   )
@@ -76,6 +85,7 @@ export function useChatWorkspacePanels() {
     setActiveFileDiff(null)
     setAllDiffsOpen(true)
     setNotesOpen(false)
+    setUiTestRun(null)
   }, [])
 
   const openNotesPanel = useCallback(
@@ -84,10 +94,23 @@ export function useChatWorkspacePanels() {
       setActiveFileDiff(null)
       setAllDiffsOpen(false)
       setNotesOpen(true)
+      setUiTestRun(null)
       if (closeContext) setContextOpen(false)
     },
     []
   )
+
+  const openUiTestRunPanel = useCallback((view: UiTestRunView) => {
+    setActiveFilePath(null)
+    setActiveFileDiff(null)
+    setAllDiffsOpen(false)
+    setNotesOpen(false)
+    setUiTestRun(view)
+  }, [])
+
+  const closeUiTestRunPanel = useCallback(() => {
+    setUiTestRun(null)
+  }, [])
 
   const markTerminalDockMounted = useCallback(() => {
     setTerminalDockMounted(true)
@@ -118,6 +141,7 @@ export function useChatWorkspacePanels() {
     allDiffsOpen,
     closeFileEditor,
     closeToolPanels,
+    closeUiTestRunPanel,
     contextOpen,
     desktopOpen,
     diffStyle,
@@ -128,6 +152,7 @@ export function useChatWorkspacePanels() {
     openAllDiffsPanel,
     openFilePanel,
     openNotesPanel,
+    openUiTestRunPanel,
     resetActiveThreadScroll,
     resetThreadWorkspace,
     setActiveFileMode,
@@ -147,5 +172,6 @@ export function useChatWorkspacePanels() {
     terminalHeight,
     terminalOpen,
     toggleToolPanel,
+    uiTestRun,
   }
 }

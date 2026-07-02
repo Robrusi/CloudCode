@@ -55,8 +55,10 @@ const SEGMENT_TRACK: Record<UiTestStatus, string> = {
 
 export function UiTestPlayer({
   activeTestTitle,
+  aspect,
   currentMs,
   durationMs,
+  fill = false,
   onCurrentMs,
   onDurationMs,
   onPlayingChange,
@@ -68,8 +70,15 @@ export function UiTestPlayer({
   videoRef,
 }: {
   activeTestTitle: string | null
+  /** Recording aspect ratio (width / height); defaults to 16:9. */
+  aspect?: number
   currentMs: number
   durationMs: number
+  /**
+   * Flex the video into the parent's remaining height instead of sizing it by
+   * aspect ratio, so the whole player always fits without scrolling.
+   */
+  fill?: boolean
   onCurrentMs: (ms: number) => void
   onDurationMs: (ms: number) => void
   onPlayingChange: (playing: boolean) => void
@@ -143,8 +152,18 @@ export function UiTestPlayer({
     : null
 
   return (
-    <div className="space-y-2.5">
-      <div className="relative aspect-video overflow-hidden rounded-xl border border-border/60 bg-black">
+    <div
+      className={cn(
+        fill ? "flex h-full min-h-0 flex-col gap-2.5" : "space-y-2.5"
+      )}
+    >
+      <div
+        className={cn(
+          "relative overflow-hidden rounded-xl border border-border/60 bg-black",
+          fill && "min-h-0 flex-1"
+        )}
+        style={fill ? undefined : { aspectRatio: String(aspect ?? 16 / 9) }}
+      >
         {src ? (
           <video
             ref={videoRef}
@@ -222,8 +241,8 @@ export function UiTestPlayer({
       <div className="flex items-center gap-1">
         <IconButton
           size="sm"
-          aria-label="Previous test"
-          title="Previous test"
+          aria-label="Previous part"
+          title="Previous part"
           onClick={() => seekToStep(-1)}
           disabled={!src}
         >
@@ -244,8 +263,8 @@ export function UiTestPlayer({
         </IconButton>
         <IconButton
           size="sm"
-          aria-label="Next test"
-          title="Next test"
+          aria-label="Next part"
+          title="Next part"
           onClick={() => seekToStep(1)}
           disabled={!src}
         >
@@ -364,7 +383,9 @@ function SegmentBar({
             }}
             style={{ flexGrow: span }}
             className={cn(
-              "relative h-full overflow-hidden rounded-full transition-shadow",
+              // The minimum width keeps short annotated parts visible and
+              // clickable even when longer parts dominate the bar.
+              "relative h-full min-w-4 overflow-hidden rounded-full transition-shadow",
               SEGMENT_TRACK[segment.status],
               active && "ring-1 ring-foreground/30"
             )}

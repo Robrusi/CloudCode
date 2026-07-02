@@ -3,7 +3,7 @@
 import { FlaskConical, Loader2, Play, RefreshCw } from "lucide-react"
 import { useCallback, useEffect, useReducer } from "react"
 
-import { UiTestReport } from "@/components/sandbox/ui-test-report"
+import { UiTestRunSteps } from "@/components/sandbox/ui-test-report"
 import {
   formatRelativeTime,
   hasPendingRun,
@@ -26,9 +26,15 @@ import { cn } from "@/lib/shared/utils"
 export function SandboxUiTestsView({
   active,
   sandboxId,
+  onCloseReport,
+  onOpenReport,
+  openRun,
 }: {
   active: boolean
   sandboxId: string | null
+  onCloseReport: () => void
+  onOpenReport: (run: DaytonaUiTestRun) => void
+  openRun: DaytonaUiTestRun | null
 }) {
   const [state, dispatch] = useReducer(
     uiTestsPanelReducer,
@@ -79,8 +85,7 @@ export function SandboxUiTestsView({
   const openReport = useCallback(
     async (run: DaytonaUiTestRunSummary) => {
       if (!sandboxId) return
-      dispatch({ testPath: run.testPath ?? run.runId, type: "select" })
-      dispatch({ type: "report-start" })
+      dispatch({ runId: run.runId, type: "open-start" })
       try {
         const result = await fetchJson<DaytonaUiTestRun>(
           `/api/sandbox/ui-tests?${new URLSearchParams({
@@ -90,15 +95,16 @@ export function SandboxUiTestsView({
           {},
           { fallbackError: "Unable to load run." }
         )
-        dispatch({ report: result, type: "report-success" })
+        dispatch({ type: "open-settled" })
+        onOpenReport(result)
       } catch (error) {
         dispatch({
           error: error instanceof Error ? error.message : "Unable to load run.",
-          type: "report-error",
+          type: "open-error",
         })
       }
     },
-    [sandboxId]
+    [onOpenReport, sandboxId]
   )
 
   const runTest = useCallback(
@@ -113,8 +119,7 @@ export function SandboxUiTestsView({
           { fallbackError: "Unable to run UI test." }
         )
         await load()
-        dispatch({ testPath, type: "select" })
-        dispatch({ report: result, type: "report-success" })
+        onOpenReport(result)
       } catch (error) {
         dispatch({
           error:
@@ -125,27 +130,13 @@ export function SandboxUiTestsView({
         dispatch({ type: "run-settled" })
       }
     },
-    [load, sandboxId]
+    [load, onOpenReport, sandboxId]
   )
 
-  const back = useCallback(
-    () => dispatch({ testPath: null, type: "select" }),
-    []
-  )
-
-  if (state.selectedTestPath !== null) {
-    if (state.report) {
-      return (
-        <UiTestReport onBack={back} run={state.report} sandboxId={sandboxId} />
-      )
-    }
-    return (
-      <ReportPlaceholder
-        error={state.reportError}
-        loading={state.reportLoading}
-        onBack={back}
-      />
-    )
+  // While a run's video is open in the main area, the panel shows what it
+  // did: the step checklist, synced to the video.
+  if (openRun) {
+    return <UiTestRunSteps onBack={onCloseReport} run={openRun} />
   }
 
   return (
@@ -182,6 +173,7 @@ export function SandboxUiTestsView({
           loading={state.loading}
           onOpen={openReport}
           onRun={runTest}
+          openingRunId={state.openingRunId}
           running={state.running}
           runs={state.runs}
           sandboxId={sandboxId}
@@ -198,6 +190,7 @@ function UiTestsBody({
   loading,
   onOpen,
   onRun,
+  openingRunId,
   running,
   runs,
   sandboxId,
@@ -208,6 +201,7 @@ function UiTestsBody({
   loading: boolean
   onOpen: (run: DaytonaUiTestRunSummary) => void
   onRun: (testPath: string) => void
+  openingRunId: string | null
   running: boolean
   runs: DaytonaUiTestRunSummary[]
   sandboxId: string | null
@@ -244,16 +238,20 @@ function UiTestsBody({
 
   return (
     <div className="space-y-2">
-      {tests.map((test) => (
-        <TestRow
-          key={test.path}
-          busy={busyRunPath === test.path}
-          onOpen={onOpen}
-          onRun={onRun}
-          run={latestRunForTest(runs, test.path)}
-          test={test}
-        />
-      ))}
+      {tests.map((test) => {
+        const run = latestRunForTest(runs, test.path)
+        return (
+          <TestRow
+            key={test.path}
+            busy={busyRunPath === test.path}
+            onOpen={onOpen}
+            onRun={onRun}
+            opening={Boolean(run && openingRunId === run.runId)}
+            run={run}
+            test={test}
+          />
+        )
+      })}
     </div>
   )
 }
@@ -262,12 +260,14 @@ function TestRow({
   busy,
   onOpen,
   onRun,
+  opening,
   run,
   test,
 }: {
   busy: boolean
   onOpen: (run: DaytonaUiTestRunSummary) => void
   onRun: (testPath: string) => void
+  opening: boolean
   run: DaytonaUiTestRunSummary | undefined
   test: DaytonaUiTestFile
 }) {
@@ -298,10 +298,15 @@ function TestRow({
       <button
         type="button"
         onClick={() => run && hasResult && onOpen(run)}
-        disabled={!hasResult}
+        disabled={!hasResult || opening}
         className="min-w-0 flex-1 text-left disabled:cursor-default"
       >
-        <p className="truncate text-sm text-foreground/85">{title}</p>
+        <p className="flex items-center gap-1.5 truncate text-sm text-foreground/85">
+          {title}
+          {opening ? (
+            <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />
+          ) : null}
+        </p>
         <p className="truncate text-xs text-muted-foreground">
           <RunStatusLine pending={pending} run={run} />
         </p>
@@ -343,10 +348,12 @@ function RunStatusLine({
 }) {
   if (pending) return <span className="text-muted-foreground">Running…</span>
   if (!run) return <span>Not run yet</span>
+  const passed = run.stepsPassed ?? run.passed ?? 0
+  const failed = run.stepsFailed ?? run.failed ?? 0
   const counts =
     run.status === "passed"
-      ? `${run.passed ?? 0} passed`
-      : `${run.passed ?? 0} passed · ${run.failed ?? 0} failed`
+      ? `${passed} passed`
+      : `${passed} passed · ${failed} failed`
   const when = formatRelativeTime(run.updatedAt)
   return (
     <span
@@ -365,31 +372,6 @@ function EmptyState({ body, title }: { body: string; title: string }) {
     <div className="flex h-full min-h-40 flex-col items-center justify-center gap-1 px-6 text-center">
       <p className="text-sm font-medium text-foreground/85">{title}</p>
       <p className="max-w-[16rem] text-xs text-muted-foreground">{body}</p>
-    </div>
-  )
-}
-
-function ReportPlaceholder({
-  error,
-  loading,
-  onBack,
-}: {
-  error: string | null
-  loading: boolean
-  onBack: () => void
-}) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-      {loading ? (
-        <Loader2 className="size-5 animate-spin text-muted-foreground" />
-      ) : (
-        <p className="max-w-[16rem] text-xs text-destructive">
-          {error ?? "Unable to load this run."}
-        </p>
-      )}
-      <Button size="sm" variant="outline" onClick={onBack}>
-        Back to tests
-      </Button>
     </div>
   )
 }

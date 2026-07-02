@@ -8,6 +8,8 @@ import {
   SshPanel,
 } from "@/components/chat/lazy-panels"
 import type { FileBrowserOpenMode } from "@/components/files/browser"
+import type { DaytonaUiTestRun } from "@/components/sandbox/ui-tests-model"
+import type { UiTestRunView } from "@/hooks/use-chat-workspace-panels"
 
 type ChangeStats = {
   additions: number
@@ -42,15 +44,18 @@ export function ChatWorkspaceSidePanels({
   notesThreadId,
   repoUrl,
   sshOpen,
+  uiTestRun,
   onCloseContext,
   onCloseDesktop,
   onCloseSsh,
+  onCloseUiTestRun,
   onDiffStyleChange,
   onFilesOpenChange,
   onGithubOpenChange,
   onOpenAllDiffs,
   onOpenFileFromToolPanel,
   onOpenNotesFullscreen,
+  onOpenUiTestRun,
   onSaveNotes,
 }: {
   active: boolean
@@ -73,15 +78,18 @@ export function ChatWorkspaceSidePanels({
   notesThreadId: string | null
   repoUrl: string
   sshOpen: boolean
+  uiTestRun: UiTestRunView | null
   onCloseContext: () => void
   onCloseDesktop: () => void
   onCloseSsh: () => void
+  onCloseUiTestRun: () => void
   onDiffStyleChange: (style: "split" | "unified") => void
   onFilesOpenChange: (open: boolean) => void
   onGithubOpenChange: (open: boolean) => void
   onOpenAllDiffs: () => void
   onOpenFileFromToolPanel: OpenFileFromToolPanel
   onOpenNotesFullscreen: () => void
+  onOpenUiTestRun: (run: DaytonaUiTestRun) => void
   onSaveNotes: (notes: string) => void
 }) {
   return (
@@ -116,8 +124,11 @@ export function ChatWorkspaceSidePanels({
       <SandboxDesktopPanel
         key={`desktop:${activeSandboxId ?? "no-sandbox"}`}
         open={desktopOpen && Boolean(activeSandboxId)}
+        openUiTestRun={uiTestRun?.run ?? null}
         sandboxId={activeSandboxId}
         onClose={onCloseDesktop}
+        onCloseUiTestRun={onCloseUiTestRun}
+        onOpenUiTestRun={onOpenUiTestRun}
       />
       <SshPanel
         key={`ssh:${activeSandboxId ?? "no-sandbox"}`}

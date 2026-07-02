@@ -1,11 +1,12 @@
 "use client"
 
 import { useUser } from "@clerk/nextjs"
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 
 import type { ChatComposerProps } from "@/components/chat/composer"
 import { repoLabel } from "@/components/chat/format"
 import type { ChatShellProps } from "@/components/chat/shell"
+import type { DaytonaUiTestRun } from "@/components/sandbox/ui-tests-model"
 import { useChatThreadScroll } from "@/components/chat/thread-scroll"
 import type { SettingsSectionId } from "@/components/settings/sections"
 import { useChatConnectionStatus } from "@/hooks/use-chat-connection-status"
@@ -100,6 +101,7 @@ export function useChatController(): ChatShellProps {
     activeFilePath,
     allDiffsOpen,
     closeFileEditor,
+    closeUiTestRunPanel,
     contextOpen,
     desktopOpen,
     diffStyle,
@@ -110,6 +112,7 @@ export function useChatController(): ChatShellProps {
     openAllDiffsPanel,
     openFilePanel,
     openNotesPanel,
+    openUiTestRunPanel,
     resetActiveThreadScroll,
     resetThreadWorkspace,
     setActiveFileMode,
@@ -129,6 +132,7 @@ export function useChatController(): ChatShellProps {
     terminalHeight,
     terminalOpen,
     toggleToolPanel,
+    uiTestRun,
   } = useChatWorkspacePanels()
   const {
     addImageFiles,
@@ -476,6 +480,23 @@ export function useChatController(): ChatShellProps {
   })
   const saveThreadNotes = useChatThreadNotes({ activeId, setThreadNotes })
 
+  const openUiTestRun = useCallback(
+    (run: DaytonaUiTestRun) => {
+      captureThreadScrollForPanel()
+      openUiTestRunPanel({ run, sandboxId: activeSandboxId })
+      // On mobile the desktop panel overlays the main area; close it so the
+      // report is actually visible.
+      if (isMobile) setDesktopOpen(false)
+    },
+    [
+      activeSandboxId,
+      captureThreadScrollForPanel,
+      isMobile,
+      openUiTestRunPanel,
+      setDesktopOpen,
+    ]
+  )
+
   useEffect(() => {
     if (userLoading) return
     void ensureDefaultPresets().catch((error) => {
@@ -492,7 +513,8 @@ export function useChatController(): ChatShellProps {
     clearInactiveRunKeys(chats, liveThreadKey)
   }, [chats, clearInactiveRunKeys, runningRunKeys, visibleLiveRun?.threadId])
 
-  const composerEnabled = view !== "settings" && !activeFilePath && !notesOpen
+  const composerEnabled =
+    view !== "settings" && !activeFilePath && !notesOpen && !uiTestRun
   const composerProps: ChatComposerProps = {
     activeQueuedMessages,
     activeRunPending,
@@ -634,8 +656,10 @@ export function useChatController(): ChatShellProps {
         onCloseAllDiffs: () => setAllDiffsOpen(false),
         onCloseFileEditor: closeFileEditor,
         onCloseNotes: () => setNotesOpen(false),
+        onCloseUiTestRun: closeUiTestRunPanel,
         onOpenFile: openFile,
         onSaveNotes: saveThreadNotes,
+        uiTestRun,
       },
     },
     sidebar: {
@@ -678,15 +702,18 @@ export function useChatController(): ChatShellProps {
       onCloseContext: () => setContextOpen(false),
       onCloseDesktop: () => setDesktopOpen(false),
       onCloseSsh: () => setSshOpen(false),
+      onCloseUiTestRun: closeUiTestRunPanel,
       onDiffStyleChange: setDiffStyle,
       onFilesOpenChange: setFilesOpen,
       onGithubOpenChange: setGithubOpen,
       onOpenAllDiffs: openAllDiffs,
       onOpenFileFromToolPanel: openFileFromToolPanel,
       onOpenNotesFullscreen: openNotesFullscreen,
+      onOpenUiTestRun: openUiTestRun,
       onSaveNotes: saveThreadNotes,
       repoUrl,
       sshOpen,
+      uiTestRun,
     },
     topBar: {
       identity: {
