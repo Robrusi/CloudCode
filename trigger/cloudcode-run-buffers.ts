@@ -9,14 +9,19 @@ import {
 } from "@/lib/codex/run-worker"
 import type { CodexRunStreamPublisher } from "@/lib/codex/run-stream"
 
+// With a stream publisher the live UX comes from Redis; Convex checkpoints
+// only serve reconnect recovery, so they can be an order of magnitude less
+// frequent. Every flush rewrites the full checkpoint document, so cadence
+// directly scales database bandwidth. Redis retains 4k entries for 6h, so a
+// 15s-stale lastStreamId replays comfortably within the window.
 const STREAM_LOG_BATCH_SIZE = 40
-const STREAM_LOG_FLUSH_DELAY_MS = 1_500
+const STREAM_LOG_FLUSH_DELAY_MS = 15_000
 const FALLBACK_LOG_BATCH_SIZE = 20
-const FALLBACK_LOG_FLUSH_DELAY_MS = 350
-const STREAM_CONTENT_FLUSH_CHAR_THRESHOLD = 4_096
-const STREAM_CONTENT_FLUSH_DELAY_MS = 1_500
-const FALLBACK_CONTENT_FLUSH_CHAR_THRESHOLD = 32
-const FALLBACK_CONTENT_FLUSH_DELAY_MS = 80
+const FALLBACK_LOG_FLUSH_DELAY_MS = 1_000
+const STREAM_CONTENT_FLUSH_CHAR_THRESHOLD = 32_768
+const STREAM_CONTENT_FLUSH_DELAY_MS = 15_000
+const FALLBACK_CONTENT_FLUSH_CHAR_THRESHOLD = 256
+const FALLBACK_CONTENT_FLUSH_DELAY_MS = 500
 const FINAL_FLUSH_TIMEOUT_MS = 5_000
 const MUTATION_RETRY_DELAYS_MS = [100, 300, 900]
 
@@ -100,11 +105,14 @@ export function createLogBuffer(
       })
       .finally(() => {
         flushPromise = undefined
-        if (pending.length > 0 && !flushError) {
+        if (flushError || pending.length === 0) return
+        // Drain a full backlog immediately; otherwise wait out the cadence so
+        // steady streaming can't chain flushes at round-trip rate.
+        if (pending.length >= logBatchSize) {
           void flush().catch((error) => {
             flushError = error
           })
-        }
+        } else scheduleFlush()
       })
 
     return flushPromise
@@ -235,9 +243,17 @@ export function createContentBuffer(
       })
       .finally(() => {
         flushPromise = undefined
-        if (content !== flushedContent && !flushError) {
-          scheduleFlush(0)
-        }
+        if (content === flushedContent || flushError) return
+        // Flush a large backlog immediately; otherwise wait out the cadence so
+        // steady streaming can't chain flushes at round-trip rate.
+        if (
+          content.length - flushedContent.length >=
+          contentFlushCharThreshold
+        ) {
+          void flush().catch((error) => {
+            flushError = error
+          })
+        } else scheduleFlush()
       })
 
     return flushPromise

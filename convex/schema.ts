@@ -155,6 +155,8 @@ export default defineSchema({
     content: v.string(),
     contentLength: v.number(),
     lastStreamId: v.optional(v.string()),
+    // Legacy field: logs now live in codexRunLogCheckpoints so content and
+    // log flushes don't rewrite (and re-read) each other's data.
     logs: v.optional(v.array(runLog)),
     runId: v.id("codexRuns"),
     threadId: v.id("threads"),
@@ -163,6 +165,16 @@ export default defineSchema({
   })
     .index("by_run", ["runId"])
     .index("by_thread_updated", ["threadId", "updatedAt"])
+    .index("by_user_updated", ["userId", "updatedAt"]),
+
+  codexRunLogCheckpoints: defineTable({
+    logs: v.array(runLog),
+    runId: v.id("codexRuns"),
+    threadId: v.id("threads"),
+    updatedAt: v.number(),
+    userId: v.id("users"),
+  })
+    .index("by_run", ["runId"])
     .index("by_user_updated", ["userId", "updatedAt"]),
 
   billingCustomers: defineTable({

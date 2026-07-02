@@ -30,6 +30,7 @@ export const deleteAccount = mutation({
       codexRunRows,
       codexRunInputRows,
       codexRunCheckpointRows,
+      codexRunLogCheckpointRows,
       billingCustomerRows,
       billingUsageEventRows,
       billingSandboxSegmentRows,
@@ -59,6 +60,10 @@ export const deleteAccount = mutation({
         .collect(),
       ctx.db
         .query("codexRunCheckpoints")
+        .withIndex("by_user_updated", (q) => q.eq("userId", userId))
+        .collect(),
+      ctx.db
+        .query("codexRunLogCheckpoints")
         .withIndex("by_user_updated", (q) => q.eq("userId", userId))
         .collect(),
       ctx.db
@@ -150,6 +155,7 @@ export const deleteAccount = mutation({
       ...codexRunRows,
       ...codexRunInputRows,
       ...codexRunCheckpointRows,
+      ...codexRunLogCheckpointRows,
       ...billingCustomerRows,
       ...billingUsageEventRows,
       ...billingSandboxSegmentRows,

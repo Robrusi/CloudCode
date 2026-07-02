@@ -5,7 +5,7 @@ import {
   compactRunLogs,
   type StoredRunLog,
 } from "./codexRunLogs"
-import { codexRunCheckpoint } from "./codexRunRecords"
+import { codexRunCheckpoint, codexRunLogCheckpoint } from "./codexRunRecords"
 
 export const TERMINAL_RUN_STATUSES = new Set([
   "succeeded",
@@ -75,7 +75,10 @@ export async function markRunCanceled(
   const sandboxId = sandboxIdOverride ?? latestSandboxIdForRun(run)
   const sandboxState =
     run.sandboxState ?? (sandboxId ? ("running" as const) : undefined)
-  const checkpoint = await codexRunCheckpoint(ctx, run._id)
+  const [checkpoint, logCheckpoint] = await Promise.all([
+    codexRunCheckpoint(ctx, run._id),
+    codexRunLogCheckpoint(ctx, run._id),
+  ])
   const currentContent = checkpoint?.content ?? run.content ?? ""
   const canceledContent = currentContent.trim()
     ? `${currentContent.trimEnd()}\n\n${content}`
@@ -109,7 +112,9 @@ export async function markRunCanceled(
     message.pending
   ) {
     const existingMeta = compactMessageMeta(message.meta)
-    const runLogs = compactRunLogs(checkpoint?.logs ?? run.logs)
+    const runLogs = compactRunLogs(
+      logCheckpoint?.logs ?? checkpoint?.logs ?? run.logs
+    )
     await ctx.db.patch(message._id, {
       content: canceledContent,
       error: false,

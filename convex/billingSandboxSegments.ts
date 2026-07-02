@@ -12,14 +12,17 @@ import {
   type UsageEventResult,
 } from "./billingUsageEvents"
 
-const BILLING_DAYTONA_CHECKPOINT_MS = 60_000
+const BILLING_DAYTONA_RUNNING_CHECKPOINT_MS = 60_000
+// Stopped/archived sandboxes burn slowly (disk only or nothing), so hourly
+// checkpoints keep billingUsageEvents from growing one row per sandbox per
+// minute around the clock.
+const BILLING_DAYTONA_IDLE_CHECKPOINT_MS = 60 * 60_000
 const DAYTONA_BILLING_RATE_VERSION = "daytona-2026-06-09"
 
 export type LocalUsageSummary = {
   activeSandboxSegments: number
   failedMicroUsd: number
   pendingMicroUsd: number
-  trackedMicroUsd: number
 }
 
 function sameResources(
@@ -49,36 +52,43 @@ export async function localUsageSummary(
   ctx: QueryCtx,
   userId: Id<"users">
 ): Promise<LocalUsageSummary> {
-  const rows = await ctx.db
-    .query("billingUsageEvents")
-    .withIndex("by_user_created", (q) => q.eq("userId", userId))
-    .collect()
-  const activeSegments = await ctx.db
-    .query("billingSandboxSegments")
-    .withIndex("by_user_active", (q) =>
-      q.eq("userId", userId).eq("active", true)
-    )
-    .collect()
+  // Only pending/failed events are enumerated. Tracked events accumulate
+  // forever, so reading them here would rescan the user's full billing
+  // history on every checkpoint and balance check.
+  const [pendingRows, failedRows, activeSegments] = await Promise.all([
+    ctx.db
+      .query("billingUsageEvents")
+      .withIndex("by_user_status", (q) =>
+        q.eq("userId", userId).eq("status", "pending")
+      )
+      .collect(),
+    ctx.db
+      .query("billingUsageEvents")
+      .withIndex("by_user_status", (q) =>
+        q.eq("userId", userId).eq("status", "failed")
+      )
+      .collect(),
+    ctx.db
+      .query("billingSandboxSegments")
+      .withIndex("by_user_active", (q) =>
+        q.eq("userId", userId).eq("active", true)
+      )
+      .collect(),
+  ])
 
   let failedMicroUsd = 0
-  let pendingMicroUsd = 0
-  let trackedMicroUsd = 0
-  for (const row of rows) {
-    if (row.status === "failed") {
-      failedMicroUsd += row.amountMicroUsd
-      pendingMicroUsd += row.amountMicroUsd
-    } else if (row.status === "pending") {
-      pendingMicroUsd += row.amountMicroUsd
-    } else if (row.status === "tracked") {
-      trackedMicroUsd += row.amountMicroUsd
-    }
+  for (const row of failedRows) {
+    failedMicroUsd += row.amountMicroUsd
+  }
+  let pendingMicroUsd = failedMicroUsd
+  for (const row of pendingRows) {
+    pendingMicroUsd += row.amountMicroUsd
   }
 
   return {
     activeSandboxSegments: activeSegments.length,
     failedMicroUsd,
     pendingMicroUsd,
-    trackedMicroUsd,
   }
 }
 
@@ -131,8 +141,11 @@ export async function applySandboxObservationMutation(
     active.state !== args.state ||
     !sameResources(active, args.resources) ||
     active.userId !== args.userId
-  const shouldCheckpoint =
-    args.observedAt - active.startedAt >= BILLING_DAYTONA_CHECKPOINT_MS
+  const checkpointMs =
+    active.state === "running"
+      ? BILLING_DAYTONA_RUNNING_CHECKPOINT_MS
+      : BILLING_DAYTONA_IDLE_CHECKPOINT_MS
+  const shouldCheckpoint = args.observedAt - active.startedAt >= checkpointMs
   const shouldClose = args.state === "deleted" || changed || shouldCheckpoint
 
   if (!shouldClose) {

@@ -11,7 +11,10 @@ import {
   TERMINAL_RUN_STATUSES,
 } from "./lib/codexRunLifecycle"
 import {
+  appendCodexRunLogs,
   codexRunCheckpoint,
+  codexRunLogCheckpoint,
+  codexRunLogsForRun,
   upsertCodexRunCheckpoint,
 } from "./lib/codexRunRecords"
 import { findCodexAuth } from "./lib/codexRunAuth"
@@ -110,17 +113,23 @@ export const streamAccess = query({
     const run = await ctx.db.get(args.runId)
     if (!run || run.userId !== user._id) return null
 
-    const [message, checkpoint] = await Promise.all([
-      ctx.db.get(run.assistantMessageId),
+    const [checkpoint, logCheckpoint] = await Promise.all([
       codexRunCheckpoint(ctx, args.runId),
+      codexRunLogCheckpoint(ctx, args.runId),
     ])
-    const runLogs = compactRunLogs(checkpoint?.logs ?? run.logs)
-    const messageLogs = compactRunLogs(message?.meta?.logs)
+    const runLogs = logCheckpoint
+      ? compactRunLogs(logCheckpoint.logs)
+      : compactRunLogs(checkpoint?.logs ?? run.logs)
+    // The message doc only backfills logs for legacy runs; skip the read when
+    // the checkpoint already has them so checkpoint writes stay cheap to react to.
+    const logs = runLogs.length
+      ? runLogs
+      : compactRunLogs((await ctx.db.get(run.assistantMessageId))?.meta?.logs)
 
     return {
       checkpointContent: checkpoint?.content ?? run.content ?? "",
       lastStreamId: checkpoint?.lastStreamId,
-      logs: runLogs.length ? runLogs : messageLogs,
+      logs,
       runId: run._id,
       status: run.status,
       threadId: run.threadId,
@@ -139,17 +148,27 @@ export const liveCheckpointForRun = query({
     const run = await ctx.db.get(args.runId)
     if (!run || run.userId !== user._id) return null
 
-    const [message, checkpoint] = await Promise.all([
-      ctx.db.get(run.assistantMessageId),
+    const [checkpoint, logCheckpoint] = await Promise.all([
       codexRunCheckpoint(ctx, args.runId),
+      codexRunLogCheckpoint(ctx, args.runId),
     ])
-    const runLogs = compactRunLogs(checkpoint?.logs ?? run.logs)
-    const messageLogs = compactRunLogs(message?.meta?.logs)
+    const runLogs = logCheckpoint
+      ? compactRunLogs(logCheckpoint.logs)
+      : compactRunLogs(checkpoint?.logs ?? run.logs)
+    let content = checkpoint?.content ?? run.content
+    let logs = runLogs
+    // The message doc only backfills legacy runs without a checkpoint; skip
+    // the read otherwise so checkpoint writes stay cheap to react to.
+    if (content === undefined || runLogs.length === 0) {
+      const message = await ctx.db.get(run.assistantMessageId)
+      content = content ?? message?.content
+      logs = runLogs.length ? runLogs : compactRunLogs(message?.meta?.logs)
+    }
 
     return {
-      content: checkpoint?.content ?? run.content ?? message?.content ?? "",
+      content: content ?? "",
       lastStreamId: checkpoint?.lastStreamId,
-      logs: runLogs.length ? runLogs : messageLogs,
+      logs,
       runId: run._id,
       status: run.status,
     }
@@ -283,7 +302,16 @@ export const create = mutation({
           threadId: args.threadId,
           userId,
         },
-        { content: "", logs: [queuedLog] }
+        { content: "" }
+      ),
+      appendCodexRunLogs(
+        ctx,
+        {
+          _id: runId,
+          threadId: args.threadId,
+          userId,
+        },
+        [queuedLog]
       ),
     ])
 
@@ -551,45 +579,16 @@ export const workerAppendLogs = mutation({
     if (!run) throw new Error("Run not found.")
 
     const sandboxId = args.logs.map(sandboxIdFromLog).find(Boolean)
-    const checkpoint = await codexRunCheckpoint(ctx, args.runId)
-    if (run.status === "canceled" || run.status === "canceling") {
-      const now = Date.now()
-      await Promise.all([
-        upsertCodexRunCheckpoint(ctx, run, {
-          logs: compactRunLogs([
-            ...(checkpoint?.logs ?? run.logs ?? []),
-            ...args.logs,
-          ]),
-        }),
-        sandboxId
-          ? ctx.db.patch(args.runId, {
-              sandboxId,
-              sandboxState: run.sandboxState ?? "running",
-              updatedAt: now,
-            })
-          : Promise.resolve(),
-      ])
-      if (sandboxId) {
-        await ctx.db.patch(run.threadId, {
-          sandboxId,
-          sandboxState: run.sandboxState ?? "running",
-          updatedAt: now,
-        })
-      }
-      return { canceled: true }
-    }
-
-    const nextLogs = compactRunLogs([
-      ...(checkpoint?.logs ?? run.logs ?? []),
-      ...args.logs,
-    ])
+    const canceled = run.status === "canceled" || run.status === "canceling"
     const now = Date.now()
     await Promise.all([
-      upsertCodexRunCheckpoint(ctx, run, { logs: nextLogs }),
+      appendCodexRunLogs(ctx, run, args.logs),
       sandboxId
         ? ctx.db.patch(args.runId, {
             sandboxId,
-            sandboxState: "running" as const,
+            sandboxState: canceled
+              ? (run.sandboxState ?? "running")
+              : ("running" as const),
             updatedAt: now,
           })
         : Promise.resolve(),
@@ -598,12 +597,12 @@ export const workerAppendLogs = mutation({
     if (sandboxId) {
       await ctx.db.patch(run.threadId, {
         sandboxId,
-        sandboxState: "running",
+        sandboxState: canceled ? (run.sandboxState ?? "running") : "running",
         updatedAt: now,
       })
     }
 
-    return { canceled: false }
+    return { canceled }
   },
 })
 
@@ -655,8 +654,7 @@ export const workerComplete = mutation({
 
     const now = Date.now()
     const nextStatus = args.exitCode === 0 ? "succeeded" : "failed"
-    const checkpoint = await codexRunCheckpoint(ctx, args.runId)
-    const runLogs = compactRunLogs(checkpoint?.logs ?? run.logs)
+    const runLogs = await codexRunLogsForRun(ctx, run)
     await Promise.all([
       ctx.db.patch(args.runId, {
         ...(args.branchName ? { branchName: args.branchName } : {}),
@@ -729,8 +727,7 @@ export const workerFail = mutation({
     }
 
     const now = Date.now()
-    const checkpoint = await codexRunCheckpoint(ctx, args.runId)
-    const runLogs = compactRunLogs(checkpoint?.logs ?? run.logs)
+    const runLogs = await codexRunLogsForRun(ctx, run)
     await Promise.all([
       ctx.db.patch(args.runId, {
         error: args.error,

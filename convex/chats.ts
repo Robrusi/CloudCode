@@ -542,7 +542,7 @@ export const deleteThread = mutation({
         .collect(),
       threadRuns(ctx, args.threadId),
     ])
-    const [runInputs, runCheckpoints] = await Promise.all([
+    const [runInputs, runCheckpoints, runLogCheckpoints] = await Promise.all([
       Promise.all(
         runs.map((run) =>
           ctx.db
@@ -559,6 +559,14 @@ export const deleteThread = mutation({
             .unique()
         )
       ),
+      Promise.all(
+        runs.map((run) =>
+          ctx.db
+            .query("codexRunLogCheckpoints")
+            .withIndex("by_run", (q) => q.eq("runId", run._id))
+            .unique()
+        )
+      ),
     ])
     const sandboxIds = sandboxIdsForThreadRuns(thread, runs)
 
@@ -566,6 +574,9 @@ export const deleteThread = mutation({
       ...runs.map((run) => ctx.db.delete(run._id)),
       ...runInputs.flatMap((row) => (row ? [ctx.db.delete(row._id)] : [])),
       ...runCheckpoints.flatMap((row) => (row ? [ctx.db.delete(row._id)] : [])),
+      ...runLogCheckpoints.flatMap((row) =>
+        row ? [ctx.db.delete(row._id)] : []
+      ),
       ...messages.map((message) => ctx.db.delete(message._id)),
     ])
     await ctx.db.delete(args.threadId)
