@@ -18,6 +18,15 @@ import {
   ensureDaytonaDesktopDependencies,
 } from "@/lib/daytona/desktop-dependencies"
 import { desktopMcpServerScript } from "@/lib/daytona/desktop-mcp-script"
+import {
+  uiTestsCloudcodeTestIndex,
+  uiTestsCloudcodeTestPackageJson,
+  uiTestsCloudcodeTestTypes,
+  uiTestsMcpServerScript,
+  uiTestsReporterScript,
+  uiTestsServerEnv,
+  uiTestsToolContentFingerprint,
+} from "@/lib/daytona/ui-tests-mcp-script"
 export {
   getCachedDaytonaDesktopRecordingFile,
   getDaytonaDesktopRecordingFile,
@@ -581,16 +590,16 @@ function daytonaDesktopAgentsMd() {
     "## Daytona Desktop Context",
     "",
     "Cloudcode may provide a Daytona desktop for GUI/browser work.",
-    "When a task needs visual interaction, use the `cloudcode_desktop` MCP tools: start with `desktop_start`, open Cloudcode Browser with `desktop_open_browser` when needed, inspect with `desktop_screenshot`, act with click/type/key/scroll tools, then take another screenshot to verify the state.",
-    "When the desktop is available, prioritize visual UI testing in the desktop over headless checks: drive Cloudcode Browser and inspect screenshots instead of headless browsers, headless Playwright or Puppeteer runs, curl HTML dumps, or DOM-only assertions. Fall back to headless tools only when the desktop cannot be started or when specifically requested.",
-    "After UI-facing code changes, decide whether browser verification is needed. Use the Daytona desktop for layout, styling, visible component, browser behavior, form, navigation, and interaction changes; skip it only when the edit is clearly non-visual or cannot affect rendered UI.",
-    "When UI verification is needed, open the relevant local URL with `desktop_open_browser`, and exercise the changed workflow end-to-end the way a user would; confirm with screenshots that the expected outcome actually occurred before reporting back.",
+    "For manual visual inspection, use the `cloudcode_desktop` MCP tools: start with `desktop_start`, open Cloudcode Browser with `desktop_open_browser` when needed, inspect with `desktop_screenshot`, act with click/type/key/scroll tools, then take another screenshot to verify the state.",
+    "When the desktop is available, prioritize visual UI testing over headless checks. Use `cloudcode_ui_tests` for deterministic Playwright UI tests, or use `cloudcode_desktop` for manual visual inspection; do not use both for the same verification unless the user explicitly asks.",
+    "After UI-facing code changes, decide whether browser verification is needed and choose one verification path. Use deterministic UI tests when a `.cloudcode/tests` spec exists or the user asks for recorded deterministic testing; use manual desktop inspection for exploratory layout, styling, visible component, browser behavior, form, navigation, and interaction checks.",
+    "When manual desktop verification is the chosen path, open the relevant local URL with `desktop_open_browser`, and exercise the changed workflow end-to-end the way a user would; confirm with screenshots that the expected outcome actually occurred before reporting back.",
     "Confirming the app starts, the page loads, or no errors appear is not verification. Verify the specific behavior the change was meant to produce — the new element is visible, the interaction has the intended effect, the fixed bug no longer reproduces — and treat the change as unverified if the screenshots do not show it.",
     "For UI verification, never use shortcuts that bypass the user interface, including `javascript:` URLs, direct DOM mutation, localStorage edits, console commands, injected scripts, or headless assertions, unless the user explicitly asks for that. Verify UI behavior only by interacting with visible controls in the browser the way a user would: click, type, scroll, navigate, then inspect the resulting screenshot. If the screenshot is unavailable or unreadable, treat the behavior as unverified and say so.",
     "When opening a local URL for visual verification, confirm the browser actually loaded the app page before reporting success. A successful `desktop_open_browser` call is not verification. If the page shows a browser error, blank page, stale tab, or unreadable screenshot, do not claim verification; fix the loading issue or report it.",
     "If desktop verification requires starting a dev server, watcher, or another long-running process, use `desktop_open_terminal` so it runs in the visible desktop terminal. Keep ordinary shell commands for finite setup and checks.",
     "Do not launch `chromium`, `chromium-browser`, `google-chrome`, `google-chrome-stable`, `firefox`, `x-www-browser`, or `xdg-open` directly; `desktop_open_browser` uses `/usr/local/bin/cloudcode-browser`.",
-    "Daytona Computer Use recording starts automatically before desktop actions and Cloudcode stops it after the run. Cloudcode keeps every stopped desktop recording and attaches all videos at the end; use `desktop_record_stop` only when an intermediate video artifact is needed before the run ends.",
+    "Desktop actions do not record automatically. Use `desktop_record_start` before the first action and `desktop_record_stop` after the final action only when an explicit manual desktop recording is needed.",
     "",
     "Use the `cloudcode_desktop` MCP tools for GUI tasks:",
     "- `desktop_start` starts or verifies the desktop.",
@@ -598,7 +607,20 @@ function daytonaDesktopAgentsMd() {
     "- `desktop_open_terminal` opens a visible desktop terminal, optionally running a shell command from the repository.",
     "- `desktop_screenshot` returns an image of the current desktop.",
     "- `desktop_click`, `desktop_type`, `desktop_key`, `desktop_hotkey`, and `desktop_scroll` control the desktop.",
-    "- `desktop_record_start` returns the active recording, and `desktop_record_stop` stops it early when an intermediate video is needed. Later desktop actions start a new recording automatically.",
+    "- `desktop_record_start` starts an explicit manual desktop recording, and `desktop_record_stop` stops that recording.",
+    "",
+    "## Cloudcode Deterministic UI Tests",
+    "",
+    "For deterministic UI tests, write tests only under `.cloudcode/tests` in the repository.",
+    'Use `import { expect, test } from "@cloudcode/test"` and use the `step` and `annotate` fixtures in each test: `test("Flow", async ({ page, step, annotate }) => { ... })`.',
+    "Write normal Playwright against the real app: navigate with `page.goto()`, find controls with role/label/text locators, act with `locator.click()`, `locator.fill()`, `locator.press()`, or `page.keyboard.press()`, and verify with `expect(...)`.",
+    "Every deterministic UI test must use at least one `step()`, perform at least one page/locator/keyboard action inside a step, and make an `expect(...)` assertion after the last action so the test proves the UI reached the expected state.",
+    "Do not use shortcuts such as `page.evaluate`, `page.setContent`, `locator.evaluate`, `locator.dispatchEvent`, direct DOM mutation, localStorage/sessionStorage mutation, network mocking, or API calls to fake UI state; the runner blocks common shortcut patterns.",
+    '`step("label", async () => { ... })` produces the pass/fail checklist and updates the visible video overlay. `annotate("label")` adds a short visible annotation to the desktop recording.',
+    "Run deterministic UI tests with the `cloudcode_ui_tests` MCP tools, especially `ui_tests_list` and `ui_tests_run`. The runner launches Playwright headed inside the Daytona desktop, sizes the browser to the actual desktop, records only the test execution window, and drives the app through visible browser actions.",
+    "When deterministic UI tests are the verification path, do not first rehearse the same flow with `cloudcode_desktop`. Write or update the `.cloudcode/tests` spec and run it with `ui_tests_run` directly.",
+    "Do not create screenshot, trace, or Playwright video artifacts for this flow. The Daytona desktop recording is the proof artifact.",
+    "Do not start or restart the app server for UI tests. Assume the user's dev server is already running; pass `baseUrl` to `ui_tests_run` when the app is not on `http://127.0.0.1:3000`.",
     "",
     "A shell fallback is also available as `cloudcode-computer`, including `cloudcode-computer terminal '<command>'`, but prefer the MCP tools because screenshots are returned as inspectable images.",
     "",
@@ -621,6 +643,7 @@ function desktopCodexConfig(
   sandbox: Pick<Sandbox, "id" | "toolboxProxyUrl">,
   toolboxAuthKey: string
 ) {
+  const desktopStateDir = `${paths.codexHome}/desktop/state`
   return [
     "[mcp_servers.cloudcode_desktop]",
     `command = ${JSON.stringify(`${paths.codexHome}/desktop/cloudcode-desktop-mcp.mjs`)}`,
@@ -629,7 +652,7 @@ function desktopCodexConfig(
     "[mcp_servers.cloudcode_desktop.env]",
     `CODEX_HOME = ${JSON.stringify(paths.codexHome)}`,
     `CLOUDCODE_REPO_PATH = ${JSON.stringify(paths.repoPath)}`,
-    `CLOUDCODE_DESKTOP_STATE_DIR = ${JSON.stringify(`${paths.codexHome}/desktop/state`)}`,
+    `CLOUDCODE_DESKTOP_STATE_DIR = ${JSON.stringify(desktopStateDir)}`,
     `CLOUDCODE_BROWSER_COMMAND = ${JSON.stringify(DESKTOP_BROWSER_COMMAND)}`,
     `CLOUDCODE_TERMINAL_HOME = ${JSON.stringify(paths.home)}`,
     `CLOUDCODE_TERMINAL_PATH = ${JSON.stringify(daytonaTerminalPath(paths.home))}`,
@@ -638,6 +661,22 @@ function desktopCodexConfig(
     `CLOUDCODE_DAYTONA_TOOLBOX_BASE_URL = ${JSON.stringify(sandbox.toolboxProxyUrl)}`,
     'CLOUDCODE_DESKTOP_DISPLAY = ":0"',
     "",
+    "[mcp_servers.cloudcode_ui_tests]",
+    `command = ${JSON.stringify(`${paths.codexHome}/ui-tests/cloudcode-ui-tests-mcp.mjs`)}`,
+    "startup_timeout_sec = 20",
+    "tool_timeout_sec = 900",
+    "",
+    "[mcp_servers.cloudcode_ui_tests.env]",
+    `CODEX_HOME = ${JSON.stringify(paths.codexHome)}`,
+    ...Object.entries(
+      uiTestsServerEnv({
+        paths,
+        sandboxId: sandbox.id,
+        toolboxAuthKey,
+        toolboxBaseUrl: sandbox.toolboxProxyUrl,
+      })
+    ).map(([key, value]) => `${key} = ${JSON.stringify(value)}`),
+    "",
   ].join("\n")
 }
 
@@ -645,6 +684,7 @@ export function daytonaDesktopToolContentFingerprint() {
   return sha256(
     [
       desktopMcpServerScript(),
+      uiTestsToolContentFingerprint(),
       daytonaDesktopAgentsMd(),
       desktopCodexConfig(
         {
@@ -699,6 +739,11 @@ export async function installDaytonaDesktopTools(
   extras: DaytonaDesktopToolExtras = {}
 ) {
   const script = desktopMcpServerScript()
+  const uiTestsScript = uiTestsMcpServerScript()
+  const uiTestsPackageJson = uiTestsCloudcodeTestPackageJson()
+  const uiTestsPackageIndex = uiTestsCloudcodeTestIndex()
+  const uiTestsPackageTypes = uiTestsCloudcodeTestTypes()
+  const uiTestsReporter = uiTestsReporterScript()
   const agentsMd = [daytonaDesktopAgentsMd(), extras.instructions]
     .filter(Boolean)
     .join("\n\n")
@@ -710,6 +755,13 @@ export async function installDaytonaDesktopTools(
     .filter(Boolean)
     .join("\n")
   const scriptPath = `${paths.codexHome}/desktop/cloudcode-desktop-mcp.mjs`
+  const uiTestsScriptPath = `${paths.codexHome}/ui-tests/cloudcode-ui-tests-mcp.mjs`
+  const uiTestsBinPath = `${paths.home}/.local/bin/cloudcode-ui-tests`
+  const uiTestsPackageDir = `${paths.codexHome}/ui-tests/cloudcode-test`
+  const uiTestsPackageJsonPath = `${uiTestsPackageDir}/package.json`
+  const uiTestsPackageIndexPath = `${uiTestsPackageDir}/index.cjs`
+  const uiTestsPackageTypesPath = `${uiTestsPackageDir}/index.d.ts`
+  const uiTestsReporterPath = `${paths.codexHome}/ui-tests/cloudcode-ui-tests-reporter.cjs`
   const binPath = `${paths.home}/.local/bin/cloudcode-computer`
   const agentsMdPath = `${paths.codexHome}/AGENTS.md`
   const configPath = `${paths.codexHome}/config.toml`
@@ -717,11 +769,25 @@ export async function installDaytonaDesktopTools(
   const fingerprint = desktopToolFingerprint({
     agentsMd,
     agentsPath: agentsMdPath,
-    binPath,
+    binPath: [binPath, uiTestsBinPath].join("\0"),
     config,
     configPath,
-    script,
-    scriptPath,
+    script: [
+      script,
+      uiTestsScript,
+      uiTestsPackageJson,
+      uiTestsPackageIndex,
+      uiTestsPackageTypes,
+      uiTestsReporter,
+    ].join("\0"),
+    scriptPath: [
+      scriptPath,
+      uiTestsScriptPath,
+      uiTestsPackageJsonPath,
+      uiTestsPackageIndexPath,
+      uiTestsPackageTypesPath,
+      uiTestsReporterPath,
+    ].join("\0"),
   })
 
   const marker = await runDaytonaCommand(
@@ -730,7 +796,13 @@ export async function installDaytonaDesktopTools(
       "set -e",
       `fingerprint=${shellQuote(fingerprint)}`,
       `test -x ${shellQuote(scriptPath)}`,
+      `test -x ${shellQuote(uiTestsScriptPath)}`,
       `test -L ${shellQuote(binPath)}`,
+      `test -L ${shellQuote(uiTestsBinPath)}`,
+      `test -s ${shellQuote(uiTestsPackageJsonPath)}`,
+      `test -s ${shellQuote(uiTestsPackageIndexPath)}`,
+      `test -s ${shellQuote(uiTestsPackageTypesPath)}`,
+      `test -s ${shellQuote(uiTestsReporterPath)}`,
       `test -s ${shellQuote(agentsMdPath)}`,
       `test -s ${shellQuote(configPath)}`,
       `grep -qxF -- "$fingerprint" ${shellQuote(markerPath)}`,
@@ -745,12 +817,18 @@ export async function installDaytonaDesktopTools(
     sandbox,
     [
       "set -e",
-      `mkdir -p ${shellQuote(`${paths.codexHome}/desktop/state`)} ${shellQuote(`${paths.home}/.local/bin`)}`,
+      `mkdir -p ${shellQuote(`${paths.codexHome}/desktop/state`)} ${shellQuote(`${paths.codexHome}/ui-tests`)} ${shellQuote(uiTestsPackageDir)} ${shellQuote(`${paths.home}/.local/bin`)}`,
       base64FileCommand(scriptPath, script),
+      base64FileCommand(uiTestsScriptPath, uiTestsScript),
+      base64FileCommand(uiTestsPackageJsonPath, uiTestsPackageJson),
+      base64FileCommand(uiTestsPackageIndexPath, uiTestsPackageIndex),
+      base64FileCommand(uiTestsPackageTypesPath, uiTestsPackageTypes),
+      base64FileCommand(uiTestsReporterPath, uiTestsReporter),
       base64FileCommand(agentsMdPath, agentsMd),
       base64FileCommand(configPath, config),
       `ln -sf ${shellQuote(scriptPath)} ${shellQuote(binPath)}`,
-      `chmod +x ${shellQuote(scriptPath)} ${shellQuote(binPath)}`,
+      `ln -sf ${shellQuote(uiTestsScriptPath)} ${shellQuote(uiTestsBinPath)}`,
+      `chmod +x ${shellQuote(scriptPath)} ${shellQuote(binPath)} ${shellQuote(uiTestsScriptPath)} ${shellQuote(uiTestsBinPath)}`,
       `printf '%s\\n' ${shellQuote(fingerprint)} > ${shellQuote(markerPath)}`,
     ].join("\n"),
     { signal, timeoutMs: 10_000 }

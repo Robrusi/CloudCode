@@ -18,7 +18,7 @@ export type RecordingsResponse = {
   recordings: DesktopRecording[]
 }
 
-type DesktopPanelView = "desktop" | "recordings"
+type DesktopPanelView = "desktop" | "recordings" | "tests"
 
 export type BusyKind = "refresh" | "start" | "stop"
 

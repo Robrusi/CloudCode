@@ -1,21 +1,13 @@
 "use client"
 
 import { Loader2, Play, RefreshCw } from "lucide-react"
-import {
-  type ComponentPropsWithoutRef,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react"
+import { type ComponentPropsWithoutRef, useRef } from "react"
 
+import { useRecordingSource } from "@/components/sandbox/recording-source"
 import {
   recordingLabel,
-  recordingRequestUrl,
   type RecordingVideoArtifact,
 } from "@/components/sandbox/recording-video-utils"
-import { fetchJson, requestJson } from "@/lib/http/client-json"
 import { cn } from "@/lib/shared/utils"
 
 type RecordingVideoProps = {
@@ -23,17 +15,6 @@ type RecordingVideoProps = {
   recording: RecordingVideoArtifact
   sandboxId?: string | null
 } & Omit<ComponentPropsWithoutRef<"video">, "children" | "className" | "src">
-
-type VideoLoadState =
-  | "checking"
-  | "error"
-  | "idle"
-  | "loading"
-  | "materializing"
-  | "ready"
-  | "retrying"
-
-const RECORDING_VIDEO_RETRY_DELAYS_MS = [1500, 3000, 6000, 10_000] as const
 
 export function RecordingVideo({
   recording,
@@ -57,168 +38,26 @@ function RecordingVideoInner({
   sandboxId,
   ...videoProps
 }: RecordingVideoProps) {
-  const resolvedSandboxId = sandboxId ?? recording.sandboxId ?? null
-  const [attempt, setAttempt] = useState(0)
-  const [loadState, setLoadState] = useState<VideoLoadState>(() =>
-    recording.id && resolvedSandboxId ? "checking" : "idle"
-  )
-  const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [sourceEnabled, setSourceEnabled] = useState(false)
-  const [pendingAutoLoad, setPendingAutoLoad] = useState(false)
-  const playAfterReadyRef = useRef(false)
-  const retryTimeoutRef = useRef<number | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
-  const src = useMemo(
-    () =>
-      sourceEnabled
-        ? recordingRequestUrl(recording, { attempt, sandboxId })
-        : null,
-    [attempt, recording, sandboxId, sourceEnabled]
-  )
+  const {
+    errorMessage,
+    hasRecording,
+    loadState,
+    markReady,
+    materialize,
+    notifyLoadStart,
+    preparing,
+    retryNow,
+    scheduleRetry,
+    src,
+  } = useRecordingSource({ recording, sandboxId })
   const label = recordingLabel(recording)
-
-  const clearRetryTimer = useCallback(() => {
-    if (retryTimeoutRef.current === null) return
-    window.clearTimeout(retryTimeoutRef.current)
-    retryTimeoutRef.current = null
-  }, [])
-
-  useEffect(() => clearRetryTimer, [clearRetryTimer])
-
-  useEffect(() => {
-    if (!recording.id || !resolvedSandboxId) {
-      setLoadState("idle")
-      setSourceEnabled(false)
-      return
-    }
-
-    const controller = new AbortController()
-    playAfterReadyRef.current = false
-    setErrorMessage(null)
-    setSourceEnabled(false)
-    setPendingAutoLoad(false)
-    setLoadState("checking")
-
-    void fetchJson<{
-      cached?: boolean
-      running?: boolean
-    }>(
-      `/api/sandbox/desktop/recordings?${new URLSearchParams({
-        recordingId: recording.id,
-        sandboxId: resolvedSandboxId,
-        status: "1",
-      })}`,
-      { signal: controller.signal },
-      { fallbackError: "Unable to check recording cache." }
-    )
-      .then((result) => {
-        if (controller.signal.aborted) return
-        if (result.cached) {
-          setSourceEnabled(true)
-          setLoadState("loading")
-        } else {
-          setLoadState("idle")
-          // When the sandbox is already running, download and play the
-          // recording automatically instead of waiting for a manual "Load
-          // recording" click — loading cannot start a stopped sandbox here. A
-          // separate effect performs the one-shot materialize so it sees the
-          // latest callback identity.
-          if (result.running) setPendingAutoLoad(true)
-        }
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setLoadState("idle")
-      })
-
-    return () => controller.abort()
-  }, [recording.id, resolvedSandboxId])
-
-  const scheduleRetry = useCallback(() => {
-    clearRetryTimer()
-    const delay = RECORDING_VIDEO_RETRY_DELAYS_MS[attempt]
-    if (delay === undefined) {
-      setLoadState("error")
-      return
-    }
-
-    setLoadState("retrying")
-    retryTimeoutRef.current = window.setTimeout(() => {
-      retryTimeoutRef.current = null
-      setLoadState("loading")
-      setAttempt((value) => value + 1)
-    }, delay)
-  }, [attempt, clearRetryTimer])
-
-  const materializeAndLoad = useCallback(
-    async (autoplay = true) => {
-      if (
-        !recording.id ||
-        !resolvedSandboxId ||
-        loadState === "materializing"
-      ) {
-        return
-      }
-
-      clearRetryTimer()
-      setErrorMessage(null)
-      setSourceEnabled(false)
-      setLoadState("materializing")
-
-      try {
-        await requestJson(
-          "/api/sandbox/desktop/recordings",
-          "POST",
-          {
-            action: "materialize",
-            recordingId: recording.id,
-            sandboxId: resolvedSandboxId,
-          },
-          { fallbackError: "Unable to load recording." }
-        )
-        playAfterReadyRef.current = autoplay
-        setAttempt((value) => value + 1)
-        setSourceEnabled(true)
-        setLoadState("loading")
-      } catch (error) {
-        playAfterReadyRef.current = false
-        setErrorMessage(
-          error instanceof Error ? error.message : "Unable to load recording."
-        )
-        setLoadState("error")
-      }
-    },
-    [clearRetryTimer, loadState, recording.id, resolvedSandboxId]
-  )
-
-  // One-shot background materialize for a not-yet-cached recording whose
-  // sandbox is already running. The `pendingAutoLoad` flag is cleared before
-  // dispatching so a flaky download settles into the error state instead of
-  // re-triggering a loop.
-  useEffect(() => {
-    if (!pendingAutoLoad || loadState !== "idle") return
-    setPendingAutoLoad(false)
-    void materializeAndLoad(false)
-  }, [loadState, materializeAndLoad, pendingAutoLoad])
-
-  const markReady = useCallback(() => {
-    clearRetryTimer()
-    setLoadState("ready")
-    if (playAfterReadyRef.current) {
-      playAfterReadyRef.current = false
-      void videoRef.current?.play().catch(() => undefined)
-    }
-  }, [clearRetryTimer])
-
-  const retryNow = useCallback(() => {
-    void materializeAndLoad()
-  }, [materializeAndLoad])
 
   if (!src) {
     const checking = loadState === "checking"
-    const preparing = loadState === "materializing" || pendingAutoLoad
     const failed = loadState === "error"
     const busy = checking || preparing
-    const disabled = busy || !recording.id || !resolvedSandboxId
+    const disabled = busy || !hasRecording
 
     return (
       <div
@@ -227,7 +66,7 @@ function RecordingVideoInner({
       >
         <button
           type="button"
-          onClick={() => void materializeAndLoad()}
+          onClick={() => void materialize()}
           disabled={disabled}
           aria-label={failed ? "Retry loading recording" : "Load recording"}
           className="grid size-12 place-items-center rounded-full border border-border/70 bg-background/70 text-foreground/80 shadow-sm backdrop-blur transition-transform duration-200 outline-none focus-visible:ring-2 focus-visible:ring-ring/70 enabled:hover:scale-105 enabled:hover:text-foreground enabled:active:scale-95 disabled:cursor-default disabled:text-muted-foreground"
@@ -264,7 +103,7 @@ function RecordingVideoInner({
         src={src}
         className={cn("aspect-video w-full bg-muted", className)}
         onCanPlay={(event) => {
-          markReady()
+          if (markReady()) void videoRef.current?.play().catch(() => undefined)
           videoProps.onCanPlay?.(event)
         }}
         onError={(event) => {
@@ -272,11 +111,11 @@ function RecordingVideoInner({
           videoProps.onError?.(event)
         }}
         onLoadedMetadata={(event) => {
-          markReady()
+          if (markReady()) void videoRef.current?.play().catch(() => undefined)
           videoProps.onLoadedMetadata?.(event)
         }}
         onLoadStart={(event) => {
-          if (loadState !== "ready") setLoadState("loading")
+          notifyLoadStart()
           videoProps.onLoadStart?.(event)
         }}
       >

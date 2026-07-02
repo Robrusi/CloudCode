@@ -23,19 +23,6 @@ const codexHome = process.env.CODEX_HOME || join(terminalHome, ".codex");
 const activeRecordingPath = join(stateDir, ${JSON.stringify(DESKTOP_AGENT_RECORDING_STATE_FILE)});
 const completedRecordingPath = join(stateDir, ${JSON.stringify(DESKTOP_AGENT_COMPLETED_RECORDING_STATE_FILE)});
 const runStatePath = join(stateDir, ${JSON.stringify(DESKTOP_AGENT_RUN_STATE_FILE)});
-const autoRecordedToolNames = new Set([
-  "desktop_start",
-  "desktop_open_browser",
-  "desktop_open_terminal",
-  "desktop_screenshot",
-  "desktop_click",
-  "desktop_move",
-  "desktop_type",
-  "desktop_key",
-  "desktop_hotkey",
-  "desktop_scroll",
-  "desktop_windows",
-]);
 const displayCandidates = [
   process.env.CLOUDCODE_DESKTOP_DISPLAY,
   process.env.DISPLAY,
@@ -116,13 +103,32 @@ async function activeDisplay() {
   return displayCandidates[0] || ":0";
 }
 
+async function displayGeometry(display) {
+  if (!commandExists("xdpyinfo")) return { height: 900, width: 1440 };
+  try {
+    const output = await run("xdpyinfo", ["-display", display], {
+      timeout: 2_000,
+    });
+    const match = /dimensions:\s+(\d+)x(\d+)\s+pixels/i.exec(output);
+    const width = Number(match?.[1]);
+    const height = Number(match?.[2]);
+    if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+      return { height, width };
+    }
+  } catch {
+  }
+  return { height: 900, width: 1440 };
+}
+
 function desktopEnv(display) {
   return { DISPLAY: display };
 }
 
-async function ensureDesktop() {
+async function ensureDesktopInfo() {
   const display = await activeDisplay();
-  if (await displayWorks(display)) return display;
+  if (await displayWorks(display)) {
+    return { display, ...(await displayGeometry(display)) };
+  }
 
   const logDir = join(stateDir, "logs");
   mkdirSync(logDir, { recursive: true });
@@ -138,7 +144,11 @@ async function ensureDesktop() {
     "if command -v websockify >/dev/null 2>&1 && ! pgrep -f 'websockify.*6080' >/dev/null 2>&1; then nohup websockify --web=/usr/share/novnc/ 6080 localhost:5900 > " + JSON.stringify(join(logDir, "novnc.log")) + " 2>&1 & fi",
   ].join("\n");
   await shell(shellScript, { timeout: 10_000 });
-  return display;
+  return { display, ...(await displayGeometry(display)) };
+}
+
+async function ensureDesktop() {
+  return (await ensureDesktopInfo()).display;
 }
 
 async function screenshotPngBase64(showCursor = true) {
@@ -334,15 +344,6 @@ function clearActiveRecording(id) {
   }
 }
 
-async function ensureAutomaticRecording(toolName) {
-  const active = readActiveRecording();
-  if (active?.id) return active;
-  const label = "agent-" + toolName.replace(/^desktop_/, "").replace(/_/g, "-");
-  const recording = rememberActiveRecording(await startRecording({ label }));
-  if (!recording?.id) throw new Error("Unable to start automatic Daytona desktop recording.");
-  return recording;
-}
-
 async function startRecording(args) {
   await ensureDesktop();
   const label = safeRecordingName(stringArg(args, "label"));
@@ -354,9 +355,11 @@ async function stopRecording(args) {
   const active = readActiveRecording();
   const id = stringArg(args, "id") || stringArg(args, "recordingId") || active?.id;
   if (!id) throw new Error("recording id required");
+  const remember = boolArg(args, "remember", true);
   const recording = await daytonaRecordingRequest("/computeruse/recordings/stop", { id });
   clearActiveRecording(id);
-  return rememberCompletedRecording({ id, ...recording, sandboxId: process.env.CLOUDCODE_DAYTONA_SANDBOX_ID });
+  const stopped = { id, ...recording, sandboxId: process.env.CLOUDCODE_DAYTONA_SANDBOX_ID };
+  return remember ? rememberCompletedRecording(stopped) : recordingWithSandbox(stopped, { tagCurrentRun: true });
 }
 
 async function openBrowser(args) {
@@ -460,15 +463,12 @@ async function openTerminal(args) {
 }
 
 async function callTool(name, args = {}) {
-  if (autoRecordedToolNames.has(name)) {
-    await ensureAutomaticRecording(name);
-  }
   const recorded = (result) => result;
 
   switch (name) {
     case "desktop_start": {
-      const display = await ensureDesktop();
-      return recorded(text("Desktop ready on " + display + ".", { display }));
+      const desktop = await ensureDesktopInfo();
+      return recorded(text("Desktop ready on " + desktop.display + ".", desktop));
     }
     case "desktop_open_browser": {
       const browser = await openBrowser(args);
@@ -535,14 +535,21 @@ async function callTool(name, args = {}) {
       return recorded(text(output.trim() || "No windows found.", { display, output }));
     }
     case "desktop_record_start": {
+      const replaceActive = boolArg(args, "replaceActive", false);
+      const active = readActiveRecording();
+      if (active?.id && replaceActive) {
+        await stopRecording({ id: active.id, remember: false });
+      }
       const recording =
-        readActiveRecording() ?? rememberActiveRecording(await startRecording(args));
+        !replaceActive && active?.id
+          ? active
+          : rememberActiveRecording(await startRecording(args));
       if (!recording?.id) throw new Error("Unable to start Daytona desktop recording.");
-      return text("Daytona recording active.", { id: recording.id });
+      return text("Daytona recording active.", { id: recording.id, recording });
     }
     case "desktop_record_stop": {
       const recording = await stopRecording(args);
-      return text("Daytona recording stopped.", { id: recording?.id });
+      return text("Daytona recording stopped.", { id: recording?.id, recording });
     }
     default:
       throw new Error("Unknown desktop tool: " + name);
@@ -654,10 +661,13 @@ const tools = [
   },
   {
     name: "desktop_record_start",
-    description: "Return the active Daytona Computer Use recording; one starts automatically before desktop actions.",
+    description: "Start an explicit Daytona Computer Use recording, or return the active explicit recording. Pass replaceActive to discard any active recording first and start a fresh one.",
     inputSchema: {
       type: "object",
-      properties: { label: { type: "string" } },
+      properties: {
+        label: { type: "string" },
+        replaceActive: { type: "boolean" },
+      },
     },
   },
   {
@@ -665,7 +675,10 @@ const tools = [
     description: "Stop the active Daytona Computer Use recording and return its video artifact.",
     inputSchema: {
       type: "object",
-      properties: { id: { type: "string" } },
+      properties: {
+        id: { type: "string" },
+        remember: { type: "boolean" },
+      },
     },
   },
 ];
@@ -682,7 +695,7 @@ async function handle(message) {
           protocolVersion: params?.protocolVersion || "2025-06-18",
           capabilities: { tools: {} },
           serverInfo: { name: "cloudcode-desktop", version: "1.0.0" },
-          instructions: "Use these tools for visual desktop work in the Daytona sandbox. Open URLs only with desktop_open_browser, which launches Cloudcode Browser at /usr/local/bin/cloudcode-browser. Use desktop_open_terminal for long-running dev servers, watchers, and other processes needed during desktop testing. Desktop actions automatically start a Daytona recording; Cloudcode stops it after the run. Start with desktop_start, inspect with desktop_screenshot, then act with click/type/key tools. Take another screenshot after each meaningful action. For UI verification, never bypass visible controls with javascript: URLs, direct DOM mutation, localStorage edits, console commands, injected scripts, or headless assertions unless the user explicitly asks. Confirm local app pages actually loaded in the browser screenshot before reporting verification; browser errors, blank pages, stale tabs, unavailable screenshots, or unreadable screenshots mean the behavior is unverified.",
+          instructions: "Use these tools for manual visual desktop work in the Daytona sandbox. Open URLs only with desktop_open_browser, which launches Cloudcode Browser at /usr/local/bin/cloudcode-browser. Use desktop_open_terminal for long-running dev servers, watchers, and other processes needed during desktop testing. Desktop actions do not record automatically. Use desktop_record_start and desktop_record_stop only when an explicit manual desktop recording is needed. Start with desktop_start, inspect with desktop_screenshot, then act with click/type/key tools. Take another screenshot after each meaningful action. For manual UI verification, never bypass visible controls with javascript: URLs, direct DOM mutation, localStorage edits, console commands, injected scripts, or headless assertions unless the user explicitly asks. Confirm local app pages actually loaded in the browser screenshot before reporting verification; browser errors, blank page, stale tab, unavailable screenshots, or unreadable screenshots mean the behavior is unverified.",
         },
       });
       return;
@@ -741,9 +754,25 @@ async function cli() {
     args.direction = rest[0] || "down";
     args.amount = Number(rest[1] || 4);
   } else if (command === "record-start") {
-    args.label = rest.join(" ");
+    const remaining = [];
+    for (const part of rest) {
+      if (part === "--fresh" || part === "--replace-active") {
+        args.replaceActive = true;
+      } else {
+        remaining.push(part);
+      }
+    }
+    args.label = remaining.join(" ");
   } else if (command === "record-stop") {
-    args.id = rest[0];
+    const remaining = [];
+    for (const part of rest) {
+      if (part === "--forget") {
+        args.remember = false;
+      } else {
+        remaining.push(part);
+      }
+    }
+    args.id = remaining[0];
   } else if (command === "open-browser") {
     args.url = rest[0] || "about:blank";
   } else if (command === "terminal") {

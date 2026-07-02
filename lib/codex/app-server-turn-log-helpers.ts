@@ -116,6 +116,7 @@ export function emitItemLog(
         kind: "tool_call",
         name,
         pluginId: item.pluginId,
+        recording: recordingFromToolResult(item.result),
         result: item.result,
         status: item.status ?? phase,
         text,
@@ -284,6 +285,26 @@ function toolResultText(result: unknown) {
   if (!Array.isArray(content)) return undefined
 
   return toolContentText(content)
+}
+
+function recordingFromToolResult(result: unknown) {
+  const record = objectRecord(result)
+  const structured = objectRecord(record?.structuredContent)
+  return normalizeRecording(structured?.recording)
+}
+
+function normalizeRecording(value: unknown) {
+  const record = objectRecord(value)
+  const id = stringValue(record?.id)
+  if (!id) return undefined
+
+  return {
+    fileName: stringValue(record?.fileName),
+    filePath: stringValue(record?.filePath),
+    id,
+    sandboxId: stringValue(record?.sandboxId),
+    status: stringValue(record?.status),
+  }
 }
 
 export function normalizeFileChanges(value: unknown) {
