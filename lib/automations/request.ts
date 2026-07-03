@@ -1,4 +1,5 @@
 import {
+  parseAutomationAutoEnvironment,
   parseAutomationName,
   parseAutomationSandboxRetention,
   parseAutomationTaskPrompt,
@@ -23,6 +24,7 @@ import {
 import { jsonRawStringField, type JsonRecord } from "@/lib/http/api-route"
 
 export type AutomationRequestConfig = {
+  autoEnvironment: boolean
   baseBranch?: string
   branchMode: BranchMode
   branchName?: string
@@ -65,6 +67,7 @@ export function parseAutomationRequestConfig(
   const branchMode = parseBranchMode(body.branchMode)
 
   return {
+    autoEnvironment: parseAutomationAutoEnvironment(body.autoEnvironment),
     baseBranch: jsonRawStringField(body, "baseBranch"),
     // Custom branch mode without a name degrades to auto, mirroring the chat
     // composer's behavior.

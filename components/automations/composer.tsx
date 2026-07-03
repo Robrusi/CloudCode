@@ -22,6 +22,7 @@ import {
 import { RepoChip } from "@/components/chat/repo-chip"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import type { Id } from "@/convex/_generated/dataModel"
 import {
@@ -54,7 +55,8 @@ function DetailRow({
   )
 }
 
-/** Chip + popover for a small fixed set of options with descriptions. */
+/** Chip + popover for a small fixed set of options. Matches the sidebar
+ * thread context menu: a compact single-line menu, not a tall detail list. */
 function OptionChip<T extends string>({
   ariaLabel,
   onChange,
@@ -63,7 +65,7 @@ function OptionChip<T extends string>({
 }: {
   ariaLabel: string
   onChange: (value: T) => void
-  options: Array<{ value: T; label: string; description: string }>
+  options: Array<{ value: T; label: string }>
   value: T
 }) {
   const [open, setOpen] = useState(false)
@@ -85,7 +87,7 @@ function OptionChip<T extends string>({
         <ChevronDown className="size-3 shrink-0 opacity-60" />
       </button>
       {open ? (
-        <div className={cn(popoverPanel, "top-10 right-0 w-64")}>
+        <div className={cn(popoverPanel, "top-10 right-0")}>
           {options.map((option) => (
             <button
               key={option.value}
@@ -94,16 +96,11 @@ function OptionChip<T extends string>({
                 onChange(option.value)
                 setOpen(false)
               }}
-              className={cn(popoverItem, "items-start gap-3 py-2")}
+              className={popoverItem}
             >
-              <span className="flex min-w-0 flex-col">
-                <span className="text-foreground">{option.label}</span>
-                <span className="text-xs text-muted-foreground">
-                  {option.description}
-                </span>
-              </span>
+              <span>{option.label}</span>
               {option.value === value ? (
-                <Check className="mt-0.5 size-4 shrink-0" strokeWidth={2.25} />
+                <Check className="size-4 shrink-0" strokeWidth={2.25} />
               ) : null}
             </button>
           ))}
@@ -352,6 +349,21 @@ export function AutomationComposer({
             setOpen={setModelOpen}
           />
         </DetailRow>
+        <DetailRow label="Environment setup">
+          <Switch
+            checked={draft.autoEnvironment}
+            onCheckedChange={(autoEnvironment) => {
+              // The toggle owns the preset choice; drop any stored preset so
+              // the server resolves the matching built-in.
+              setDraft((current) => ({
+                ...current,
+                autoEnvironment,
+                sandboxPresetId: "",
+              }))
+            }}
+            aria-label="Set up the environment automatically"
+          />
+        </DetailRow>
         <DetailRow label="Sandbox">
           <OptionChip
             ariaLabel="Sandbox after run"
@@ -360,16 +372,8 @@ export function AutomationComposer({
               set("sandboxRetention", sandboxRetention)
             }
             options={[
-              {
-                description: "Removed when the run finishes",
-                label: "Delete after run",
-                value: "delete",
-              },
-              {
-                description: "Stays available for follow-ups",
-                label: "Keep idle",
-                value: "idle",
-              },
+              { label: "Delete after run", value: "delete" },
+              { label: "Keep idle", value: "idle" },
             ]}
           />
         </DetailRow>
@@ -379,16 +383,8 @@ export function AutomationComposer({
             value={draft.threadMode}
             onChange={(threadMode) => set("threadMode", threadMode)}
             options={[
-              {
-                description: "Runs report into one chat",
-                label: "Same chat",
-                value: "single",
-              },
-              {
-                description: "Each run opens its own chat",
-                label: "New chat per run",
-                value: "per-run",
-              },
+              { label: "Same chat", value: "single" },
+              { label: "New chat per run", value: "per-run" },
             ]}
           />
         </DetailRow>

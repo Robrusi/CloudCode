@@ -10,11 +10,12 @@ import {
   Plus,
   Trash2,
 } from "lucide-react"
-import { useState } from "react"
+import { useRef, useState } from "react"
 
 import { AutomationComposer } from "@/components/automations/composer"
 import {
   formatRelative,
+  formatRunTime,
   type AutomationRecord,
 } from "@/components/automations/model"
 import { repoLabel } from "@/components/chat/format"
@@ -76,7 +77,11 @@ function statusDotClass(automation: AutomationRecord) {
   }
 }
 
-/** Lazy-loaded run history shown when a row is expanded. */
+const RECENT_RUNS_FIRST_PAGE = 5
+const RECENT_RUNS_PAGE = 10
+
+/** Lazy-loaded run history shown when a row is expanded. Starts with the
+ * last 5 runs; each "Show more" loads 10 further back. */
 function RecentRuns({
   automationId,
   onOpenThread,
@@ -84,10 +89,17 @@ function RecentRuns({
   automationId: Id<"automations">
   onOpenThread: (threadId: Id<"threads">) => void
 }) {
-  const runs = useQuery(api.automations.recentRuns, { automationId })
+  const [limit, setLimit] = useState(RECENT_RUNS_FIRST_PAGE)
+  const result = useQuery(api.automations.recentRuns, { automationId, limit })
+  // Hold the previous page while a larger one loads so "Show more" appends
+  // instead of collapsing the list to a skeleton.
+  const lastResultRef = useRef(result)
+  if (result !== undefined) lastResultRef.current = result
+  const view = result ?? lastResultRef.current
+  const loading = result === undefined
   const now = Date.now()
 
-  if (runs === undefined) {
+  if (view === undefined) {
     return (
       <div className="space-y-2 py-2">
         {[0, 1].map((index) => (
@@ -99,13 +111,13 @@ function RecentRuns({
       </div>
     )
   }
-  if (runs.length === 0) {
+  if (view.runs.length === 0) {
     return <p className="py-2 text-xs text-muted-foreground/70">No runs yet.</p>
   }
 
   return (
     <ol className="py-1">
-      {runs.map((run) => (
+      {view.runs.map((run) => (
         <li key={run.id}>
           <button
             type="button"
@@ -123,12 +135,27 @@ function RecentRuns({
             <span className="text-foreground/80">
               {RUN_STATUS_LABEL[run.status as RunStatus] ?? run.status}
             </span>
-            <span className="text-muted-foreground/70 tabular-nums">
-              {formatRelative(run.finishedAt ?? run.createdAt, now)}
+            <span className="text-muted-foreground/80 tabular-nums">
+              {formatRunTime(run.createdAt)}
+            </span>
+            <span className="text-muted-foreground/60 tabular-nums">
+              {formatRelative(run.createdAt, now)}
             </span>
           </button>
         </li>
       ))}
+      {view.hasMore ? (
+        <li>
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => setLimit((current) => current + RECENT_RUNS_PAGE)}
+            className="-ml-1.5 rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30 disabled:opacity-60"
+          >
+            {loading ? "Loading…" : "Show more"}
+          </button>
+        </li>
+      ) : null}
     </ol>
   )
 }

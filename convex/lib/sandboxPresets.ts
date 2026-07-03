@@ -97,10 +97,14 @@ export async function ensureAutoEnvironmentPreset(
 export async function resolveOwnedPresetOrAutoDefault(
   ctx: MutationCtx,
   presetId: Id<"sandboxPresets"> | undefined,
-  userId: Id<"users">
+  userId: Id<"users">,
+  options?: { autoEnvironment?: boolean }
 ) {
   if (!presetId) {
-    await ensureDefaultPreset(ctx, userId)
+    const defaultPresetId = await ensureDefaultPreset(ctx, userId)
+    // Callers can opt out of auto environment setup (automations expose this
+    // as a toggle); those run in the plain built-in default sandbox.
+    if (options?.autoEnvironment === false) return defaultPresetId
     return await ensureAutoEnvironmentPreset(ctx, userId)
   }
 

@@ -17,6 +17,15 @@ export const AUTOMATION_THREAD_MODE_DEFAULT: AutomationThreadMode = "single"
 
 export const AUTOMATION_SANDBOX_RETENTION_ERROR = `sandboxRetention must be one of ${AUTOMATION_SANDBOX_RETENTIONS.join(", ")}.`
 export const AUTOMATION_THREAD_MODE_ERROR = `threadMode must be one of ${AUTOMATION_THREAD_MODES.join(", ")}.`
+export const AUTOMATION_AUTO_ENVIRONMENT_ERROR =
+  "autoEnvironment must be a boolean."
+
+/** Whether runs set up the auto environment; defaults to true. */
+export function parseAutomationAutoEnvironment(value: unknown): boolean {
+  if (value === undefined || value === null) return true
+  if (typeof value === "boolean") return value
+  throw new Error(AUTOMATION_AUTO_ENVIRONMENT_ERROR)
+}
 
 export function parseAutomationSandboxRetention(
   value: unknown

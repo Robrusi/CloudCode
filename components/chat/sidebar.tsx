@@ -117,7 +117,7 @@ export function Sidebar({
               className={cn(
                 "flex w-full items-center gap-2 rounded-xl px-[0.625rem] py-2 text-[0.8125rem] transition-colors",
                 currentView === "automations"
-                  ? "bg-muted font-medium text-foreground"
+                  ? "bg-muted text-foreground"
                   : "text-foreground/80 hover:bg-muted"
               )}
             >
@@ -139,7 +139,7 @@ export function Sidebar({
                     label={repoLabel(g.repo)}
                     repoUrl={g.repo}
                     items={g.items}
-                    activeId={activeId}
+                    activeId={currentView === "chat" ? activeId : null}
                     onSelect={onSelect}
                     onDelete={onDelete}
                     onRename={onRename}

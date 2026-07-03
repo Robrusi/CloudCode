@@ -27,6 +27,7 @@ export const AUTOMATION_STATUS_LABEL: Record<AutomationRunStatus, string> = {
 }
 
 export type AutomationDraft = {
+  autoEnvironment: boolean
   baseBranch: string
   branchMode: BranchMode
   branchName: string
@@ -61,6 +62,7 @@ export function timezoneOptions() {
 
 export function emptyAutomationDraft(): AutomationDraft {
   return {
+    autoEnvironment: true,
     baseBranch: "",
     branchMode: "auto",
     branchName: "",
@@ -82,6 +84,7 @@ export function automationDraftFromRecord(
   automation: AutomationRecord
 ): AutomationDraft {
   return {
+    autoEnvironment: automation.autoEnvironment ?? true,
     baseBranch: automation.baseBranch ?? "",
     branchMode: automation.branchMode ?? "auto",
     branchName: automation.branchName ?? "",
@@ -122,6 +125,7 @@ export function deriveAutomationName(text: string) {
 /** Throws with a user-facing message when the draft is not submittable. */
 export function automationRequestBody(draft: AutomationDraft) {
   return {
+    autoEnvironment: draft.autoEnvironment,
     baseBranch: draft.baseBranch.trim() || undefined,
     branchMode: draft.branchMode,
     branchName: draft.branchName.trim() || undefined,
@@ -173,6 +177,18 @@ export function formatInstantShort(ms: number, timezone: string) {
   } catch {
     return new Intl.DateTimeFormat(undefined, options).format(ms)
   }
+}
+
+const RUN_TIME_FORMAT = new Intl.DateTimeFormat(undefined, {
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  month: "short",
+})
+
+/** "Jul 3, 14:32" style local timestamp for run history rows. */
+export function formatRunTime(ms: number) {
+  return RUN_TIME_FORMAT.format(ms)
 }
 
 const RELATIVE_FORMAT = new Intl.RelativeTimeFormat(undefined, {

@@ -21,6 +21,7 @@ export async function POST(request: Request) {
 
     const client = await currentUserConvexHttpClient()
     const created = await client.mutation(api.automations.create, {
+      autoEnvironment: config.autoEnvironment,
       baseBranch: config.baseBranch,
       branchMode: config.branchMode,
       branchName: config.branchName,

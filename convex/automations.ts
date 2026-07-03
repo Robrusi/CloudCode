@@ -33,6 +33,7 @@ import {
 const NEXT_RUN_AT_PAST_TOLERANCE_MS = 5 * 60_000
 
 const automationConfigArgs = {
+  autoEnvironment: v.optional(v.boolean()),
   baseBranch: v.optional(v.string()),
   branchMode: v.optional(branchMode),
   branchName: v.optional(v.string()),
@@ -51,6 +52,7 @@ const automationConfigArgs = {
 }
 
 type AutomationConfigArgs = {
+  autoEnvironment?: boolean
   baseBranch?: string
   branchMode?: Doc<"automations">["branchMode"]
   branchName?: string
@@ -123,7 +125,8 @@ export const create = mutation({
     const sandboxPresetId = await resolveOwnedPresetOrAutoDefault(
       ctx,
       args.sandboxPresetId,
-      userId
+      userId,
+      { autoEnvironment: args.autoEnvironment }
     )
 
     const now = Date.now()
@@ -141,6 +144,7 @@ export const create = mutation({
     })
 
     const automationId = await ctx.db.insert("automations", {
+      autoEnvironment: args.autoEnvironment,
       ...(trimmedBaseBranch ? { baseBranch: trimmedBaseBranch } : {}),
       ...(args.branchMode ? { branchMode: args.branchMode } : {}),
       ...(args.branchName?.trim()
@@ -194,7 +198,8 @@ export const update = mutation({
     const sandboxPresetId = await resolveOwnedPresetOrAutoDefault(
       ctx,
       args.sandboxPresetId,
-      userId
+      userId,
+      { autoEnvironment: args.autoEnvironment }
     )
 
     const now = Date.now()
@@ -203,6 +208,7 @@ export const update = mutation({
 
     await Promise.all([
       ctx.db.patch(automation._id, {
+        autoEnvironment: args.autoEnvironment,
         baseBranch: trimmedBaseBranch || undefined,
         branchMode: args.branchMode,
         branchName: args.branchName?.trim() || undefined,
@@ -315,35 +321,46 @@ export const get = query({
   },
 })
 
-const RECENT_RUNS_LIMIT = 5
+const RECENT_RUNS_MAX_LIMIT = 100
 
-/** Latest runs of one automation, for the expandable row on the screen. */
+/** Latest runs of one automation, for the expandable row on the screen.
+ * Fetches one row past `limit` so the client knows whether to offer more. */
 export const recentRuns = query({
   args: {
     automationId: v.id("automations"),
+    limit: v.number(),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx)
-    if (!user) return []
+    if (!user) return { hasMore: false, runs: [] }
 
     const automation = await ctx.db.get(args.automationId)
-    if (!automation || automation.userId !== user._id) return []
+    if (!automation || automation.userId !== user._id) {
+      return { hasMore: false, runs: [] }
+    }
 
+    const limit = Math.min(
+      Math.max(Math.floor(args.limit), 1),
+      RECENT_RUNS_MAX_LIMIT
+    )
     const runs = await ctx.db
       .query("codexRuns")
       .withIndex("by_automation_created", (q) =>
         q.eq("automationId", args.automationId)
       )
       .order("desc")
-      .take(RECENT_RUNS_LIMIT)
+      .take(limit + 1)
 
-    return runs.map((run) => ({
-      createdAt: run.createdAt,
-      finishedAt: run.finishedAt,
-      id: run._id,
-      status: run.status,
-      threadId: run.threadId,
-    }))
+    return {
+      hasMore: runs.length > limit,
+      runs: runs.slice(0, limit).map((run) => ({
+        createdAt: run.createdAt,
+        finishedAt: run.finishedAt,
+        id: run._id,
+        status: run.status,
+        threadId: run.threadId,
+      })),
+    }
   },
 })
 
@@ -462,7 +479,8 @@ export const workerCreateRun = mutation({
     const sandboxPresetId = await resolveOwnedPresetOrAutoDefault(
       ctx,
       automation.sandboxPresetId ?? thread.sandboxPresetId,
-      automation.userId
+      automation.userId,
+      { autoEnvironment: automation.autoEnvironment }
     )
     const { auth, profile: authProfile } = await findCodexAuth(
       ctx,

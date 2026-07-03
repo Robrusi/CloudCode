@@ -79,6 +79,8 @@ const daytonaBillingState = v.union(
 
 export default defineSchema({
   automations: defineTable({
+    // Unset means true: runs use the built-in auto environment preset.
+    autoEnvironment: v.optional(v.boolean()),
     baseBranch: v.optional(v.string()),
     branchMode: v.optional(branchMode),
     branchName: v.optional(v.string()),
