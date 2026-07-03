@@ -98,7 +98,7 @@ function OptionChip<T extends string>({
               }}
               className={popoverItem}
             >
-              <span>{option.label}</span>
+              <span className="whitespace-nowrap">{option.label}</span>
               {option.value === value ? (
                 <Check className="size-4 shrink-0" strokeWidth={2.25} />
               ) : null}
