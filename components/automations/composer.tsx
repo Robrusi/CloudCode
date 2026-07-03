@@ -22,7 +22,6 @@ import {
 import { RepoChip } from "@/components/chat/repo-chip"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import type { Id } from "@/convex/_generated/dataModel"
 import {
@@ -350,18 +349,22 @@ export function AutomationComposer({
           />
         </DetailRow>
         <DetailRow label="Environment setup">
-          <Switch
-            checked={draft.autoEnvironment}
-            onCheckedChange={(autoEnvironment) => {
-              // The toggle owns the preset choice; drop any stored preset so
-              // the server resolves the matching built-in.
+          <OptionChip
+            ariaLabel="Set up the environment automatically"
+            value={draft.autoEnvironment ? "auto" : "default"}
+            onChange={(mode) =>
+              // The chip owns the preset choice; drop any stored preset so the
+              // server resolves the matching built-in.
               setDraft((current) => ({
                 ...current,
-                autoEnvironment,
+                autoEnvironment: mode === "auto",
                 sandboxPresetId: "",
               }))
-            }}
-            aria-label="Set up the environment automatically"
+            }
+            options={[
+              { label: "Automatic", value: "auto" },
+              { label: "Default", value: "default" },
+            ]}
           />
         </DetailRow>
         <DetailRow label="Sandbox">
