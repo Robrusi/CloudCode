@@ -1,5 +1,6 @@
 import type { Doc, Id } from "../_generated/dataModel"
 import type { MutationCtx, QueryCtx } from "../_generated/server"
+import { recordAutomationRunOutcome } from "./automationRecords"
 import {
   compactMessageMeta,
   compactRunLogs,
@@ -88,8 +89,12 @@ export async function markRunCanceled(
     ...(sandboxId ? { sandboxId } : {}),
     ...(sandboxState ? { sandboxState } : {}),
   }
+  // Ephemeral runs keep the sandbox on the run doc (billing and cleanup need
+  // it) but never stamp it onto the thread — it is deleted at run end.
+  const threadSandboxPatch = run.ephemeralSandbox ? {} : sandboxPatch
+  const becameCanceled = !TERMINAL_RUN_STATUSES.has(run.status)
 
-  if (!TERMINAL_RUN_STATUSES.has(run.status)) {
+  if (becameCanceled) {
     await ctx.db.patch(run._id, {
       finishedAt: now,
       ...sandboxPatch,
@@ -131,9 +136,13 @@ export async function markRunCanceled(
 
   await ctx.db.patch(run.threadId, {
     hasPendingMessage: false,
-    ...sandboxPatch,
+    ...threadSandboxPatch,
     updatedAt: now,
   })
+
+  if (becameCanceled) {
+    await recordAutomationRunOutcome(ctx, run, "canceled")
+  }
 
   return {
     sandboxId,
@@ -159,8 +168,8 @@ export async function markRunCanceling(
     }),
     ctx.db.patch(run.threadId, {
       hasPendingMessage: true,
-      ...(sandboxId ? { sandboxId } : {}),
-      ...(sandboxState ? { sandboxState } : {}),
+      ...(sandboxId && !run.ephemeralSandbox ? { sandboxId } : {}),
+      ...(sandboxState && !run.ephemeralSandbox ? { sandboxState } : {}),
       updatedAt: now,
     }),
   ])

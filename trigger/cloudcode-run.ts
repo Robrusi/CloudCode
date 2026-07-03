@@ -4,6 +4,7 @@ import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { redactCodexAuthPayloads } from "@/lib/codex/auth-redaction"
 import { ensureAutoEnvironmentSandbox } from "@/lib/sandbox/auto-environment"
+import { deleteWorkerDaytonaSandbox } from "@/lib/sandbox/delete"
 import { runCodexInSandbox } from "@/lib/daytona/codex-agent"
 import { codexAppServerRunUpdatedAuthJson } from "@/lib/daytona/codex-app-server-run"
 import {
@@ -153,6 +154,7 @@ export const cloudcodeRun = task({
     const billingAbort = createBillingAbortController(signal)
     let billingError: unknown
     let latestSandboxId: string | undefined
+    let loadedEphemeral = false
     let loadedUserId: Id<"users"> | undefined
     let usageMeter: ReturnType<typeof createTriggerUsageMeter> | undefined
     let billingPauseSandboxId: string | undefined
@@ -238,6 +240,7 @@ export const cloudcodeRun = task({
       )
       if (!loaded) return { canceled: true }
 
+      loadedEphemeral = loaded.ephemeralSandbox
       loadedUserId = loaded.userId
       loadedProfile = loaded.profile
       runAuthFingerprint = loaded.authFingerprint
@@ -424,6 +427,26 @@ export const cloudcodeRun = task({
     } finally {
       usageMeter?.stop()
       billingAbort.cleanup()
+      // Ephemeral (automation) runs delete their sandbox at run end — after
+      // the terminal mutation and final billing observation above, on every
+      // exit path. Crash-only leaks are swept by the automations tick.
+      if (loadedEphemeral && latestSandboxId && loadedUserId) {
+        const sandboxId = latestSandboxId
+        await deleteWorkerDaytonaSandbox(client, {
+          sandboxId,
+          userId: loadedUserId,
+        })
+          .then(() =>
+            client.mutation(api.codexRuns.workerMarkSandboxDeleted, {
+              runId: payload.runId,
+              sandboxId,
+              workerSecret: getWorkerSecret(),
+            })
+          )
+          .catch((error) => {
+            console.warn("Unable to delete ephemeral sandbox.", error)
+          })
+      }
     }
   },
   onCancel: async ({ payload }) => {

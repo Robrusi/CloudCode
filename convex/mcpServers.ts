@@ -3,7 +3,10 @@ import { v } from "convex/values"
 import { mutation, query } from "./_generated/server"
 import type { Id } from "./_generated/dataModel"
 import type { MutationCtx, QueryCtx } from "./_generated/server"
-import { mcpServerListRow } from "./lib/mcpServerRecords"
+import {
+  deleteMcpServerCascade,
+  mcpServerListRow,
+} from "./lib/mcpServerRecords"
 import {
   buildCustomServerFields,
   cleanEnvName,
@@ -407,20 +410,6 @@ export const remove = mutation({
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
     await requireOwnedServer(ctx, args.serverId, userId)
-    const [secrets, tools] = await Promise.all([
-      ctx.db
-        .query("mcpServerSecrets")
-        .withIndex("by_server", (q) => q.eq("serverId", args.serverId))
-        .collect(),
-      ctx.db
-        .query("mcpServerTools")
-        .withIndex("by_server", (q) => q.eq("serverId", args.serverId))
-        .collect(),
-    ])
-    await Promise.all([
-      ...secrets.map((secret) => ctx.db.delete(secret._id)),
-      ...tools.map((tool) => ctx.db.delete(tool._id)),
-    ])
-    await ctx.db.delete(args.serverId)
+    await deleteMcpServerCascade(ctx, args.serverId)
   },
 })

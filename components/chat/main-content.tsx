@@ -19,18 +19,20 @@ import { MessageBlock } from "@/components/chat/message"
 import { logsForMessage } from "@/components/chat/message-model"
 import { RunSetupSummary } from "@/components/chat/message-setup"
 import { AllDiffsPanel, NotesPanel } from "@/components/chat/panels"
+import { AutomationsScreen } from "@/components/automations/screen"
 import type { SettingsSectionId } from "@/components/settings/sections"
 import { SettingsScreen } from "@/components/settings/screen"
 import type { Message } from "@/components/chat/types"
 import { OnboardingChecklist } from "@/components/chat/onboarding-checklist"
 import type { FileBrowserOpenMode } from "@/components/files/browser"
+import type { Id } from "@/convex/_generated/dataModel"
 import type { UiTestRunView } from "@/hooks/use-chat-workspace-panels"
 import type { CodexAuthOverview } from "@/lib/codex/auth-types"
 import type { GitHubAuthStatus } from "@/lib/github/auth"
 import type { SandboxPresetRecord } from "@/lib/sandbox/preset-types"
 import { cn } from "@/lib/shared/utils"
 
-type ChatView = "chat" | "settings"
+type ChatView = "chat" | "settings" | "automations"
 type MainContentDiffStyle = "split" | "unified"
 
 type SettingsContent = {
@@ -42,6 +44,11 @@ type SettingsContent = {
   onGitHubAuthChanged: () => void | Promise<void>
   sandboxPresets: SandboxPresetRecord[]
   section: SettingsSectionId
+}
+
+type AutomationsContent = {
+  defaultRepoUrl: string
+  onOpenThread: (threadId: Id<"threads">) => void
 }
 
 type WorkspaceMainPanel = {
@@ -108,6 +115,7 @@ type ComposerContent = {
 }
 
 export function ChatMainContent({
+  automations,
   composer,
   settings,
   terminal,
@@ -115,6 +123,7 @@ export function ChatMainContent({
   view,
   workspace,
 }: {
+  automations: AutomationsContent
   composer: ComposerContent
   settings: SettingsContent
   terminal: TerminalContent
@@ -174,6 +183,10 @@ export function ChatMainContent({
 
   if (view === "settings") {
     return <SettingsScreen {...settings} />
+  }
+
+  if (view === "automations") {
+    return <AutomationsScreen {...automations} />
   }
 
   const panelOpen =

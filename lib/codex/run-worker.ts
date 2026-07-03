@@ -34,7 +34,9 @@ import {
 } from "@/lib/codex/run-log"
 import type { ChatImageAttachment } from "@/lib/chat/attachments"
 import type { SandboxPresetForRun } from "@/lib/sandbox/presets"
-import { decryptSecret } from "@/lib/security/secret-crypto"
+import { refreshMcpOauthToken } from "@/lib/mcp/oauth"
+import { mcpOauthProvider } from "@/lib/mcp/oauth-providers"
+import { decryptSecret, encryptSecret } from "@/lib/security/secret-crypto"
 import type {
   BillingUsageSource,
   DaytonaBillingResources,
@@ -56,6 +58,7 @@ type WorkerRunRecord = {
   branchMode?: RunCodexInSandboxInput["branchMode"]
   branchName?: string
   codexThreadId?: string
+  ephemeralSandbox?: boolean
   githubToken?: string
   githubUserEmail?: string
   githubUserName?: string
@@ -95,7 +98,20 @@ type WorkerPresetRecord = Omit<SandboxPresetForRun, "secrets"> & {
   secrets: Array<{ name: string; value: string }>
 }
 
+type WorkerMcpOauthRecord = {
+  clientId: string
+  connectionId: Id<"mcpOauthConnections">
+  encryptedAccessToken: string
+  encryptedClientSecret?: string
+  encryptedRefreshToken?: string
+  expiresAt?: number
+  provider: string
+  serverUrl: string
+  tokenEndpoint: string
+}
+
 type WorkerMcpServerRecord = Omit<McpServerInput, "secrets"> & {
+  oauth?: WorkerMcpOauthRecord
   secrets: Array<{
     kind: "env" | "httpHeader" | "envHttpHeader"
     name: string
@@ -123,6 +139,8 @@ export {
 export type LoadedWorkerRun = {
   authFingerprint: string
   authJson: string
+  // The sandbox exists only for this run and is deleted when it finishes.
+  ephemeralSandbox: boolean
   input: Omit<
     RunCodexInSandboxInput,
     "mcpServers" | "onContentDelta" | "onLog" | "sandboxPreset" | "signal"
@@ -167,19 +185,111 @@ function decryptPreset(
   }
 }
 
-function decryptMcpServers(
+const MCP_OAUTH_REFRESH_WINDOW_MS = 120_000
+
+// Resolves the OAuth-backed access token for a server, refreshing it (and
+// persisting the rotated tokens) when it expires within the refresh window.
+// Returns null when the server can no longer authenticate.
+async function resolveMcpOauthAccessToken(
+  client: ConvexHttpClient,
+  runId: Id<"codexRuns">,
+  serverName: string,
+  oauth: WorkerMcpOauthRecord
+) {
+  const accessToken = decryptSecret(oauth.encryptedAccessToken)
+  const expiresSoon =
+    oauth.expiresAt !== undefined &&
+    oauth.expiresAt < Date.now() + MCP_OAUTH_REFRESH_WINDOW_MS
+  if (!expiresSoon) return accessToken
+
+  const refreshToken = oauth.encryptedRefreshToken
+    ? decryptSecret(oauth.encryptedRefreshToken)
+    : undefined
+  if (!refreshToken) {
+    console.warn(
+      `Skipping MCP server ${serverName}: the authorization expired and no refresh token is available. Reconnect it in Settings.`
+    )
+    return null
+  }
+
+  try {
+    const provider = mcpOauthProvider(oauth.provider)
+    const tokens = await refreshMcpOauthToken({
+      clientId: oauth.clientId,
+      clientSecretAuthMethod: provider?.clientSecretAuthMethod,
+      clientSecret: oauth.encryptedClientSecret
+        ? decryptSecret(oauth.encryptedClientSecret)
+        : undefined,
+      refreshToken,
+      resource: oauth.serverUrl,
+      tokenEndpoint: oauth.tokenEndpoint,
+    })
+    await client.mutation(api.mcpOauthConnections.workerSaveTokens, {
+      connectionId: oauth.connectionId,
+      encryptedAccessToken: encryptSecret(tokens.accessToken),
+      encryptedRefreshToken: tokens.refreshToken
+        ? encryptSecret(tokens.refreshToken)
+        : undefined,
+      expiresAt: tokens.expiresAt,
+      runId,
+      workerSecret: getWorkerSecret(),
+    })
+    return tokens.accessToken
+  } catch (error) {
+    console.warn(
+      `Skipping MCP server ${serverName}: refreshing the authorization failed. Reconnect it in Settings.`,
+      error
+    )
+    return null
+  }
+}
+
+async function resolveWorkerMcpServers(
+  client: ConvexHttpClient,
+  runId: Id<"codexRuns">,
   servers: WorkerMcpServerRecord[] | undefined
-): McpServerInput[] | undefined {
+): Promise<McpServerInput[] | undefined> {
   if (!servers?.length) return undefined
 
-  return servers.map((server) => ({
-    ...server,
-    secrets: server.secrets.map((secret) => ({
+  const resolved: McpServerInput[] = []
+  for (const { oauth, ...server } of servers) {
+    const secrets = server.secrets.map((secret) => ({
       kind: secret.kind,
       name: secret.name,
       value: decryptSecret(secret.value),
-    })),
-  }))
+    }))
+
+    if (!oauth) {
+      resolved.push({ ...server, secrets })
+      continue
+    }
+
+    const accessToken = await resolveMcpOauthAccessToken(
+      client,
+      runId,
+      server.name,
+      oauth
+    )
+    if (accessToken === null) continue
+
+    resolved.push({
+      ...server,
+      secrets: [
+        ...secrets.filter(
+          (secret) =>
+            secret.kind !== "httpHeader" ||
+            secret.name.toLowerCase() !== "authorization"
+        ),
+        {
+          kind: "httpHeader",
+          name: "Authorization",
+          value: `Bearer ${accessToken}`,
+        },
+      ],
+    })
+  }
+
+  return resolved.length ? resolved : undefined
 }
 
 function waitForAuthRefreshLease(ms: number, signal?: AbortSignal) {
@@ -372,7 +482,11 @@ export async function startAndLoadWorkerRun(
   if (response.canceled) return null
 
   const sandboxPreset = decryptPreset(response.sandboxPreset)
-  const mcpServers = decryptMcpServers(response.mcpServers)
+  const mcpServers = await resolveWorkerMcpServers(
+    client,
+    runId,
+    response.mcpServers
+  )
   // openaiApiKey is stored encrypted (always for API-key auth; possibly for
   // OAuth records that carried one). Decrypt before it reaches the sandbox
   // auth.json. decryptSecret is a no-op on already-plaintext values.
@@ -388,6 +502,7 @@ export async function startAndLoadWorkerRun(
   return {
     authFingerprint: response.auth.fingerprint,
     authJson,
+    ephemeralSandbox: response.run.ephemeralSandbox === true,
     input: {
       agentInstructions: response.agentInstructions,
       authJson,

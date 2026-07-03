@@ -1,7 +1,40 @@
-import type { Doc } from "../_generated/dataModel"
-import type { QueryCtx } from "../_generated/server"
+import type { Doc, Id } from "../_generated/dataModel"
+import type { MutationCtx, QueryCtx } from "../_generated/server"
 
 type McpServerDoc = Doc<"mcpServers">
+
+async function serverOauthConnection(ctx: QueryCtx, server: McpServerDoc) {
+  return await ctx.db
+    .query("mcpOauthConnections")
+    .withIndex("by_server", (q) => q.eq("serverId", server._id))
+    .unique()
+}
+
+export async function deleteMcpServerCascade(
+  ctx: MutationCtx,
+  serverId: Id<"mcpServers">
+) {
+  const [secrets, tools, connections] = await Promise.all([
+    ctx.db
+      .query("mcpServerSecrets")
+      .withIndex("by_server", (q) => q.eq("serverId", serverId))
+      .collect(),
+    ctx.db
+      .query("mcpServerTools")
+      .withIndex("by_server", (q) => q.eq("serverId", serverId))
+      .collect(),
+    ctx.db
+      .query("mcpOauthConnections")
+      .withIndex("by_server", (q) => q.eq("serverId", serverId))
+      .collect(),
+  ])
+  await Promise.all([
+    ...secrets.map((secret) => ctx.db.delete(secret._id)),
+    ...tools.map((tool) => ctx.db.delete(tool._id)),
+    ...connections.map((connection) => ctx.db.delete(connection._id)),
+  ])
+  await ctx.db.delete(serverId)
+}
 
 export async function serverChildren(ctx: QueryCtx, server: McpServerDoc) {
   const [secrets, tools] = await Promise.all([
@@ -36,7 +69,10 @@ export async function serverChildren(ctx: QueryCtx, server: McpServerDoc) {
 }
 
 export async function mcpServerListRow(ctx: QueryCtx, server: McpServerDoc) {
+  const oauthConnection = await serverOauthConnection(ctx, server)
+
   return {
+    oauthProvider: oauthConnection?.provider,
     args: server.args,
     bearerTokenEnvVar: server.bearerTokenEnvVar,
     command: server.command,

@@ -15,6 +15,10 @@ import {
 } from "lucide-react"
 import { useState } from "react"
 
+import {
+  McpIntegrationsGrid,
+  mcpProviderIcon,
+} from "@/components/settings/mcp-connections"
 import { McpServerForm } from "@/components/settings/mcp-form"
 import { mcpServerSubtitle } from "@/components/settings/mcp-model"
 import {
@@ -54,14 +58,28 @@ export function McpSettings({
   }
 
   async function deleteServer(serverId: Id<"mcpServers">) {
-    await requestJson(
-      "/api/mcp/custom",
-      "DELETE",
-      { serverId },
-      {
-        fallbackError: "Unable to remove MCP server.",
-      }
-    )
+    // OAuth-managed servers disconnect through the OAuth route so the
+    // provider tokens are revoked, not just deleted locally.
+    const oauthProvider = servers.find(
+      (server) => server.id === serverId
+    )?.oauthProvider
+    if (oauthProvider) {
+      await requestJson(
+        "/api/mcp/oauth/connections",
+        "DELETE",
+        { provider: oauthProvider },
+        { fallbackError: "Unable to disconnect the MCP integration." }
+      )
+    } else {
+      await requestJson(
+        "/api/mcp/custom",
+        "DELETE",
+        { serverId },
+        {
+          fallbackError: "Unable to remove MCP server.",
+        }
+      )
+    }
     setSelectedId(null)
     await onReload()
   }
@@ -81,7 +99,7 @@ export function McpSettings({
   return (
     <SettingsPage
       title="MCP Connections"
-      description="Give Codex extra tools over STDIO or streamable HTTP."
+      description="Connect integrations in one click, or give Codex extra tools over STDIO or streamable HTTP."
       action={
         <button type="button" onClick={openCreate} className={navAction}>
           <Plus className="size-3.5" />
@@ -121,6 +139,8 @@ export function McpSettings({
         </div>
       ) : null}
 
+      <McpIntegrationsGrid />
+
       <div className="space-y-2">
         {loading ? (
           <div className="flex flex-col items-center justify-center gap-3 py-12 text-center">
@@ -150,124 +170,140 @@ export function McpSettings({
             </button>
           </div>
         ) : servers.length ? (
-          servers.map((server) => {
-            const active = selected?.id === server.id
-            const TransportIcon = server.transport === "http" ? Globe : Terminal
-            const subtitle = mcpServerSubtitle(server)
-            return (
-              <div
-                key={server.id}
-                className={cn(
-                  "overflow-hidden rounded-xl border border-border/60 transition-colors",
-                  active && "bg-muted/40"
-                )}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCreatingCustom(false)
-                    setSelectedId(active ? null : server.id)
-                  }}
-                  aria-expanded={active}
+          <>
+            <div className="mb-2.5 text-xs font-medium text-muted-foreground">
+              Connected servers
+            </div>
+            {servers.map((server) => {
+              const active = selected?.id === server.id
+              const RowIcon =
+                mcpProviderIcon(server.oauthProvider) ??
+                (server.transport === "http" ? Globe : Terminal)
+              const subtitle = mcpServerSubtitle(server)
+              return (
+                <div
+                  key={server.id}
                   className={cn(
-                    "group flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors",
-                    active ? "" : "hover:bg-muted"
+                    "overflow-hidden rounded-xl border border-border/60 transition-colors",
+                    active && "bg-muted/40"
                   )}
                 >
-                  <TransportIcon
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCreatingCustom(false)
+                      setSelectedId(active ? null : server.id)
+                    }}
+                    aria-expanded={active}
                     className={cn(
-                      "size-5 shrink-0 text-muted-foreground",
-                      !server.enabled && "opacity-50"
-                    )}
-                  />
-                  <div
-                    className={cn(
-                      "min-w-0 flex-1",
-                      !server.enabled && "opacity-50"
+                      "group flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors",
+                      active ? "" : "hover:bg-muted"
                     )}
                   >
-                    <div className="truncate text-sm font-medium text-foreground/90">
-                      {server.name}
-                    </div>
-                    <div className="truncate font-[family-name:var(--font-mono)] text-xs text-muted-foreground">
-                      {subtitle}
-                    </div>
-                  </div>
-                  {!server.enabled ? (
-                    <span className={metaPill}>Off</span>
-                  ) : null}
-                  {server.tools.length ? (
-                    <span
-                      className={metaPill}
-                      title={`${server.tools.length} tool${server.tools.length === 1 ? "" : "s"}`}
+                    <RowIcon
+                      className={cn(
+                        "size-5 shrink-0 text-muted-foreground",
+                        !server.enabled && "opacity-50"
+                      )}
+                    />
+                    <div
+                      className={cn(
+                        "min-w-0 flex-1",
+                        !server.enabled && "opacity-50"
+                      )}
                     >
-                      <Wrench className="size-3" />
-                      {server.tools.length}
-                    </span>
-                  ) : null}
-                  {server.secrets.length ? (
-                    <span
-                      className={metaPill}
-                      title={`${server.secrets.length} secret${server.secrets.length === 1 ? "" : "s"}`}
-                    >
-                      <KeyRound className="size-3" />
-                      {server.secrets.length}
-                    </span>
-                  ) : null}
-                  <span className={metaPill}>
-                    {server.transport === "http" ? "HTTP" : "STDIO"}
-                  </span>
-                  <ChevronRight
-                    className={cn(
-                      "size-3.5 shrink-0 transition-transform",
-                      active
-                        ? "rotate-90 text-muted-foreground"
-                        : "text-muted-foreground/50 group-hover:text-muted-foreground"
-                    )}
-                  />
-                </button>
-
-                {active ? (
-                  <div className="border-t border-border/60 px-3 pt-3 pb-3">
-                    <div className="mb-4 flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium text-foreground">
-                          Available to Codex
-                        </div>
-                        <p className={fieldHint}>
-                          When off, this server is excluded from new Codex runs.
-                        </p>
+                      <div className="truncate text-sm font-medium text-foreground/90">
+                        {server.name}
                       </div>
-                      <Switch
-                        aria-label="Available to Codex"
-                        checked={server.enabled}
-                        onCheckedChange={(enabled) =>
-                          void toggleEnabled(server.id, enabled)
-                        }
+                      <div className="truncate font-[family-name:var(--font-mono)] text-xs text-muted-foreground">
+                        {subtitle}
+                      </div>
+                    </div>
+                    {!server.enabled ? (
+                      <span className={metaPill}>Off</span>
+                    ) : null}
+                    {server.tools.length ? (
+                      <span
+                        className={metaPill}
+                        title={`${server.tools.length} tool${server.tools.length === 1 ? "" : "s"}`}
+                      >
+                        <Wrench className="size-3" />
+                        {server.tools.length}
+                      </span>
+                    ) : null}
+                    {server.secrets.length ? (
+                      <span
+                        className={metaPill}
+                        title={`${server.secrets.length} secret${server.secrets.length === 1 ? "" : "s"}`}
+                      >
+                        <KeyRound className="size-3" />
+                        {server.secrets.length}
+                      </span>
+                    ) : null}
+                    {server.oauthProvider ? (
+                      <span
+                        className={metaPill}
+                        title="Managed by an OAuth connection in Settings → Connections"
+                      >
+                        OAuth
+                      </span>
+                    ) : null}
+                    <span className={metaPill}>
+                      {server.transport === "http" ? "HTTP" : "STDIO"}
+                    </span>
+                    <ChevronRight
+                      className={cn(
+                        "size-3.5 shrink-0 transition-transform",
+                        active
+                          ? "rotate-90 text-muted-foreground"
+                          : "text-muted-foreground/50 group-hover:text-muted-foreground"
+                      )}
+                    />
+                  </button>
+
+                  {active ? (
+                    <div className="border-t border-border/60 px-3 pt-3 pb-3">
+                      <div className="mb-4 flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium text-foreground">
+                            Available to Codex
+                          </div>
+                          <p className={fieldHint}>
+                            When off, this server is excluded from new Codex
+                            runs.
+                          </p>
+                        </div>
+                        <Switch
+                          aria-label="Available to Codex"
+                          checked={server.enabled}
+                          onCheckedChange={(enabled) =>
+                            void toggleEnabled(server.id, enabled)
+                          }
+                        />
+                      </div>
+
+                      {toggleError ? (
+                        <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                          {toggleError}
+                        </div>
+                      ) : null}
+
+                      <McpServerForm
+                        key={server.id}
+                        server={server}
+                        onCancel={() => setSelectedId(null)}
+                        onRemove={() => deleteServer(server.id)}
+                        onSaved={async () => {
+                          setSelectedId(null)
+                          await onReload()
+                        }}
                       />
                     </div>
-
-                    {toggleError ? (
-                      <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                        {toggleError}
-                      </div>
-                    ) : null}
-
-                    <McpServerForm
-                      key={server.id}
-                      server={server}
-                      onCancel={() => setSelectedId(null)}
-                      onRemove={() => deleteServer(server.id)}
-                      onSaved={async () => {
-                        setSelectedId(null)
-                        await onReload()
-                      }}
-                    />
-                  </div>
-                ) : null}
-              </div>
-            )
-          })
+                  ) : null}
+                </div>
+              )
+            })}
+          </>
         ) : (
           <div className="flex flex-col items-center justify-center gap-3 py-14 text-center">
             <Server className="size-5 text-muted-foreground" />
@@ -276,8 +312,8 @@ export function McpSettings({
                 No MCP servers connected
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
-                Connect a custom MCP server to give Codex extra tools over STDIO
-                or HTTP.
+                Connect an integration above in one click, or add a custom MCP
+                server over STDIO or HTTP.
               </p>
             </div>
             <button type="button" onClick={openCreate} className={navAction}>

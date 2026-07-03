@@ -1,6 +1,7 @@
 import { v } from "convex/values"
 
-import { mutation, query } from "./_generated/server"
+import type { Id } from "./_generated/dataModel"
+import { mutation, query, type MutationCtx } from "./_generated/server"
 import { requireWorkerSecret } from "./lib/workerAuth"
 import { ensureCurrentUser, getCurrentUser } from "./lib/users"
 
@@ -217,49 +218,119 @@ export const getUserAuth = query({
   },
 })
 
+export const getUserAuthForWorker = query({
+  args: {
+    userId: v.id("users"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    return await ctx.db
+      .query("githubAppUsers")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .unique()
+  },
+})
+
+export const installationsForWorker = query({
+  args: {
+    userId: v.id("users"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const installations = await ctx.db
+      .query("githubAppInstallations")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .collect()
+
+    return installations
+      .map(toInstallation)
+      .sort((a, b) => a.accountLogin.localeCompare(b.accountLogin))
+  },
+})
+
+const saveUserAuthFields = {
+  email: v.optional(v.string()),
+  encryptedRefreshToken: v.optional(v.string()),
+  encryptedToken: v.string(),
+  expiresAt: v.optional(v.string()),
+  fingerprint: v.string(),
+  githubUserId: v.string(),
+  login: v.string(),
+  name: v.optional(v.string()),
+  refreshTokenExpiresAt: v.optional(v.string()),
+  updatedAt: v.string(),
+}
+
+async function upsertUserAuth(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  args: {
+    email?: string
+    encryptedRefreshToken?: string
+    encryptedToken: string
+    expiresAt?: string
+    fingerprint: string
+    githubUserId: string
+    login: string
+    name?: string
+    refreshTokenExpiresAt?: string
+    updatedAt: string
+  }
+) {
+  const existing = await ctx.db
+    .query("githubAppUsers")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .unique()
+
+  const auth = {
+    email: args.email,
+    encryptedRefreshToken: args.encryptedRefreshToken,
+    encryptedToken: args.encryptedToken,
+    expiresAt: args.expiresAt,
+    fingerprint: args.fingerprint,
+    githubUserId: args.githubUserId,
+    login: args.login,
+    name: args.name,
+    refreshTokenExpiresAt: args.refreshTokenExpiresAt,
+    updatedAt: args.updatedAt,
+    userId,
+  }
+
+  if (existing) {
+    await ctx.db.patch(existing._id, auth)
+  } else {
+    await ctx.db.insert("githubAppUsers", auth)
+  }
+
+  return toUserStatus(auth)
+}
+
 export const saveUserAuth = mutation({
   args: {
-    email: v.optional(v.string()),
-    encryptedRefreshToken: v.optional(v.string()),
-    encryptedToken: v.string(),
-    expiresAt: v.optional(v.string()),
-    fingerprint: v.string(),
-    githubUserId: v.string(),
-    login: v.string(),
-    name: v.optional(v.string()),
-    refreshTokenExpiresAt: v.optional(v.string()),
-    updatedAt: v.string(),
+    ...saveUserAuthFields,
     workerSecret: v.string(),
   },
   handler: async (ctx, args) => {
     requireWorkerSecret(args.workerSecret)
     const userId = await ensureCurrentUser(ctx)
-    const existing = await ctx.db
-      .query("githubAppUsers")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .unique()
 
-    const auth = {
-      email: args.email,
-      encryptedRefreshToken: args.encryptedRefreshToken,
-      encryptedToken: args.encryptedToken,
-      expiresAt: args.expiresAt,
-      fingerprint: args.fingerprint,
-      githubUserId: args.githubUserId,
-      login: args.login,
-      name: args.name,
-      refreshTokenExpiresAt: args.refreshTokenExpiresAt,
-      updatedAt: args.updatedAt,
-      userId,
-    }
+    return await upsertUserAuth(ctx, userId, args)
+  },
+})
 
-    if (existing) {
-      await ctx.db.patch(existing._id, auth)
-    } else {
-      await ctx.db.insert("githubAppUsers", auth)
-    }
+export const saveUserAuthForWorker = mutation({
+  args: {
+    ...saveUserAuthFields,
+    userId: v.id("users"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
 
-    return toUserStatus(auth)
+    return await upsertUserAuth(ctx, args.userId, args)
   },
 })
 

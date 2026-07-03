@@ -2,6 +2,7 @@ import { v, type Infer } from "convex/values"
 
 import type { Id } from "./_generated/dataModel"
 import { mutation, query, type MutationCtx } from "./_generated/server"
+import { recordAutomationRunOutcome } from "./lib/automationRecords"
 import { compactMessageMeta, compactRunLogs } from "./lib/codexRunLogs"
 import {
   activeRunForThread,
@@ -347,6 +348,56 @@ export const attachTriggerRun = mutation({
   },
 })
 
+export const workerAttachTriggerRun = mutation({
+  args: {
+    runId: v.id("codexRuns"),
+    triggerRunId: v.string(),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const run = await ctx.db.get(args.runId)
+    if (!run) throw new Error("Run not found.")
+
+    await ctx.db.patch(args.runId, {
+      triggerRunId: args.triggerRunId,
+      updatedAt: Date.now(),
+    })
+
+    return { canceled: run.status === "canceled" || run.status === "canceling" }
+  },
+})
+
+export const workerMarkSandboxDeleted = mutation({
+  args: {
+    runId: v.id("codexRuns"),
+    sandboxId: v.string(),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const run = await ctx.db.get(args.runId)
+    if (!run) return
+
+    const now = Date.now()
+    if (run.sandboxId === args.sandboxId && run.sandboxState !== "deleted") {
+      await ctx.db.patch(run._id, {
+        sandboxState: "deleted",
+        updatedAt: now,
+      })
+    }
+
+    const thread = await ctx.db.get(run.threadId)
+    if (thread && thread.sandboxId === args.sandboxId) {
+      await ctx.db.patch(thread._id, {
+        sandboxId: undefined,
+        sandboxState: "deleted",
+        updatedAt: now,
+      })
+    }
+  },
+})
+
 const finalizeCancelArgs = {
   runId: v.id("codexRuns"),
   sandboxId: v.optional(v.string()),
@@ -379,11 +430,13 @@ async function finalizeCancelForTriggerRun(
           ...(args.sandboxState ? { sandboxState: args.sandboxState } : {}),
           updatedAt: now,
         }),
-        ctx.db.patch(run.threadId, {
-          sandboxId: args.sandboxId,
-          ...(args.sandboxState ? { sandboxState: args.sandboxState } : {}),
-          updatedAt: now,
-        }),
+        run.ephemeralSandbox
+          ? Promise.resolve()
+          : ctx.db.patch(run.threadId, {
+              sandboxId: args.sandboxId,
+              ...(args.sandboxState ? { sandboxState: args.sandboxState } : {}),
+              updatedAt: now,
+            }),
       ])
     }
     return { canceled: true }
@@ -441,11 +494,13 @@ export const syncRunSandbox = mutation({
         sandboxState: args.sandboxState,
         updatedAt: now,
       }),
-      ctx.db.patch(run.threadId, {
-        sandboxId: args.sandboxId,
-        sandboxState: args.sandboxState,
-        updatedAt: now,
-      }),
+      run.ephemeralSandbox
+        ? Promise.resolve()
+        : ctx.db.patch(run.threadId, {
+            sandboxId: args.sandboxId,
+            sandboxState: args.sandboxState,
+            updatedAt: now,
+          }),
     ])
 
     return { synced: true }
@@ -594,7 +649,9 @@ export const workerAppendLogs = mutation({
         : Promise.resolve(),
     ])
 
-    if (sandboxId) {
+    // Ephemeral runs never stamp their sandbox onto the thread: the sandbox
+    // is deleted when the run ends, so the thread must not point at it.
+    if (sandboxId && !run.ephemeralSandbox) {
       await ctx.db.patch(run.threadId, {
         sandboxId,
         sandboxState: canceled ? (run.sandboxState ?? "running") : "running",
@@ -700,10 +757,20 @@ export const workerComplete = mutation({
     await ctx.db.patch(run.threadId, {
       ...(args.codexThreadId ? { codexThreadId: args.codexThreadId } : {}),
       hasPendingMessage: false,
-      ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
-      ...(args.sandboxId ? { sandboxState: "running" as const } : {}),
+      ...(args.sandboxId && !run.ephemeralSandbox
+        ? { sandboxId: args.sandboxId, sandboxState: "running" as const }
+        : {}),
       updatedAt: now,
     })
+
+    await recordAutomationRunOutcome(
+      ctx,
+      run,
+      nextStatus,
+      nextStatus === "failed"
+        ? (args.statusText ?? `Run exited with code ${args.exitCode}.`)
+        : undefined
+    )
 
     return { canceled: false }
   },
@@ -746,11 +813,14 @@ export const workerFail = mutation({
       }),
       ctx.db.patch(run.threadId, {
         hasPendingMessage: false,
-        ...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
-        ...(args.sandboxId ? { sandboxState: "running" as const } : {}),
+        ...(args.sandboxId && !run.ephemeralSandbox
+          ? { sandboxId: args.sandboxId, sandboxState: "running" as const }
+          : {}),
         updatedAt: now,
       }),
     ])
+
+    await recordAutomationRunOutcome(ctx, run, "failed", args.error)
 
     return { canceled: false }
   },
@@ -767,5 +837,46 @@ export const workerCancel = mutation({
     const run = await ctx.db.get(args.runId)
     if (!run) return
     await markRunCanceled(ctx, run, "_Stopped._", args.sandboxId)
+  },
+})
+
+// Backstop for the run-end deletion in the trigger worker: finds terminal
+// ephemeral runs whose sandbox was never deleted (worker crashed between
+// finishing and cleanup). Non-terminal runs are never returned — their
+// sandbox may still be in use.
+export const workerListLeakedEphemeralSandboxes = query({
+  args: {
+    now: v.number(),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const cutoff = args.now - 5 * 60_000
+
+    const candidates = (
+      await Promise.all(
+        (["running", "stopped"] as const).map((state) =>
+          ctx.db
+            .query("codexRuns")
+            .withIndex("by_ephemeral_sandbox_state", (q) =>
+              q
+                .eq("ephemeralSandbox", true)
+                .eq("sandboxState", state)
+                .lt("updatedAt", cutoff)
+            )
+            .take(25)
+        )
+      )
+    ).flat()
+
+    return candidates
+      .filter(
+        (run) => TERMINAL_RUN_STATUSES.has(run.status) && Boolean(run.sandboxId)
+      )
+      .map((run) => ({
+        runId: run._id,
+        sandboxId: run.sandboxId!,
+        userId: run.userId,
+      }))
   },
 })

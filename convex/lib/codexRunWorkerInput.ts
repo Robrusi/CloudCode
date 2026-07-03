@@ -16,7 +16,7 @@ async function mcpServersForRun(
 
   const loadedServers = await Promise.all(
     enabledServers.map(async (server) => {
-      const [serverSecrets, serverTools] = await Promise.all([
+      const [serverSecrets, serverTools, oauthConnection] = await Promise.all([
         ctx.db
           .query("mcpServerSecrets")
           .withIndex("by_server", (q) => q.eq("serverId", server._id))
@@ -25,9 +25,35 @@ async function mcpServersForRun(
           .query("mcpServerTools")
           .withIndex("by_server", (q) => q.eq("serverId", server._id))
           .collect(),
+        ctx.db
+          .query("mcpOauthConnections")
+          .withIndex("by_server", (q) => q.eq("serverId", server._id))
+          .unique(),
       ])
 
+      // OAuth-managed servers without a token cannot authenticate; exclude
+      // them instead of shipping a server that fails every request. Tokens are
+      // only attached when the stored URL still matches the authorized one so
+      // a later URL edit can never leak the token to another host.
+      if (oauthConnection && !oauthConnection.encryptedAccessToken) return null
+      const oauth =
+        oauthConnection?.encryptedAccessToken &&
+        oauthConnection.serverUrl === server.url
+          ? {
+              clientId: oauthConnection.clientId,
+              connectionId: oauthConnection._id,
+              encryptedAccessToken: oauthConnection.encryptedAccessToken,
+              encryptedClientSecret: oauthConnection.encryptedClientSecret,
+              encryptedRefreshToken: oauthConnection.encryptedRefreshToken,
+              expiresAt: oauthConnection.expiresAt,
+              provider: oauthConnection.provider,
+              serverUrl: oauthConnection.serverUrl,
+              tokenEndpoint: oauthConnection.tokenEndpoint,
+            }
+          : undefined
+
       return {
+        oauth,
         args: server.args,
         bearerTokenEnvVar: server.bearerTokenEnvVar,
         command: server.command,
@@ -57,7 +83,9 @@ async function mcpServersForRun(
     })
   )
 
-  return loadedServers.sort((a, b) => a.name.localeCompare(b.name))
+  return loadedServers
+    .filter((server) => server !== null)
+    .sort((a, b) => a.name.localeCompare(b.name))
 }
 
 export async function workerInputForRun(

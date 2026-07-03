@@ -569,8 +569,15 @@ export const deleteThread = mutation({
       ),
     ])
     const sandboxIds = sandboxIdsForThreadRuns(thread, runs)
+    // An automation's history lives on its thread; deleting the thread
+    // deletes the automation with it so no orphaned schedule keeps firing.
+    const automations = await ctx.db
+      .query("automations")
+      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+      .collect()
 
     await Promise.all([
+      ...automations.map((automation) => ctx.db.delete(automation._id)),
       ...runs.map((run) => ctx.db.delete(run._id)),
       ...runInputs.flatMap((row) => (row ? [ctx.db.delete(row._id)] : [])),
       ...runCheckpoints.flatMap((row) => (row ? [ctx.db.delete(row._id)] : [])),

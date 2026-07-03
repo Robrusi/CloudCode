@@ -1,0 +1,199 @@
+export type McpOauthProviderId =
+  | "airtable"
+  | "apollo_io"
+  | "asana"
+  | "atlassian"
+  | "attio"
+  | "cloudflare"
+  | "gmail"
+  | "granola"
+  | "hubspot"
+  | "linear"
+  | "notion"
+  | "posthog"
+  | "pylon"
+  | "sentry"
+  | "slack"
+  | "stripe"
+  | "supabase"
+  | "vercel"
+
+export type McpClientSecretAuthMethod =
+  | "client_secret_basic"
+  | "client_secret_post"
+
+export type McpOauthProvider = {
+  clientSecretAuthMethod?: McpClientSecretAuthMethod
+  description: string
+  id: McpOauthProviderId
+  name: string
+  // Set for providers whose authorization server does not support dynamic
+  // client registration. The OAuth client must be registered manually with
+  // the provider and its credentials supplied through these env vars.
+  staticClientEnv?: {
+    clientIdVar: string
+    clientSecretVar: string
+    // Developer console where the OAuth app is created; linked from the
+    // in-app setup instructions.
+    consoleUrl: string
+  }
+  // Two-or-three word summary shown on the connect tile.
+  tagline: string
+  url: string
+}
+
+export const MCP_OAUTH_PROVIDERS: McpOauthProvider[] = [
+  {
+    description: "Read and update Airtable bases, tables, and records.",
+    id: "airtable",
+    tagline: "Bases & records",
+    name: "Airtable",
+    url: "https://mcp.airtable.com/mcp",
+  },
+  {
+    description: "Search Apollo prospects, companies, contacts, and sequences.",
+    id: "apollo_io",
+    tagline: "Prospects & sequences",
+    name: "Apollo.io",
+    url: "https://mcp.apollo.io/mcp",
+  },
+  {
+    description: "Search and manage Asana tasks and projects.",
+    id: "asana",
+    tagline: "Tasks & projects",
+    name: "Asana",
+    staticClientEnv: {
+      clientIdVar: "ASANA_MCP_CLIENT_ID",
+      clientSecretVar: "ASANA_MCP_CLIENT_SECRET",
+      consoleUrl: "https://app.asana.com/0/developer-console",
+    },
+    url: "https://mcp.asana.com/v2/mcp",
+  },
+  {
+    description: "Jira issues, Confluence pages, and Jira Service Management.",
+    id: "atlassian",
+    tagline: "Jira & Confluence",
+    name: "Atlassian",
+    url: "https://mcp.atlassian.com/v1/mcp/authv2",
+  },
+  {
+    description:
+      "Search and update Attio CRM records, notes, tasks, and calls.",
+    id: "attio",
+    tagline: "CRM & notes",
+    name: "Attio",
+    url: "https://mcp.attio.com/mcp",
+  },
+  {
+    description: "Cloudflare Workers bindings: D1, R2, KV, and more.",
+    id: "cloudflare",
+    tagline: "Workers & storage",
+    name: "Cloudflare",
+    url: "https://bindings.mcp.cloudflare.com/mcp",
+  },
+  {
+    description: "Search Gmail threads and create drafts from your mailbox.",
+    id: "gmail",
+    tagline: "Mail & drafts",
+    name: "Gmail",
+    staticClientEnv: {
+      clientIdVar: "GMAIL_MCP_CLIENT_ID",
+      clientSecretVar: "GMAIL_MCP_CLIENT_SECRET",
+      consoleUrl: "https://console.cloud.google.com/apis/credentials",
+    },
+    url: "https://gmailmcp.googleapis.com/mcp/v1",
+  },
+  {
+    description: "Reference Granola meeting notes, transcripts, and summaries.",
+    id: "granola",
+    tagline: "Meeting notes",
+    name: "Granola",
+    url: "https://mcp.granola.ai/mcp",
+  },
+  {
+    clientSecretAuthMethod: "client_secret_post",
+    description: "Read and write HubSpot CRM records, activities, and content.",
+    id: "hubspot",
+    tagline: "CRM & activities",
+    name: "HubSpot",
+    staticClientEnv: {
+      clientIdVar: "HUBSPOT_MCP_CLIENT_ID",
+      clientSecretVar: "HUBSPOT_MCP_CLIENT_SECRET",
+      consoleUrl: "https://developers.hubspot.com",
+    },
+    url: "https://mcp.hubspot.com",
+  },
+  {
+    description: "Search, create, and update Linear issues and projects.",
+    id: "linear",
+    tagline: "Issues & cycles",
+    name: "Linear",
+    url: "https://mcp.linear.app/mcp",
+  },
+  {
+    description: "Search and update Notion pages and databases.",
+    id: "notion",
+    tagline: "Pages & databases",
+    name: "Notion",
+    url: "https://mcp.notion.com/mcp",
+  },
+  {
+    description:
+      "Inspect PostHog analytics, errors, feature flags, and replays.",
+    id: "posthog",
+    tagline: "Analytics & flags",
+    name: "PostHog",
+    url: "https://mcp.posthog.com/mcp",
+  },
+  {
+    description: "Access Pylon issues, accounts, tasks, and support context.",
+    id: "pylon",
+    tagline: "Support & accounts",
+    name: "Pylon",
+    url: "https://mcp.usepylon.com/",
+  },
+  {
+    description: "Look up Sentry issues, errors, and traces.",
+    id: "sentry",
+    tagline: "Errors & traces",
+    name: "Sentry",
+    url: "https://mcp.sentry.dev/mcp",
+  },
+  {
+    description: "Search Slack messages, channels, and threads.",
+    id: "slack",
+    tagline: "Messages & channels",
+    name: "Slack",
+    staticClientEnv: {
+      clientIdVar: "SLACK_MCP_CLIENT_ID",
+      clientSecretVar: "SLACK_MCP_CLIENT_SECRET",
+      consoleUrl: "https://api.slack.com/apps",
+    },
+    url: "https://mcp.slack.com/mcp",
+  },
+  {
+    description: "Inspect Stripe customers, payments, and subscriptions.",
+    id: "stripe",
+    tagline: "Payments & customers",
+    name: "Stripe",
+    url: "https://mcp.stripe.com",
+  },
+  {
+    description: "Manage Supabase projects, tables, and SQL.",
+    id: "supabase",
+    tagline: "Postgres & projects",
+    name: "Supabase",
+    url: "https://mcp.supabase.com/mcp",
+  },
+  {
+    description: "Inspect Vercel projects, deployments, and logs.",
+    id: "vercel",
+    tagline: "Deployments & logs",
+    name: "Vercel",
+    url: "https://mcp.vercel.com",
+  },
+]
+
+export function mcpOauthProvider(id: string | null | undefined) {
+  return MCP_OAUTH_PROVIDERS.find((provider) => provider.id === id) ?? null
+}

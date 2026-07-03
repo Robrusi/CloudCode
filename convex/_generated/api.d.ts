@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as automations from "../automations.js";
 import type * as billing from "../billing.js";
 import type * as billingAutumn from "../billingAutumn.js";
 import type * as billingPlan from "../billingPlan.js";
@@ -18,6 +19,7 @@ import type * as codexAuth from "../codexAuth.js";
 import type * as codexRuns from "../codexRuns.js";
 import type * as files from "../files.js";
 import type * as githubApp from "../githubApp.js";
+import type * as lib_automationRecords from "../lib/automationRecords.js";
 import type * as lib_codexRunAuth from "../lib/codexRunAuth.js";
 import type * as lib_codexRunLifecycle from "../lib/codexRunLifecycle.js";
 import type * as lib_codexRunLogs from "../lib/codexRunLogs.js";
@@ -37,6 +39,7 @@ import type * as lib_threadAccess from "../lib/threadAccess.js";
 import type * as lib_threadNotes from "../lib/threadNotes.js";
 import type * as lib_users from "../lib/users.js";
 import type * as lib_workerAuth from "../lib/workerAuth.js";
+import type * as mcpOauthConnections from "../mcpOauthConnections.js";
 import type * as mcpServers from "../mcpServers.js";
 import type * as sandboxPresets from "../sandboxPresets.js";
 import type * as sshAccess from "../sshAccess.js";
@@ -49,6 +52,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  automations: typeof automations;
   billing: typeof billing;
   billingAutumn: typeof billingAutumn;
   billingPlan: typeof billingPlan;
@@ -59,6 +63,7 @@ declare const fullApi: ApiFromModules<{
   codexRuns: typeof codexRuns;
   files: typeof files;
   githubApp: typeof githubApp;
+  "lib/automationRecords": typeof lib_automationRecords;
   "lib/codexRunAuth": typeof lib_codexRunAuth;
   "lib/codexRunLifecycle": typeof lib_codexRunLifecycle;
   "lib/codexRunLogs": typeof lib_codexRunLogs;
@@ -78,6 +83,7 @@ declare const fullApi: ApiFromModules<{
   "lib/threadNotes": typeof lib_threadNotes;
   "lib/users": typeof lib_users;
   "lib/workerAuth": typeof lib_workerAuth;
+  mcpOauthConnections: typeof mcpOauthConnections;
   mcpServers: typeof mcpServers;
   sandboxPresets: typeof sandboxPresets;
   sshAccess: typeof sshAccess;

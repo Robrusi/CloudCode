@@ -39,6 +39,7 @@ export function IconButton({
 export function PresetPill({
   activeLabel,
   locked,
+  menuPlacement = "up",
   onSelect,
   open,
   presets,
@@ -47,6 +48,7 @@ export function PresetPill({
 }: {
   activeLabel?: string
   locked?: boolean
+  menuPlacement?: "up" | "down"
   onSelect: (value: Id<"sandboxPresets"> | "") => void
   open: boolean
   presets: SandboxPresetOption[]
@@ -79,7 +81,8 @@ export function PresetPill({
         <div
           className={cn(
             popoverPanel,
-            "right-0 bottom-10 max-h-80 min-w-52 overflow-y-auto sm:right-auto sm:left-0"
+            "right-0 max-h-80 min-w-52 overflow-y-auto sm:right-auto sm:left-0",
+            menuPlacement === "down" ? "top-10" : "bottom-10"
           )}
         >
           <div className="px-3 pt-1.5 pb-1 text-xs text-muted-foreground">
@@ -113,6 +116,7 @@ export function Pill<T extends string>({
   options,
   formatTrigger,
   formatOption,
+  menuPlacement = "up",
   open,
   setOpen,
   onSelect,
@@ -123,6 +127,7 @@ export function Pill<T extends string>({
   options: readonly T[]
   formatTrigger: (v: T) => string
   formatOption: (v: T) => string
+  menuPlacement?: "up" | "down"
   open: boolean
   setOpen: (v: boolean) => void
   onSelect: (v: T) => void
@@ -156,7 +161,13 @@ export function Pill<T extends string>({
         </svg>
       </button>
       {open ? (
-        <div className={cn(popoverPanel, "right-0 bottom-10")}>
+        <div
+          className={cn(
+            popoverPanel,
+            "right-0",
+            menuPlacement === "down" ? "top-10" : "bottom-10"
+          )}
+        >
           <div className="px-3 pt-1.5 pb-1 text-xs text-muted-foreground">
             {header}
           </div>

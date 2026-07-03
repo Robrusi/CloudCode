@@ -184,6 +184,37 @@ export const checkCurrentUserInfraAccess = action({
   },
 })
 
+export const checkInfraAccessForWorker = action({
+  args: {
+    requiredMicroUsd: v.optional(v.number()),
+    userId: v.id("users"),
+    workerSecret: v.string(),
+  },
+  handler: async (
+    ctx,
+    args
+  ): Promise<{ allowed: boolean; requiredBalance: number }> => {
+    requireWorkerSecret(args.workerSecret)
+    const user = (await ctx.runQuery(internal.billing.userForBilling, {
+      userId: args.userId,
+    })) as BillingUser | null
+    if (!user) throw new Error("Unknown user.")
+
+    const { autumn, customerId } = await ensureAutumnCustomer(ctx, user)
+    const check = await checkRemainingInfraAccess(ctx, {
+      autumn,
+      customerId,
+      requiredMicroUsd: args.requiredMicroUsd,
+      userId: user._id,
+    })
+
+    return {
+      allowed: check.allowed,
+      requiredBalance: check.requiredBalance,
+    }
+  },
+})
+
 export const attachCurrentUserPlan = action({
   args: {
     planId: billingPlanId,

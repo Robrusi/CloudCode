@@ -1,7 +1,7 @@
 "use client"
 
 import { useClerk } from "@clerk/nextjs"
-import { Settings, SquarePen, User, X } from "lucide-react"
+import { CalendarClock, Settings, SquarePen, User, X } from "lucide-react"
 import { type CSSProperties, useMemo } from "react"
 
 import { ResizeHandle } from "@/components/layout/resize-handle"
@@ -27,6 +27,7 @@ export function Sidebar({
   onSelect,
   onDelete,
   onRename,
+  onShowAutomations,
   onShowSettings,
   onExitSettings,
   settingsSection,
@@ -36,12 +37,13 @@ export function Sidebar({
 }: {
   chats: SidebarChat[]
   activeId: Id<"threads"> | null
-  currentView: "chat" | "settings"
+  currentView: "chat" | "settings" | "automations"
   onNewChat: () => void
   onNewChatInRepo: (repoUrl: string) => void
   onSelect: (id: Id<"threads">) => void
   onDelete: (id: Id<"threads">) => void
   onRename: (id: Id<"threads">, title: string) => void
+  onShowAutomations: () => void
   onShowSettings: () => void
   onExitSettings: () => void
   settingsSection: SettingsSectionId
@@ -99,7 +101,7 @@ export function Sidebar({
         />
       ) : (
         <>
-          <div className="px-2 pt-2">
+          <div className="space-y-0.5 px-2 pt-2">
             <button
               type="button"
               onClick={onNewChat}
@@ -107,6 +109,20 @@ export function Sidebar({
             >
               <SquarePen className="size-3 shrink-0" />
               <span>New chat</span>
+            </button>
+            <button
+              type="button"
+              onClick={onShowAutomations}
+              aria-current={currentView === "automations" ? "page" : undefined}
+              className={cn(
+                "flex w-full items-center gap-2 rounded-xl px-[0.625rem] py-2 text-[0.8125rem] transition-colors",
+                currentView === "automations"
+                  ? "bg-muted font-medium text-foreground"
+                  : "text-foreground/80 hover:bg-muted"
+              )}
+            >
+              <CalendarClock className="size-3 shrink-0" />
+              <span>Automations</span>
             </button>
           </div>
 

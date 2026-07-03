@@ -125,7 +125,20 @@ function normalizeGitHubAppUserStatus(value: {
   }
 }
 
-async function saveGitHubAppUserAuth(input: {
+export type GitHubAppUserAuthSaveFields = {
+  email?: string
+  encryptedRefreshToken?: string
+  encryptedToken: string
+  expiresAt?: string
+  fingerprint: string
+  githubUserId: string
+  login: string
+  name?: string
+  refreshTokenExpiresAt?: string
+  updatedAt: string
+}
+
+function buildUserAuthSave(input: {
   email?: string
   expiresAt?: string
   githubUserId: string
@@ -137,36 +150,56 @@ async function saveGitHubAppUserAuth(input: {
 }) {
   const updatedAt = new Date().toISOString()
   const tokenFingerprint = fingerprint(input.token, updatedAt)
+
+  return {
+    auth: {
+      connected: true,
+      email: input.email,
+      expiresAt: input.expiresAt,
+      fingerprint: tokenFingerprint,
+      githubUserId: input.githubUserId,
+      login: input.login,
+      name: input.name,
+      refreshToken: input.refreshToken,
+      refreshTokenExpiresAt: input.refreshTokenExpiresAt,
+      token: input.token,
+      updatedAt,
+    } satisfies GitHubAppUserAuth,
+    fields: {
+      email: input.email,
+      encryptedRefreshToken: input.refreshToken
+        ? encryptSecret(input.refreshToken)
+        : undefined,
+      encryptedToken: encryptSecret(input.token),
+      expiresAt: input.expiresAt,
+      fingerprint: tokenFingerprint,
+      githubUserId: input.githubUserId,
+      login: input.login,
+      name: input.name,
+      refreshTokenExpiresAt: input.refreshTokenExpiresAt,
+      updatedAt,
+    } satisfies GitHubAppUserAuthSaveFields,
+  }
+}
+
+async function saveGitHubAppUserAuth(input: {
+  email?: string
+  expiresAt?: string
+  githubUserId: string
+  login: string
+  name?: string
+  refreshToken?: string
+  refreshTokenExpiresAt?: string
+  token: string
+}) {
+  const { auth, fields } = buildUserAuthSave(input)
   const client = await getClient()
   await client.mutation(api.githubApp.saveUserAuth, {
-    email: input.email,
-    encryptedRefreshToken: input.refreshToken
-      ? encryptSecret(input.refreshToken)
-      : undefined,
-    encryptedToken: encryptSecret(input.token),
-    expiresAt: input.expiresAt,
-    fingerprint: tokenFingerprint,
-    githubUserId: input.githubUserId,
-    login: input.login,
-    name: input.name,
-    refreshTokenExpiresAt: input.refreshTokenExpiresAt,
-    updatedAt,
+    ...fields,
     workerSecret: getWorkerSecret(GITHUB_APP_WORKER_SECRET_ERROR),
   })
 
-  return {
-    connected: true,
-    email: input.email,
-    expiresAt: input.expiresAt,
-    fingerprint: tokenFingerprint,
-    githubUserId: input.githubUserId,
-    login: input.login,
-    name: input.name,
-    refreshToken: input.refreshToken,
-    refreshTokenExpiresAt: input.refreshTokenExpiresAt,
-    token: input.token,
-    updatedAt,
-  } satisfies GitHubAppUserAuth
+  return auth
 }
 
 export async function completeGitHubAppUserAuthorization({
@@ -204,12 +237,26 @@ function shouldRefreshUserToken(expiresAt?: string) {
   return Number.isFinite(expiresAtMs) && expiresAtMs < Date.now() + 120_000
 }
 
-async function getCurrentGitHubAppUserAuth(): Promise<GitHubAppUserAuth | null> {
-  const client = await getClient()
-  const stored = await client.query(api.githubApp.getUserAuth, {
-    workerSecret: getWorkerSecret(GITHUB_APP_WORKER_SECRET_ERROR),
-  })
+export type StoredGitHubAppUserAuthRecord = {
+  email?: string
+  encryptedRefreshToken?: string
+  encryptedToken: string
+  expiresAt?: string
+  fingerprint: string
+  githubUserId: string
+  login: string
+  name?: string
+  refreshTokenExpiresAt?: string
+  updatedAt: string
+}
 
+// Decrypts a stored GitHub user authorization and transparently refreshes an
+// expiring token, persisting the rotated token through saveRefreshed. Shared
+// by the session path below and the headless worker path in app-worker.ts.
+export async function resolveGitHubAppUserAuth(
+  stored: StoredGitHubAppUserAuthRecord | null,
+  saveRefreshed: (fields: GitHubAppUserAuthSaveFields) => Promise<void>
+): Promise<GitHubAppUserAuth | null> {
   if (!stored) return null
 
   const token = decryptSecret(stored.encryptedToken)
@@ -238,8 +285,7 @@ async function getCurrentGitHubAppUserAuth(): Promise<GitHubAppUserAuth | null> 
   }
 
   const refreshed = await refreshGitHubAppUserToken(refreshToken)
-
-  return saveGitHubAppUserAuth({
+  const { auth, fields } = buildUserAuthSave({
     email: stored.email,
     expiresAt: refreshed.expiresAt,
     githubUserId: stored.githubUserId,
@@ -249,6 +295,23 @@ async function getCurrentGitHubAppUserAuth(): Promise<GitHubAppUserAuth | null> 
     refreshTokenExpiresAt:
       refreshed.refreshTokenExpiresAt ?? stored.refreshTokenExpiresAt,
     token: refreshed.token,
+  })
+  await saveRefreshed(fields)
+
+  return auth
+}
+
+async function getCurrentGitHubAppUserAuth(): Promise<GitHubAppUserAuth | null> {
+  const client = await getClient()
+  const stored = await client.query(api.githubApp.getUserAuth, {
+    workerSecret: getWorkerSecret(GITHUB_APP_WORKER_SECRET_ERROR),
+  })
+
+  return resolveGitHubAppUserAuth(stored, async (fields) => {
+    await client.mutation(api.githubApp.saveUserAuth, {
+      ...fields,
+      workerSecret: getWorkerSecret(GITHUB_APP_WORKER_SECRET_ERROR),
+    })
   })
 }
 

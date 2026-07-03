@@ -8,7 +8,10 @@ import { repoLabel } from "@/components/chat/format"
 import type { ChatShellProps } from "@/components/chat/shell"
 import type { DaytonaUiTestRun } from "@/components/sandbox/ui-tests-model"
 import { useChatThreadScroll } from "@/components/chat/thread-scroll"
-import type { SettingsSectionId } from "@/components/settings/sections"
+import {
+  SETTINGS_SECTIONS,
+  type SettingsSectionId,
+} from "@/components/settings/sections"
 import { useChatConnectionStatus } from "@/hooks/use-chat-connection-status"
 import { useChatComposerActions } from "@/hooks/use-chat-composer-actions"
 import { useChatComposerLayout } from "@/hooks/use-chat-composer-layout"
@@ -156,14 +159,22 @@ export function useChatController(): ChatShellProps {
       : !window.matchMedia(MOBILE_MEDIA_QUERY).matches
   )
   const isMobile = useIsMobile()
-  const [view, setView] = useState<"chat" | "settings">(() =>
-    typeof window !== "undefined" &&
-    new URLSearchParams(window.location.search).get("view") === "settings"
-      ? "settings"
+  const [view, setView] = useState<"chat" | "settings" | "automations">(() => {
+    if (typeof window === "undefined") return "chat"
+    const requested = new URLSearchParams(window.location.search).get("view")
+    return requested === "settings" || requested === "automations"
+      ? requested
       : "chat"
+  })
+  const [settingsSection, setSettingsSection] = useState<SettingsSectionId>(
+    () => {
+      if (typeof window === "undefined") return "connections"
+      const section = new URLSearchParams(window.location.search).get("section")
+      return SETTINGS_SECTIONS.some((entry) => entry.id === section)
+        ? (section as SettingsSectionId)
+        : "connections"
+    }
   )
-  const [settingsSection, setSettingsSection] =
-    useState<SettingsSectionId>("connections")
   const {
     authError,
     authStatus,
@@ -277,6 +288,7 @@ export function useChatController(): ChatShellProps {
     exitSettings,
     selectChat,
     selectSettingsSection,
+    showAutomations,
     showSettings,
     startNewChat,
     startNewChatInRepo,
@@ -514,7 +526,7 @@ export function useChatController(): ChatShellProps {
   }, [chats, clearInactiveRunKeys, runningRunKeys, visibleLiveRun?.threadId])
 
   const composerEnabled =
-    view !== "settings" && !activeFilePath && !notesOpen && !uiTestRun
+    view === "chat" && !activeFilePath && !notesOpen && !uiTestRun
   const composerProps: ChatComposerProps = {
     activeQueuedMessages,
     activeRunPending,
@@ -591,6 +603,10 @@ export function useChatController(): ChatShellProps {
       resumeBillingNotice,
     },
     main: {
+      automations: {
+        defaultRepoUrl: draftRepo,
+        onOpenThread: selectChat,
+      },
       composer: {
         enabled: composerEnabled,
         props: composerProps,
@@ -676,6 +692,7 @@ export function useChatController(): ChatShellProps {
         onRename: renameChat,
         onSelect: selectChat,
         onSelectSettingsSection: selectSettingsSection,
+        onShowAutomations: showAutomations,
         onShowSettings: () => showSettings(),
         settingsSection,
       },
@@ -717,21 +734,26 @@ export function useChatController(): ChatShellProps {
     },
     topBar: {
       identity: {
-        isNew: view !== "settings" && !active,
-        repoUrl: view === "settings" ? "" : repoUrl,
-        title: view === "settings" ? "Settings" : (active?.title ?? null),
+        isNew: view === "chat" && !active,
+        repoUrl: view === "chat" ? repoUrl : "",
+        title:
+          view === "settings"
+            ? "Settings"
+            : view === "automations"
+              ? "Automations"
+              : (active?.title ?? null),
       },
       sandbox: {
         action: sandboxAction,
-        id: view === "settings" ? null : activeSandboxId,
+        id: view === "chat" ? activeSandboxId : null,
         onDelete: requestDeleteActiveSandbox,
         onMissing: handleSandboxMissing,
         onPause: pauseActiveSandbox,
         onResume: resumeActiveSandbox,
         onStateChange: handleSandboxStateChange,
-        pending: view !== "settings" && activeRunPending,
+        pending: view === "chat" && activeRunPending,
         showControls:
-          view !== "settings" &&
+          view === "chat" &&
           (Boolean(active) || activeRunPending || Boolean(activeSandboxId)),
         state: activeSandboxState,
       },
@@ -741,27 +763,27 @@ export function useChatController(): ChatShellProps {
       },
       tools: {
         context: {
-          canOpen: view !== "settings" && Boolean(active),
+          canOpen: view === "chat" && Boolean(active),
           onToggle: () => toggleToolPanel("context"),
           open: contextOpen,
         },
         desktop: {
-          canOpen: view !== "settings" && Boolean(activeSandboxId),
+          canOpen: view === "chat" && Boolean(activeSandboxId),
           onToggle: () => toggleToolPanel("desktop"),
           open: desktopOpen,
         },
         files: {
-          canOpen: view !== "settings" && Boolean(activeFileCacheScope),
+          canOpen: view === "chat" && Boolean(activeFileCacheScope),
           onToggle: () => toggleToolPanel("files"),
           open: filesOpen,
         },
         github: {
-          canOpen: view !== "settings" && Boolean(activeSandboxId),
+          canOpen: view === "chat" && Boolean(activeSandboxId),
           onToggle: () => toggleToolPanel("github"),
           open: githubOpen,
         },
         ssh: {
-          canOpen: view !== "settings" && Boolean(activeSandboxId),
+          canOpen: view === "chat" && Boolean(activeSandboxId),
           onToggle: () => toggleToolPanel("ssh"),
           open: sshOpen,
         },

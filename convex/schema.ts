@@ -44,6 +44,14 @@ const codexRunStatus = v.union(
   v.literal("failed"),
   v.literal("canceled")
 )
+const automationRunStatus = v.union(
+  v.literal("running"),
+  v.literal("succeeded"),
+  v.literal("failed"),
+  v.literal("canceled"),
+  v.literal("skipped"),
+  v.literal("dispatch_failed")
+)
 const billingPlanId = v.union(
   v.literal("free"),
   v.literal("hobby"),
@@ -68,6 +76,36 @@ const daytonaBillingState = v.union(
 )
 
 export default defineSchema({
+  automations: defineTable({
+    baseBranch: v.optional(v.string()),
+    branchMode: v.optional(branchMode),
+    branchName: v.optional(v.string()),
+    createdAt: v.number(),
+    cron: v.string(),
+    disabledReason: v.optional(v.string()),
+    enabled: v.boolean(),
+    failureCount: v.number(),
+    lastRunAt: v.optional(v.number()),
+    lastRunError: v.optional(v.string()),
+    lastRunStatus: v.optional(automationRunStatus),
+    model,
+    name: v.string(),
+    nextRunAt: v.optional(v.number()),
+    profile: v.optional(v.string()),
+    prompt: v.string(),
+    reasoningEffort: thinking,
+    repoUrl: v.string(),
+    sandboxPresetId: v.optional(v.id("sandboxPresets")),
+    speed,
+    threadId: v.id("threads"),
+    timezone: v.string(),
+    updatedAt: v.number(),
+    userId: v.id("users"),
+  })
+    .index("by_user_updated", ["userId", "updatedAt"])
+    .index("by_enabled_next", ["enabled", "nextRunAt"])
+    .index("by_thread", ["threadId"]),
+
   codexAuth: defineTable({
     // OAuth ("chatgpt") records populate accessToken/idToken/refreshToken;
     // API-key ("apikey") records leave them unset and store the encrypted key in
@@ -98,12 +136,14 @@ export default defineSchema({
 
   codexRuns: defineTable({
     assistantMessageId: v.id("messages"),
+    automationId: v.optional(v.id("automations")),
     baseBranch: v.optional(v.string()),
     branchMode: v.optional(branchMode),
     branchName: v.optional(v.string()),
     codexThreadId: v.optional(v.string()),
     content: v.optional(v.string()),
     createdAt: v.number(),
+    ephemeralSandbox: v.optional(v.boolean()),
     error: v.optional(v.string()),
     finishedAt: v.optional(v.number()),
     githubToken: v.optional(v.string()),
@@ -133,6 +173,11 @@ export default defineSchema({
   })
     .index("by_thread_updated", ["threadId", "updatedAt"])
     .index("by_thread_status_updated", ["threadId", "status", "updatedAt"])
+    .index("by_ephemeral_sandbox_state", [
+      "ephemeralSandbox",
+      "sandboxState",
+      "updatedAt",
+    ])
     .index("by_sandbox", ["sandboxId"])
     .index("by_trigger_run", ["triggerRunId"])
     .index("by_user_profile_updated", ["userId", "profile", "updatedAt"])
@@ -325,6 +370,26 @@ export default defineSchema({
   })
     .index("by_user_updated", ["userId", "updatedAt"])
     .index("by_user_mode", ["userId", "mode"]),
+
+  mcpOauthConnections: defineTable({
+    authorizationEndpoint: v.string(),
+    clientId: v.string(),
+    createdAt: v.number(),
+    encryptedAccessToken: v.optional(v.string()),
+    encryptedClientSecret: v.optional(v.string()),
+    encryptedRefreshToken: v.optional(v.string()),
+    expiresAt: v.optional(v.number()),
+    provider: v.string(),
+    revocationEndpoint: v.optional(v.string()),
+    scope: v.optional(v.string()),
+    serverId: v.optional(v.id("mcpServers")),
+    serverUrl: v.string(),
+    tokenEndpoint: v.string(),
+    updatedAt: v.number(),
+    userId: v.id("users"),
+  })
+    .index("by_user_provider", ["userId", "provider"])
+    .index("by_server", ["serverId"]),
 
   mcpServers: defineTable({
     args: v.optional(v.array(v.string())),

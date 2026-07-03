@@ -4,6 +4,15 @@ const nextConfig = {
   experimental: {
     optimizePackageImports: ["lucide-react"],
   },
+  images: {
+    remotePatterns: [
+      {
+        hostname: "svgl.app",
+        pathname: "/library/**",
+        protocol: "https",
+      },
+    ],
+  },
 }
 
 export default nextConfig

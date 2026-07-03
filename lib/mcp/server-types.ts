@@ -11,6 +11,7 @@ export type McpServerRecord = {
   envVars?: string[]
   id: Id<"mcpServers">
   name: string
+  oauthProvider?: string
   secrets: Array<{
     id: Id<"mcpServerSecrets">
     kind: "env" | "httpHeader" | "envHttpHeader"
