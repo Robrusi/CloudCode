@@ -54,7 +54,10 @@ export function registerTerminalCloser(
   }
 }
 
-export function closeBrowserTerminalSession(sandboxId?: string) {
+export function closeBrowserTerminalSession(
+  sandboxId?: string,
+  options: { killRemote?: boolean } = {}
+) {
   if (!sandboxId) return
   const ids = new Set([
     ...(terminalIds.get(sandboxId) ?? []),
@@ -62,8 +65,10 @@ export function closeBrowserTerminalSession(sandboxId?: string) {
   ])
 
   for (const close of terminalClosers.get(sandboxId) ?? []) close()
-  for (const terminalId of ids) {
-    void killBrowserTerminalSession(sandboxId, terminalId)
+  if (options.killRemote !== false) {
+    for (const terminalId of ids) {
+      void killBrowserTerminalSession(sandboxId, terminalId)
+    }
   }
   terminalClosers.delete(sandboxId)
   terminalIds.delete(sandboxId)

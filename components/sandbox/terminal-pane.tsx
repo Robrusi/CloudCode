@@ -10,12 +10,14 @@ import { cn } from "@/lib/shared/utils"
 
 export function SandboxTerminalPane({
   active,
+  enabled,
   palette,
   sandboxId,
   session,
   onStatusChange,
 }: {
   active: boolean
+  enabled: boolean
   palette: TerminalPalette
   sandboxId: string
   session: TerminalWindow
@@ -24,6 +26,7 @@ export function SandboxTerminalPane({
   const { containerRef, focusTerminalFromPointer } =
     useSandboxTerminalPaneController({
       active,
+      enabled,
       palette,
       sandboxId,
       session,

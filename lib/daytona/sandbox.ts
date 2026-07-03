@@ -80,6 +80,13 @@ const DAYTONA_SYSTEM_PATH_ENTRIES = [
 
 export type DaytonaUiState = "running" | "stopped" | "deleted" | "error"
 
+export class DaytonaSandboxNotRunningError extends Error {
+  constructor() {
+    super("Sandbox is not running.")
+    this.name = "DaytonaSandboxNotRunningError"
+  }
+}
+
 export type DaytonaSandboxInfo = {
   autoArchiveInterval: number | null
   autoDeleteInterval: number | null
@@ -587,6 +594,23 @@ export async function getStartedDaytonaSandbox(
     await getDaytonaSandbox(sandboxId),
     autoStopMinutes
   )
+}
+
+export async function getRunningDaytonaSandbox(
+  sandboxId: string,
+  options: { timeoutMs?: number } = {}
+) {
+  const sandbox = await getDaytonaSandbox(sandboxId, options)
+  await refreshDaytonaSandboxData(sandbox, options).catch((error) => {
+    if (isDaytonaOperationTimeoutError(error)) throw error
+    return undefined
+  })
+
+  if (normalizeDaytonaState(sandbox.state) !== "running") {
+    throw new DaytonaSandboxNotRunningError()
+  }
+
+  return sandbox
 }
 
 export async function deleteDaytonaSandboxQuietly(sandboxId?: string) {

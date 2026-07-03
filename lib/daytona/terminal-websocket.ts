@@ -3,7 +3,7 @@ import daytonaSdkPackage from "@daytona/sdk/package.json"
 
 import {
   daytonaTerminalPath,
-  getStartedDaytonaSandbox,
+  getRunningDaytonaSandbox,
   resolveDaytonaPaths,
 } from "@/lib/daytona/sandbox"
 import { refreshDaytonaTerminalGitHubAuth } from "@/lib/daytona/terminal-sessions"
@@ -28,31 +28,13 @@ export type DaytonaTerminalWebSocket = {
 }
 
 type DaytonaTerminalSandbox = Awaited<
-  ReturnType<typeof getStartedDaytonaSandbox>
+  ReturnType<typeof getRunningDaytonaSandbox>
 >
 
 type DaytonaTerminalWebSocketContext = {
   paths: Awaited<ReturnType<typeof resolveDaytonaPaths>>
   sandbox: DaytonaTerminalSandbox
 }
-
-const TERMINAL_CONTEXT_CACHE_TTL_MS = 30_000
-
-const terminalSandboxCache = new Map<
-  string,
-  {
-    expiresAt: number
-    promise: Promise<DaytonaTerminalSandbox>
-  }
->()
-
-const terminalContextCache = new Map<
-  string,
-  {
-    expiresAt: number
-    promise: Promise<DaytonaTerminalWebSocketContext>
-  }
->()
 
 function toolboxBasePath(sandbox: Sandbox) {
   let baseUrl = sandbox.toolboxProxyUrl
@@ -91,56 +73,16 @@ async function toolboxErrorMessage(response: Response, fallback: string) {
   return text.trim() || fallback
 }
 
-function invalidateTerminalCaches(sandboxId: string) {
-  terminalSandboxCache.delete(sandboxId)
-  terminalContextCache.delete(sandboxId)
+async function getTerminalSandbox(sandboxId: string) {
+  return await getRunningDaytonaSandbox(sandboxId)
 }
 
-function getTerminalSandbox(sandboxId: string) {
-  const now = Date.now()
-  const cached = terminalSandboxCache.get(sandboxId)
-  if (cached && cached.expiresAt > now) return cached.promise
-  if (cached) terminalSandboxCache.delete(sandboxId)
-
-  const promise = getStartedDaytonaSandbox(sandboxId)
-  terminalSandboxCache.set(sandboxId, {
-    expiresAt: now + TERMINAL_CONTEXT_CACHE_TTL_MS,
-    promise,
-  })
-
-  promise.catch(() => {
-    if (terminalSandboxCache.get(sandboxId)?.promise === promise) {
-      terminalSandboxCache.delete(sandboxId)
-    }
-  })
-
-  return promise
-}
-
-function getTerminalContext(sandboxId: string) {
-  const now = Date.now()
-  const cached = terminalContextCache.get(sandboxId)
-  if (cached && cached.expiresAt > now) return cached.promise
-  if (cached) terminalContextCache.delete(sandboxId)
-
-  const promise = (async () => {
-    const sandbox = await getTerminalSandbox(sandboxId)
-    const paths = await resolveDaytonaPaths(sandbox)
-    return { paths, sandbox }
-  })()
-
-  terminalContextCache.set(sandboxId, {
-    expiresAt: now + TERMINAL_CONTEXT_CACHE_TTL_MS,
-    promise,
-  })
-
-  promise.catch(() => {
-    if (terminalContextCache.get(sandboxId)?.promise === promise) {
-      terminalContextCache.delete(sandboxId)
-    }
-  })
-
-  return promise
+async function getTerminalContext(
+  sandboxId: string
+): Promise<DaytonaTerminalWebSocketContext> {
+  const sandbox = await getTerminalSandbox(sandboxId)
+  const paths = await resolveDaytonaPaths(sandbox)
+  return { paths, sandbox }
 }
 
 async function createPtySession({
@@ -236,9 +178,8 @@ export async function prepareDaytonaTerminalWebSocket({
 }): Promise<DaytonaTerminalWebSocket> {
   const cleanId = cleanTerminalId(terminalId)
   const size = cleanTerminalDimensions({ cols, rows })
-  const sandbox = await getTerminalSandbox(sandboxId)
+  const { paths, sandbox } = await getTerminalContext(sandboxId)
   const previewTokenPromise = sandbox.getPreviewLink(1)
-  const { paths } = await getTerminalContext(sandboxId)
 
   const envs = {
     CLICOLOR: "1",
@@ -349,8 +290,7 @@ export async function resizeDaytonaTerminalWebSocket({
   try {
     await sandbox.process.resizePtySession(cleanId, size.cols, size.rows)
   } catch {
-    invalidateTerminalCaches(sandboxId)
-    const freshSandbox = await getStartedDaytonaSandbox(sandboxId)
+    const freshSandbox = await getRunningDaytonaSandbox(sandboxId)
     await freshSandbox.process.resizePtySession(cleanId, size.cols, size.rows)
   }
 }

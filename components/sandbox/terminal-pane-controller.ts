@@ -4,10 +4,7 @@ import { FitAddon } from "@xterm/addon-fit"
 import { Terminal } from "@xterm/xterm"
 import { useCallback, useEffect, useRef } from "react"
 
-import {
-  killBrowserTerminalSession,
-  registerTerminalCloser,
-} from "@/components/sandbox/terminal-session"
+import { registerTerminalCloser } from "@/components/sandbox/terminal-session"
 import {
   TERMINAL_INPUT_FLUSH_DELAY_MS,
   type TerminalPalette,
@@ -39,12 +36,14 @@ function isEditableElement(element: Element | null) {
 
 export function useSandboxTerminalPaneController({
   active,
+  enabled,
   palette,
   sandboxId,
   session,
   onStatusChange,
 }: {
   active: boolean
+  enabled: boolean
   palette: TerminalPalette
   sandboxId: string
   session: TerminalWindow
@@ -101,7 +100,7 @@ export function useSandboxTerminalPaneController({
   }, [active])
 
   useEffect(() => {
-    if (!containerRef.current) return
+    if (!enabled || !containerRef.current) return
 
     const sessionSandboxId = sandboxId
     const terminalId = session.id
@@ -212,14 +211,30 @@ export function useSandboxTerminalPaneController({
     }
     scheduleResizeRef.current = scheduleResize
 
-    function killTerminal() {
-      void killBrowserTerminalSession(sessionSandboxId, terminalId)
+    function closeTerminalConnection() {
+      if (disposed) return
+      disposed = true
+      if (inputFlushTimer) {
+        clearTimeout(inputFlushTimer)
+        inputFlushTimer = undefined
+      }
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer)
+        reconnectTimer = undefined
+      }
+      if (resizeTimer) {
+        clearTimeout(resizeTimer)
+        resizeTimer = undefined
+      }
+      socketInputReady = false
+      socket?.close()
+      socket = undefined
     }
 
     const unregisterCloser = registerTerminalCloser(
       sessionSandboxId,
       terminalId,
-      killTerminal
+      closeTerminalConnection
     )
 
     function queueInput(data: string) {
@@ -463,7 +478,14 @@ export function useSandboxTerminalPaneController({
     }
     // palette is applied via a separate effect; we intentionally don't recreate
     // the terminal when the theme changes.
-  }, [focusTerminal, onStatusChange, sandboxId, session.id, session.restartKey])
+  }, [
+    enabled,
+    focusTerminal,
+    onStatusChange,
+    sandboxId,
+    session.id,
+    session.restartKey,
+  ])
 
   return {
     containerRef,

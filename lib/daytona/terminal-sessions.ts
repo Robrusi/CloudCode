@@ -1,8 +1,9 @@
 import type { PtyHandle } from "@daytona/sdk"
 
 import {
+  DaytonaSandboxNotRunningError,
   daytonaTerminalPath,
-  getStartedDaytonaSandbox,
+  getRunningDaytonaSandbox,
   resolveDaytonaPaths,
 } from "@/lib/daytona/sandbox"
 import {
@@ -20,13 +21,13 @@ const GITHUB_AUTH_VERSION = 9
 const GITHUB_AUTH_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const GITHUB_AUTH_UNAVAILABLE_RECHECK_MS = 60_000
 
-type StartedDaytonaSandbox = Awaited<
-  ReturnType<typeof getStartedDaytonaSandbox>
+type RunningDaytonaSandbox = Awaited<
+  ReturnType<typeof getRunningDaytonaSandbox>
 >
 type DaytonaTerminalPaths = Awaited<ReturnType<typeof resolveDaytonaPaths>>
 type DaytonaTerminalSessionContext = {
   paths: DaytonaTerminalPaths
-  sandbox: StartedDaytonaSandbox
+  sandbox: RunningDaytonaSandbox
 }
 
 export type TerminalSubscriber = {
@@ -122,7 +123,7 @@ function activateSubscriber(subscriber: TerminalSubscriber) {
 }
 
 async function connectExistingPty(
-  sandbox: Awaited<ReturnType<typeof getStartedDaytonaSandbox>>,
+  sandbox: RunningDaytonaSandbox,
   terminalId: string,
   onData: (data: Uint8Array) => void | Promise<void>,
   attempts = 1
@@ -192,7 +193,7 @@ export async function refreshDaytonaTerminalGitHubAuth({
   githubUsername?: string | null
   paths?: DaytonaTerminalPaths
   repoUrl?: string
-  sandbox?: StartedDaytonaSandbox
+  sandbox?: RunningDaytonaSandbox
   sandboxId: string
   terminalId: string
 }) {
@@ -213,7 +214,7 @@ export async function refreshDaytonaTerminalGitHubAuth({
     return null
   }
 
-  const sandbox = providedSandbox ?? (await getStartedDaytonaSandbox(sandboxId))
+  const sandbox = providedSandbox ?? (await getRunningDaytonaSandbox(sandboxId))
   const paths = providedPaths ?? (await resolveDaytonaPaths(sandbox))
   await session.githubAuth?.cleanup()
   const auth = await setupSandboxGitHubAuth({
@@ -295,7 +296,7 @@ export async function connectDaytonaTerminal({
   let sandboxAndPaths: Promise<DaytonaTerminalSessionContext> | undefined
   function getSandboxAndPaths() {
     sandboxAndPaths ??= (async () => {
-      const sandbox = await getStartedDaytonaSandbox(sandboxId)
+      const sandbox = await getRunningDaytonaSandbox(sandboxId)
       const paths = await resolveDaytonaPaths(sandbox)
       return { paths, sandbox }
     })()
@@ -424,7 +425,7 @@ export async function sendDaytonaTerminalInput({
     return
   }
 
-  const sandbox = await getStartedDaytonaSandbox(sandboxId)
+  const sandbox = await getRunningDaytonaSandbox(sandboxId)
   const cleanId = cleanTerminalId(terminalId)
   const onData = session
     ? (chunk: Uint8Array) => emitToSubscribers(session, chunk)
@@ -464,7 +465,7 @@ export async function resizeDaytonaTerminal({
   }
 
   if (session) {
-    const sandbox = await getStartedDaytonaSandbox(sandboxId)
+    const sandbox = await getRunningDaytonaSandbox(sandboxId)
     const cleanId = cleanTerminalId(terminalId)
     const connectedHandle = await sandbox.process.connectPty(cleanId, {
       onData: (data) => emitToSubscribers(session, data),
@@ -474,7 +475,7 @@ export async function resizeDaytonaTerminal({
     return
   }
 
-  const sandbox = await getStartedDaytonaSandbox(sandboxId)
+  const sandbox = await getRunningDaytonaSandbox(sandboxId)
   await sandbox.process.resizePtySession(
     cleanTerminalId(terminalId),
     size.cols,
@@ -512,10 +513,15 @@ export async function killDaytonaTerminal(
     return
   }
 
-  const sandbox = await getStartedDaytonaSandbox(sandboxId)
-  await sandbox.process
-    .killPtySession(cleanTerminalId(terminalId))
-    .catch(() => {
-      // The PTY may already be gone.
-    })
+  try {
+    const sandbox = await getRunningDaytonaSandbox(sandboxId)
+    await sandbox.process
+      .killPtySession(cleanTerminalId(terminalId))
+      .catch(() => {
+        // The PTY may already be gone.
+      })
+  } catch (error) {
+    if (error instanceof DaytonaSandboxNotRunningError) return
+    throw error
+  }
 }

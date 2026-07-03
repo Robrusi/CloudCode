@@ -3,6 +3,7 @@ import {
   pauseCurrentUserSandboxForBilling,
   requireCurrentUserInfraAccess,
 } from "@/lib/billing/server"
+import { DaytonaSandboxNotRunningError } from "@/lib/daytona/sandbox"
 import { jsonError } from "@/lib/http/api-route"
 import { requireCurrentUserSandbox } from "@/lib/sandbox/authorization"
 
@@ -17,6 +18,17 @@ export function numberParam(
 
 export function terminalRequiredResponse() {
   return jsonError("sandboxId and terminalId required", 400)
+}
+
+export function terminalOperationErrorResponse(
+  error: unknown,
+  fallback: string
+) {
+  if (error instanceof DaytonaSandboxNotRunningError) {
+    return jsonError(error.message, 409)
+  }
+
+  return jsonError(error instanceof Error ? error.message : fallback, 500)
 }
 
 export async function requireTerminalAccess(sandboxId: string) {

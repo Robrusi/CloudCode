@@ -27,6 +27,7 @@ import { requireSameOrigin } from "@/lib/http/request-security"
 import {
   numberParam,
   requireTerminalAccess,
+  terminalOperationErrorResponse,
   terminalRequiredResponse,
 } from "@/lib/sandbox/terminal-route"
 
@@ -89,11 +90,9 @@ export async function GET(request: Request) {
       headers: { "Cache-Control": "no-store" },
     })
   } catch (error) {
-    return jsonError(
-      error instanceof Error
-        ? error.message
-        : "Unable to connect Daytona terminal.",
-      500
+    return terminalOperationErrorResponse(
+      error,
+      "Unable to connect Daytona terminal."
     )
   }
 }
@@ -132,11 +131,9 @@ export async function POST(request: Request) {
       })
     return NextResponse.json({ ok: true })
   } catch (error) {
-    return jsonError(
-      error instanceof Error
-        ? error.message
-        : "Unable to resize Daytona terminal.",
-      500
+    return terminalOperationErrorResponse(
+      error,
+      "Unable to resize Daytona terminal."
     )
   }
 }

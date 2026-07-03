@@ -336,6 +336,7 @@ export function SandboxTerminalPanel({
               <SandboxTerminalPane
                 key={`${connectedSandboxId}:${session.id}:${session.restartKey}`}
                 active={open && session.id === activeSession?.id}
+                enabled={open}
                 palette={palette}
                 sandboxId={connectedSandboxId}
                 session={session}
