@@ -254,8 +254,8 @@ export function useChatRunActions({
       trimmed,
       attachments,
       active?.messages.length ?? 0,
-      draftSpeed,
-      draftThinking
+      speed,
+      thinking
     )
 
     try {

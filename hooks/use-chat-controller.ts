@@ -1,7 +1,7 @@
 "use client"
 
 import { useUser } from "@clerk/nextjs"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 
 import type { ChatComposerProps } from "@/components/chat/composer"
 import { repoLabel } from "@/components/chat/format"
@@ -31,7 +31,7 @@ import { useChatThreadNotes } from "@/hooks/use-chat-thread-notes"
 import { useChatWorkspacePanels } from "@/hooks/use-chat-workspace-panels"
 import { MOBILE_MEDIA_QUERY, useIsMobile } from "@/hooks/use-is-mobile"
 import { useStoreUserEffect } from "@/hooks/use-store-user-effect"
-import type { BranchMode } from "@/lib/chat/options"
+import type { BranchMode, Speed, Thinking } from "@/lib/chat/options"
 
 const DEFAULT_COMPOSER_HEIGHT = 144
 const THREAD_BOTTOM_CLEARANCE = 32
@@ -235,8 +235,36 @@ export function useChatController(): ChatShellProps {
   const sandboxPresetId = active
     ? active.sandboxPresetId
     : effectiveDraftSandboxPresetId
-  const speed = draftSpeed
-  const thinking = draftThinking
+  // Session-local per-thread picks. An open thread must reflect what IT runs
+  // with, not the new-chat draft — an automation chat set to "medium" must not
+  // read as the draft's "high".
+  const [threadRunSettings, setThreadRunSettings] = useState<
+    Record<string, { speed?: Speed; thinking?: Thinking }>
+  >({})
+  // What the thread last actually ran with; every run stamps speed/thinking
+  // onto its assistant message (chat sends and automation dispatches alike).
+  const lastRunSettings = useMemo(() => {
+    const threadMessages = active?.messages
+    if (!threadMessages) return undefined
+    for (let index = threadMessages.length - 1; index >= 0; index -= 1) {
+      const message = threadMessages[index]
+      if (message.speed || message.thinking) {
+        return { speed: message.speed, thinking: message.thinking }
+      }
+    }
+    return undefined
+  }, [active?.messages])
+  const activeRunSettings = active
+    ? threadRunSettings[active.id as string]
+    : undefined
+  const speed = active
+    ? (activeRunSettings?.speed ?? lastRunSettings?.speed ?? draftSpeed)
+    : draftSpeed
+  const thinking = active
+    ? (activeRunSettings?.thinking ??
+      lastRunSettings?.thinking ??
+      draftThinking)
+    : draftThinking
   const { composerHeight, composerRef, focusComposer, textareaRef } =
     useChatComposerLayout({
       defaultComposerHeight: DEFAULT_COMPOSER_HEIGHT,
@@ -433,11 +461,11 @@ export function useChatController(): ChatShellProps {
     onModelSelect,
     onRepoChange,
     onSandboxPresetSelect,
-    onSpeedSelect,
+    onSpeedSelect: onDraftSpeedSelect,
     onSubmit,
     onTextareaBlur,
     onTextareaFocus,
-    onThinkingSelect,
+    onThinkingSelect: onDraftThinkingSelect,
   } = useChatComposerActions({
     activeThreadId: active?.id ?? null,
     addImageFiles,
@@ -457,6 +485,35 @@ export function useChatController(): ChatShellProps {
     storeModelPreference,
     updateThread,
   })
+  // Inside a thread the pill adjusts that thread's next runs only; the
+  // new-chat draft (and its persisted preference) is untouched.
+  const activeThreadKey = active ? (active.id as string) : null
+  const onSpeedSelect = useCallback(
+    (value: Speed) => {
+      if (!activeThreadKey) {
+        onDraftSpeedSelect(value)
+        return
+      }
+      setThreadRunSettings((current) => ({
+        ...current,
+        [activeThreadKey]: { ...current[activeThreadKey], speed: value },
+      }))
+    },
+    [activeThreadKey, onDraftSpeedSelect]
+  )
+  const onThinkingSelect = useCallback(
+    (value: Thinking) => {
+      if (!activeThreadKey) {
+        onDraftThinkingSelect(value)
+        return
+      }
+      setThreadRunSettings((current) => ({
+        ...current,
+        [activeThreadKey]: { ...current[activeThreadKey], thinking: value },
+      }))
+    },
+    [activeThreadKey, onDraftThinkingSelect]
+  )
   const { activeBranch, activeDiff, changeStats, editorDiff } =
     useChatDiffState({
       active,
