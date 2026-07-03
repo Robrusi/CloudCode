@@ -55,6 +55,31 @@ async function threadRuns(
     .collect()
 }
 
+async function automationIdsForThread(
+  ctx: MutationCtx,
+  thread: Pick<Doc<"threads">, "_id" | "automationId" | "userId">
+) {
+  const [automationsByThread, linkedAutomation] = await Promise.all([
+    ctx.db
+      .query("automations")
+      .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
+      .collect(),
+    thread.automationId ? ctx.db.get(thread.automationId) : null,
+  ])
+
+  const automationIds = new Set<Id<"automations">>()
+  for (const automation of automationsByThread) {
+    if (automation.userId === thread.userId) {
+      automationIds.add(automation._id)
+    }
+  }
+  if (linkedAutomation?.userId === thread.userId) {
+    automationIds.add(linkedAutomation._id)
+  }
+
+  return [...automationIds]
+}
+
 async function presetNameForThread(
   ctx: QueryCtx,
   presetId: Id<"sandboxPresets"> | undefined
@@ -577,13 +602,10 @@ export const deleteThread = mutation({
     const sandboxIds = sandboxIdsForThreadRuns(thread, runs)
     // An automation's history lives on its thread; deleting the thread
     // deletes the automation with it so no orphaned schedule keeps firing.
-    const automations = await ctx.db
-      .query("automations")
-      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
-      .collect()
+    const automationIds = await automationIdsForThread(ctx, thread)
 
     await Promise.all([
-      ...automations.map((automation) => ctx.db.delete(automation._id)),
+      ...automationIds.map((automationId) => ctx.db.delete(automationId)),
       ...runs.map((run) => ctx.db.delete(run._id)),
       ...runInputs.flatMap((row) => (row ? [ctx.db.delete(row._id)] : [])),
       ...runCheckpoints.flatMap((row) => (row ? [ctx.db.delete(row._id)] : [])),
