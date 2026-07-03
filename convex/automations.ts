@@ -154,6 +154,10 @@ export const create = mutation({
       userId,
     })
 
+    // Link the thread back to its automation so the chat list can hide it
+    // until the first run gives it real content.
+    await ctx.db.patch(threadId, { automationId })
+
     return { automationId, threadId }
   },
 })
@@ -267,7 +271,14 @@ export const remove = mutation({
       userId
     )
 
-    // The thread and its run history survive as a normal chat.
+    // A thread with run history survives as a normal chat; one that never ran
+    // is an empty shell hidden from the chat list, so drop it too.
+    const thread = await ctx.db.get(automation.threadId)
+    if (thread && !thread.lastUserMessageAt) {
+      await ctx.db.delete(automation.threadId)
+    } else if (thread?.automationId === automation._id) {
+      await ctx.db.patch(automation.threadId, { automationId: undefined })
+    }
     await ctx.db.delete(automation._id)
   },
 })

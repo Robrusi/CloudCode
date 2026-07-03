@@ -482,6 +482,9 @@ export default defineSchema({
     .index("by_user_updated", ["userId", "updatedAt"]),
 
   threads: defineTable({
+    // Set when the thread belongs to an automation; such threads stay out of
+    // the chat list until their first run posts messages.
+    automationId: v.optional(v.id("automations")),
     baseBranch: v.optional(v.string()),
     branchMode: v.optional(branchMode),
     codexThreadId: v.optional(v.string()),

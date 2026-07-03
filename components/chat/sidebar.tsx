@@ -1,7 +1,7 @@
 "use client"
 
 import { useClerk } from "@clerk/nextjs"
-import { CalendarClock, Settings, SquarePen, User, X } from "lucide-react"
+import { Clock, Settings, SquarePen, User, X } from "lucide-react"
 import { type CSSProperties, useMemo } from "react"
 
 import { ResizeHandle } from "@/components/layout/resize-handle"
@@ -121,7 +121,7 @@ export function Sidebar({
                   : "text-foreground/80 hover:bg-muted"
               )}
             >
-              <CalendarClock className="size-3 shrink-0" />
+              <Clock className="size-3 shrink-0" />
               <span>Automations</span>
             </button>
           </div>

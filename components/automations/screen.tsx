@@ -1,7 +1,7 @@
 "use client"
 
 import { useQuery } from "convex/react"
-import { Loader2, Pencil, Play, Trash2 } from "lucide-react"
+import { Clock, Loader2, Pencil, Play, Plus, Trash2 } from "lucide-react"
 import { useEffect, useState } from "react"
 
 import { AutomationComposer } from "@/components/automations/composer"
@@ -12,6 +12,7 @@ import {
 } from "@/components/automations/model"
 import { repoLabel } from "@/components/chat/format"
 import { SettingsConfirmDialog } from "@/components/settings/shared"
+import { Button } from "@/components/ui/button"
 import { IconButton } from "@/components/ui/icon-button"
 import { cardSurfaceClass } from "@/components/ui/surface"
 import { Switch } from "@/components/ui/switch"
@@ -177,6 +178,27 @@ function AutomationRow({
   )
 }
 
+function EmptyState({ onCreate }: { onCreate: () => void }) {
+  return (
+    <div className="flex flex-col items-center pt-16 text-center">
+      <div className="grid size-11 place-items-center rounded-2xl bg-muted text-muted-foreground">
+        <Clock className="size-5" />
+      </div>
+      <p className="mt-4 text-sm font-medium text-foreground">
+        No automations yet
+      </p>
+      <p className="mt-1 max-w-xs text-xs leading-5 text-muted-foreground">
+        Automations run a prompt on a schedule in a fresh sandbox and report
+        back to their own chat.
+      </p>
+      <Button size="sm" onClick={onCreate} className="mt-5 gap-1.5">
+        <Plus className="size-4" />
+        Create automation
+      </Button>
+    </div>
+  )
+}
+
 export function AutomationsScreen({
   defaultRepoUrl,
   onOpenThread,
@@ -185,13 +207,15 @@ export function AutomationsScreen({
   onOpenThread: (threadId: Id<"threads">) => void
 }) {
   const automations = useQuery(api.automations.list)
-  const [editing, setEditing] = useState<AutomationRecord | null>(null)
+  const [active, setActive] = useState<AutomationRecord | "new" | null>(null)
   const [pendingDelete, setPendingDelete] = useState<AutomationRecord | null>(
     null
   )
   const [busyId, setBusyId] = useState<Id<"automations"> | null>(null)
   const [highlightId, setHighlightId] = useState<Id<"automations"> | null>(null)
   const [actionError, setActionError] = useState("")
+
+  const editingId = active && active !== "new" ? active._id : null
 
   useEffect(() => {
     if (!highlightId) return
@@ -241,7 +265,7 @@ export function AutomationsScreen({
     const automation = pendingDelete
     setPendingDelete(null)
     if (!automation) return
-    if (editing?._id === automation._id) setEditing(null)
+    if (editingId === automation._id) setActive(null)
     await runAction(automation, () =>
       postJson(
         "/api/automations/delete",
@@ -258,62 +282,72 @@ export function AutomationsScreen({
         <div className="mx-auto w-full max-w-2xl px-4 pt-8 pb-[calc(5rem+env(safe-area-inset-bottom))] md:px-8 md:pt-12">
           <h1 className="sr-only">Automations</h1>
 
-          <AutomationComposer
-            key={editing?._id ?? "new"}
-            automation={editing}
-            defaultRepoUrl={defaultRepoUrl}
-            onCancel={editing ? () => setEditing(null) : undefined}
-            onSaved={(automationId) => {
-              setEditing(null)
-              setHighlightId(automationId)
-            }}
-          />
-
-          {actionError ? (
-            <p className="mt-4 text-sm text-destructive">{actionError}</p>
-          ) : null}
-
-          {automations === undefined ? (
-            <ul
-              className={cn(
-                cardSurfaceClass,
-                "mt-10 divide-y divide-border/60"
-              )}
-            >
-              {[0, 1].map((index) => (
-                <li key={index} className="px-4 py-3">
-                  <div className="h-4 w-40 animate-pulse rounded bg-muted" />
-                  <div className="mt-2 h-3 w-64 animate-pulse rounded bg-muted/60" />
-                </li>
-              ))}
-            </ul>
-          ) : automations.length === 0 ? (
-            <p className="mt-10 px-1 text-xs text-muted-foreground/70">
-              Runs on a schedule in a fresh sandbox and reports back to its own
-              chat.
-            </p>
+          {active !== null ? (
+            <AutomationComposer
+              key={active === "new" ? "new" : active._id}
+              automation={active === "new" ? null : active}
+              defaultRepoUrl={defaultRepoUrl}
+              onCancel={() => setActive(null)}
+              onSaved={(automationId) => {
+                setActive(null)
+                setHighlightId(automationId)
+              }}
+            />
           ) : (
-            <ul
-              className={cn(
-                cardSurfaceClass,
-                "mt-10 divide-y divide-border/60"
+            <>
+              {actionError ? (
+                <p className="mb-4 text-sm text-destructive">{actionError}</p>
+              ) : null}
+
+              {automations === undefined ? (
+                <ul
+                  className={cn(cardSurfaceClass, "divide-y divide-border/60")}
+                >
+                  {[0, 1].map((index) => (
+                    <li key={index} className="px-4 py-3">
+                      <div className="h-4 w-40 animate-pulse rounded bg-muted" />
+                      <div className="mt-2 h-3 w-64 animate-pulse rounded bg-muted/60" />
+                    </li>
+                  ))}
+                </ul>
+              ) : automations.length === 0 ? (
+                <EmptyState onCreate={() => setActive("new")} />
+              ) : (
+                <>
+                  <div className="mb-3 flex justify-end">
+                    <Button
+                      size="sm"
+                      onClick={() => setActive("new")}
+                      className="gap-1.5"
+                    >
+                      <Plus className="size-4" />
+                      New automation
+                    </Button>
+                  </div>
+                  <ul
+                    className={cn(
+                      cardSurfaceClass,
+                      "divide-y divide-border/60"
+                    )}
+                  >
+                    {automations.map((automation) => (
+                      <AutomationRow
+                        key={automation._id}
+                        automation={automation}
+                        busy={busyId === automation._id}
+                        editing={editingId === automation._id}
+                        highlighted={highlightId === automation._id}
+                        onDelete={() => setPendingDelete(automation)}
+                        onEdit={() => setActive(automation)}
+                        onOpenThread={() => onOpenThread(automation.threadId)}
+                        onRunNow={() => void runNow(automation)}
+                        onToggle={(enabled) => void toggle(automation, enabled)}
+                      />
+                    ))}
+                  </ul>
+                </>
               )}
-            >
-              {automations.map((automation) => (
-                <AutomationRow
-                  key={automation._id}
-                  automation={automation}
-                  busy={busyId === automation._id}
-                  editing={editing?._id === automation._id}
-                  highlighted={highlightId === automation._id}
-                  onDelete={() => setPendingDelete(automation)}
-                  onEdit={() => setEditing(automation)}
-                  onOpenThread={() => onOpenThread(automation.threadId)}
-                  onRunNow={() => void runNow(automation)}
-                  onToggle={(enabled) => void toggle(automation, enabled)}
-                />
-              ))}
-            </ul>
+            </>
           )}
         </div>
       </div>

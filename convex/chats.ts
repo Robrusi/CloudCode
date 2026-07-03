@@ -120,8 +120,14 @@ export const list = query({
       .order("desc")
       .take(THREAD_LIST_LIMIT)
 
+    // Automation threads only join the chat list once a run has posted to
+    // them; before that they are empty shells managed from Automations.
+    const visible = threads.filter(
+      (thread) => !thread.automationId || thread.lastUserMessageAt
+    )
+
     return await Promise.all(
-      threads.map((thread) => threadSummaryRecord(ctx, thread))
+      visible.map((thread) => threadSummaryRecord(ctx, thread))
     )
   },
 })
