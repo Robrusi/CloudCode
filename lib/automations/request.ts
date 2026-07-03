@@ -1,6 +1,10 @@
 import {
   parseAutomationName,
+  parseAutomationSandboxRetention,
   parseAutomationTaskPrompt,
+  parseAutomationThreadMode,
+  type AutomationSandboxRetention,
+  type AutomationThreadMode,
 } from "@/lib/automations/config"
 import {
   validateAutomationCron,
@@ -30,7 +34,9 @@ export type AutomationRequestConfig = {
   reasoningEffort: ReasoningEffort
   repoUrl: string
   sandboxPresetId?: string
+  sandboxRetention: AutomationSandboxRetention
   speed: CodexSpeed
+  threadMode: AutomationThreadMode
   timezone: string
 }
 
@@ -72,7 +78,9 @@ export function parseAutomationRequestConfig(
     reasoningEffort,
     repoUrl,
     sandboxPresetId: jsonRawStringField(body, "sandboxPresetId"),
+    sandboxRetention: parseAutomationSandboxRetention(body.sandboxRetention),
     speed,
+    threadMode: parseAutomationThreadMode(body.threadMode),
     timezone: validateAutomationTimezone(body.timezone),
   }
 }

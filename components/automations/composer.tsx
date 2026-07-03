@@ -54,6 +54,65 @@ function DetailRow({
   )
 }
 
+/** Chip + popover for a small fixed set of options with descriptions. */
+function OptionChip<T extends string>({
+  ariaLabel,
+  onChange,
+  options,
+  value,
+}: {
+  ariaLabel: string
+  onChange: (value: T) => void
+  options: Array<{ value: T; label: string; description: string }>
+  value: T
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useClickOutside(ref, open, () => setOpen(false))
+  const current = options.find((option) => option.value === value)
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        className={cn(chipTrigger, "gap-1.5 text-foreground")}
+      >
+        <span>{current?.label ?? value}</span>
+        <ChevronDown className="size-3 shrink-0 opacity-60" />
+      </button>
+      {open ? (
+        <div className={cn(popoverPanel, "top-10 right-0 w-64")}>
+          {options.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => {
+                onChange(option.value)
+                setOpen(false)
+              }}
+              className={cn(popoverItem, "items-start gap-3 py-2")}
+            >
+              <span className="flex min-w-0 flex-col">
+                <span className="text-foreground">{option.label}</span>
+                <span className="text-xs text-muted-foreground">
+                  {option.description}
+                </span>
+              </span>
+              {option.value === value ? (
+                <Check className="mt-0.5 size-4 shrink-0" strokeWidth={2.25} />
+              ) : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function ModelChip({
   model,
   thinking,
@@ -291,6 +350,46 @@ export function AutomationComposer({
             onSelectThinking={(thinking) => set("reasoningEffort", thinking)}
             open={modelOpen}
             setOpen={setModelOpen}
+          />
+        </DetailRow>
+        <DetailRow label="Sandbox">
+          <OptionChip
+            ariaLabel="Sandbox after run"
+            value={draft.sandboxRetention}
+            onChange={(sandboxRetention) =>
+              set("sandboxRetention", sandboxRetention)
+            }
+            options={[
+              {
+                description: "Removed when the run finishes",
+                label: "Delete after run",
+                value: "delete",
+              },
+              {
+                description: "Stays available for follow-ups",
+                label: "Keep idle",
+                value: "idle",
+              },
+            ]}
+          />
+        </DetailRow>
+        <DetailRow label="Chat">
+          <OptionChip
+            ariaLabel="Chat per run"
+            value={draft.threadMode}
+            onChange={(threadMode) => set("threadMode", threadMode)}
+            options={[
+              {
+                description: "Runs report into one chat",
+                label: "Same chat",
+                value: "single",
+              },
+              {
+                description: "Each run opens its own chat",
+                label: "New chat per run",
+                value: "per-run",
+              },
+            ]}
           />
         </DetailRow>
       </div>

@@ -35,7 +35,9 @@ export async function POST(request: Request) {
       sandboxPresetId: config.sandboxPresetId as
         | Id<"sandboxPresets">
         | undefined,
+      sandboxRetention: config.sandboxRetention,
       speed: config.speed,
+      threadMode: config.threadMode,
       timezone: config.timezone,
     })
 

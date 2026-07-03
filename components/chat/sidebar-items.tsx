@@ -1,6 +1,6 @@
 "use client"
 
-import { ChevronRight, Ellipsis, Plus } from "lucide-react"
+import { ChevronRight, Clock, Ellipsis, Plus } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
 import { ContextMenu } from "@/components/ui/context-menu"
@@ -178,8 +178,16 @@ function SidebarItem({
             className="flex min-w-0 flex-1 items-center gap-2 py-2 pr-1 pl-2.5 text-left md:pr-2.5"
           >
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <span className="min-w-0 truncate text-[0.8125rem] text-foreground">
-                {chat.title || "Untitled"}
+              <span className="flex min-w-0 items-center gap-1.5">
+                {chat.automationId ? (
+                  <Clock
+                    aria-label="Automation"
+                    className="size-3 shrink-0 text-muted-foreground"
+                  />
+                ) : null}
+                <span className="min-w-0 truncate text-[0.8125rem] text-foreground">
+                  {chat.title || "Untitled"}
+                </span>
               </span>
               <span className="min-w-0 truncate text-[0.6875rem] text-muted-foreground">
                 {relativeTime(chat.lastUserMessageAt)}

@@ -2,6 +2,8 @@ import { defineSchema, defineTable } from "convex/server"
 import { v } from "convex/values"
 
 import {
+  automationSandboxRetention,
+  automationThreadMode,
   branchMode,
   imageAttachment,
   messageMeta,
@@ -96,8 +98,11 @@ export default defineSchema({
     reasoningEffort: thinking,
     repoUrl: v.string(),
     sandboxPresetId: v.optional(v.id("sandboxPresets")),
+    // Unset means the defaults: delete the sandbox at run end, single chat.
+    sandboxRetention: v.optional(automationSandboxRetention),
     speed,
     threadId: v.id("threads"),
+    threadMode: v.optional(automationThreadMode),
     timezone: v.string(),
     updatedAt: v.number(),
     userId: v.id("users"),
@@ -171,6 +176,7 @@ export default defineSchema({
     updatedAt: v.number(),
     userId: v.id("users"),
   })
+    .index("by_automation_created", ["automationId", "createdAt"])
     .index("by_thread_updated", ["threadId", "updatedAt"])
     .index("by_thread_status_updated", ["threadId", "status", "updatedAt"])
     .index("by_ephemeral_sandbox_state", [

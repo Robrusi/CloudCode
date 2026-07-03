@@ -73,7 +73,13 @@ async function automationIdsForThread(
       automationIds.add(automation._id)
     }
   }
-  if (linkedAutomation?.userId === thread.userId) {
+  // Only an automation's CURRENT chat takes the automation down with it. In
+  // per-run mode older chats keep the back-link for provenance; deleting one
+  // of those must not kill the schedule.
+  if (
+    linkedAutomation?.userId === thread.userId &&
+    linkedAutomation.threadId === thread._id
+  ) {
     automationIds.add(linkedAutomation._id)
   }
 
@@ -90,6 +96,7 @@ async function presetNameForThread(
 
 async function threadSummaryRecord(ctx: QueryCtx, thread: Doc<"threads">) {
   return {
+    automationId: thread.automationId,
     baseBranch: thread.baseBranch,
     branchMode: thread.branchMode,
     codexThreadId: thread.codexThreadId,

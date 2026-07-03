@@ -14,6 +14,18 @@ export const branchMode = v.union(
   v.literal("base")
 )
 
+/** Automation sandbox lifecycle: delete at run end, or keep it idling. */
+export const automationSandboxRetention = v.union(
+  v.literal("delete"),
+  v.literal("idle")
+)
+
+/** Automation chat targeting: one shared chat, or a fresh chat per run. */
+export const automationThreadMode = v.union(
+  v.literal("single"),
+  v.literal("per-run")
+)
+
 export const thinking = v.union(
   v.literal("none"),
   v.literal("low"),

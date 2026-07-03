@@ -1,12 +1,19 @@
 "use client"
 
 import { useQuery } from "convex/react"
-import { Clock, Loader2, Pencil, Play, Plus, Trash2 } from "lucide-react"
-import { useEffect, useState } from "react"
+import {
+  ChevronRight,
+  Clock,
+  Loader2,
+  Pencil,
+  Play,
+  Plus,
+  Trash2,
+} from "lucide-react"
+import { useState } from "react"
 
 import { AutomationComposer } from "@/components/automations/composer"
 import {
-  AUTOMATION_STATUS_LABEL,
   formatRelative,
   type AutomationRecord,
 } from "@/components/automations/model"
@@ -14,7 +21,6 @@ import { repoLabel } from "@/components/chat/format"
 import { SettingsConfirmDialog } from "@/components/settings/shared"
 import { Button } from "@/components/ui/button"
 import { IconButton } from "@/components/ui/icon-button"
-import { cardSurfaceClass } from "@/components/ui/surface"
 import { Switch } from "@/components/ui/switch"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -24,6 +30,36 @@ import {
 } from "@/lib/automations/schedule-draft"
 import { postJson } from "@/lib/http/client-json"
 import { cn } from "@/lib/shared/utils"
+
+type RunStatus =
+  | "queued"
+  | "running"
+  | "canceling"
+  | "succeeded"
+  | "failed"
+  | "canceled"
+
+const RUN_STATUS_LABEL: Record<RunStatus, string> = {
+  canceled: "Canceled",
+  canceling: "Canceling",
+  failed: "Failed",
+  queued: "Queued",
+  running: "Running",
+  succeeded: "Succeeded",
+}
+
+function runDotClass(status: RunStatus) {
+  switch (status) {
+    case "succeeded":
+      return "bg-success"
+    case "failed":
+      return "bg-destructive"
+    case "canceled":
+      return "bg-muted-foreground/50"
+    default:
+      return "animate-pulse bg-foreground"
+  }
+}
 
 function statusDotClass(automation: AutomationRecord) {
   if (!automation.enabled) return "bg-muted-foreground/30"
@@ -40,141 +76,204 @@ function statusDotClass(automation: AutomationRecord) {
   }
 }
 
-function branchLabel(automation: AutomationRecord) {
-  if (automation.branchMode === "base") {
-    return automation.baseBranch || "base branch"
+/** Lazy-loaded run history shown when a row is expanded. */
+function RecentRuns({
+  automationId,
+  onOpenThread,
+}: {
+  automationId: Id<"automations">
+  onOpenThread: (threadId: Id<"threads">) => void
+}) {
+  const runs = useQuery(api.automations.recentRuns, { automationId })
+  const now = Date.now()
+
+  if (runs === undefined) {
+    return (
+      <div className="space-y-2 py-2">
+        {[0, 1].map((index) => (
+          <div
+            key={index}
+            className="h-3 w-44 animate-pulse rounded bg-muted/60"
+          />
+        ))}
+      </div>
+    )
   }
-  if (automation.branchMode === "custom" && automation.branchName) {
-    return automation.branchName
+  if (runs.length === 0) {
+    return <p className="py-2 text-xs text-muted-foreground/70">No runs yet.</p>
   }
-  return "new branch"
+
+  return (
+    <ol className="py-1">
+      {runs.map((run) => (
+        <li key={run.id}>
+          <button
+            type="button"
+            onClick={() => onOpenThread(run.threadId)}
+            title="Open chat"
+            className="group/run -ml-1.5 flex w-fit items-center gap-2 rounded-md py-1 pr-2 pl-1.5 text-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/30"
+          >
+            <span
+              aria-hidden
+              className={cn(
+                "size-1.5 shrink-0 rounded-full",
+                runDotClass(run.status as RunStatus)
+              )}
+            />
+            <span className="text-foreground/80">
+              {RUN_STATUS_LABEL[run.status as RunStatus] ?? run.status}
+            </span>
+            <span className="text-muted-foreground/70 tabular-nums">
+              {formatRelative(run.finishedAt ?? run.createdAt, now)}
+            </span>
+          </button>
+        </li>
+      ))}
+    </ol>
+  )
 }
 
 function AutomationRow({
   automation,
   busy,
-  editing,
-  highlighted,
+  expanded,
   onDelete,
   onEdit,
   onOpenThread,
   onRunNow,
   onToggle,
+  onToggleExpanded,
 }: {
   automation: AutomationRecord
   busy: boolean
-  editing: boolean
-  highlighted: boolean
+  expanded: boolean
   onDelete: () => void
   onEdit: () => void
-  onOpenThread: () => void
+  onOpenThread: (threadId: Id<"threads">) => void
   onRunNow: () => void
   onToggle: (enabled: boolean) => void
+  onToggleExpanded: () => void
 }) {
   const now = Date.now()
   const schedule = shortScheduleLabel(scheduleDraftFromCron(automation.cron))
-  const statusLabel = automation.lastRunStatus
-    ? AUTOMATION_STATUS_LABEL[automation.lastRunStatus]
-    : null
   const statusFailed =
     automation.lastRunStatus === "failed" ||
     automation.lastRunStatus === "dispatch_failed"
 
   return (
-    <li
-      className={cn(
-        "group px-4 py-3 transition-colors first:rounded-t-2xl last:rounded-b-2xl hover:bg-muted/40",
-        editing && "bg-muted/40",
-        highlighted && "bg-success/5"
-      )}
-    >
-      <div className="flex items-center gap-3">
-        <span
-          aria-hidden
-          className={cn(
-            "size-1.5 shrink-0 rounded-full",
-            statusDotClass(automation)
-          )}
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-baseline gap-2">
-            <button
-              type="button"
-              onClick={onOpenThread}
-              title="Open chat"
-              className="truncate text-left text-sm font-medium text-foreground outline-none hover:underline focus-visible:underline"
-            >
-              {automation.name}
-            </button>
-            {automation.enabled && automation.nextRunAt ? (
-              <span className="shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">
-                next {formatRelative(automation.nextRunAt, now)}
-              </span>
-            ) : null}
-          </div>
-          <p className="mt-0.5 flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
-            <span className="truncate">
-              {schedule} · {repoLabel(automation.repoUrl)} ·{" "}
-              {branchLabel(automation)}
-            </span>
-            {statusLabel ? (
-              <span
-                className={cn("shrink-0", statusFailed && "text-destructive")}
-                title={automation.lastRunError}
-              >
-                {automation.lastRunAt
-                  ? `${statusLabel.toLowerCase()} ${formatRelative(automation.lastRunAt, now)}`
-                  : statusLabel.toLowerCase()}
-              </span>
-            ) : null}
-          </p>
-          {automation.disabledReason ? (
-            <p className="mt-1 text-xs text-destructive">
-              {automation.disabledReason}
-            </p>
-          ) : null}
-        </div>
+    <li className="group flex items-start gap-3 py-3.5">
+      <span
+        aria-hidden
+        className={cn(
+          "mt-[7px] size-1.5 shrink-0 rounded-full",
+          statusDotClass(automation)
+        )}
+      />
 
-        <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 max-md:opacity-100">
-          <IconButton
-            aria-label="Run now"
-            title="Run now"
-            disabled={busy}
-            onClick={onRunNow}
-          >
-            {busy ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <Play className="size-3.5" />
-            )}
-          </IconButton>
-          <IconButton
-            aria-label="Edit"
-            title="Edit"
-            aria-pressed={editing}
-            onClick={onEdit}
-          >
-            <Pencil className="size-3.5" />
-          </IconButton>
-          <IconButton
-            aria-label="Delete"
-            title="Delete"
-            className="hover:text-destructive"
-            onClick={onDelete}
-          >
-            <Trash2 className="size-3.5" />
-          </IconButton>
-        </div>
-        <Switch
-          checked={automation.enabled}
-          disabled={busy}
-          onCheckedChange={onToggle}
-          aria-label={
-            automation.enabled ? "Disable automation" : "Enable automation"
-          }
-        />
+      <div
+        className={cn("min-w-0 flex-1", !automation.enabled && "opacity-60")}
+      >
+        <button
+          type="button"
+          onClick={onToggleExpanded}
+          aria-expanded={expanded}
+          className="block w-full text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+        >
+          <span className="flex items-baseline gap-2">
+            <span className="truncate text-sm font-medium text-foreground">
+              {automation.name}
+            </span>
+            <span className="shrink-0 truncate text-sm text-muted-foreground">
+              {repoLabel(automation.repoUrl)}
+            </span>
+            <ChevronRight
+              className={cn(
+                "size-3 shrink-0 self-center text-muted-foreground/50 transition-transform",
+                expanded && "rotate-90"
+              )}
+            />
+          </span>
+          <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+            {automation.enabled && automation.nextRunAt
+              ? `Next run ${formatRelative(automation.nextRunAt, now)} · ${schedule}`
+              : schedule}
+            {statusFailed && automation.lastRunAt ? (
+              <span className="text-destructive">
+                {" "}
+                · failed {formatRelative(automation.lastRunAt, now)}
+              </span>
+            ) : null}
+          </span>
+        </button>
+
+        {automation.disabledReason ? (
+          <p className="mt-1 text-xs text-destructive">
+            {automation.disabledReason}
+          </p>
+        ) : null}
+
+        {expanded ? (
+          <div className="mt-1">
+            <RecentRuns
+              automationId={automation._id}
+              onOpenThread={onOpenThread}
+            />
+          </div>
+        ) : null}
       </div>
+
+      <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 max-md:opacity-100">
+        <IconButton
+          aria-label="Run now"
+          title="Run now"
+          disabled={busy}
+          onClick={onRunNow}
+        >
+          {busy ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <Play className="size-3.5" />
+          )}
+        </IconButton>
+        <IconButton aria-label="Edit" title="Edit" onClick={onEdit}>
+          <Pencil className="size-3.5" />
+        </IconButton>
+        <IconButton
+          aria-label="Delete"
+          title="Delete"
+          className="hover:text-destructive"
+          onClick={onDelete}
+        >
+          <Trash2 className="size-3.5" />
+        </IconButton>
+      </div>
+      <Switch
+        checked={automation.enabled}
+        disabled={busy}
+        onCheckedChange={onToggle}
+        aria-label={
+          automation.enabled ? "Disable automation" : "Enable automation"
+        }
+        className="mt-0.5"
+      />
     </li>
+  )
+}
+
+function Section({
+  title,
+  children,
+}: {
+  title: string
+  children: React.ReactNode
+}) {
+  return (
+    <section className="mt-8">
+      <h2 className="border-b border-border/60 pb-2 text-sm font-medium text-foreground">
+        {title}
+      </h2>
+      <ul className="divide-y divide-border/40">{children}</ul>
+    </section>
   )
 }
 
@@ -208,20 +307,14 @@ export function AutomationsScreen({
 }) {
   const automations = useQuery(api.automations.list)
   const [active, setActive] = useState<AutomationRecord | "new" | null>(null)
+  const [expandedId, setExpandedId] = useState<Id<"automations"> | null>(null)
   const [pendingDelete, setPendingDelete] = useState<AutomationRecord | null>(
     null
   )
   const [busyId, setBusyId] = useState<Id<"automations"> | null>(null)
-  const [highlightId, setHighlightId] = useState<Id<"automations"> | null>(null)
   const [actionError, setActionError] = useState("")
 
   const editingId = active && active !== "new" ? active._id : null
-
-  useEffect(() => {
-    if (!highlightId) return
-    const timer = setTimeout(() => setHighlightId(null), 2200)
-    return () => clearTimeout(timer)
-  }, [highlightId])
 
   async function runAction(
     automation: AutomationRecord,
@@ -276,12 +369,28 @@ export function AutomationsScreen({
     )
   }
 
+  const rowProps = (automation: AutomationRecord) => ({
+    automation,
+    busy: busyId === automation._id,
+    expanded: expandedId === automation._id,
+    onDelete: () => setPendingDelete(automation),
+    onEdit: () => setActive(automation),
+    onOpenThread,
+    onRunNow: () => void runNow(automation),
+    onToggle: (enabled: boolean) => void toggle(automation, enabled),
+    onToggleExpanded: () =>
+      setExpandedId((current) =>
+        current === automation._id ? null : automation._id
+      ),
+  })
+
+  const current = automations?.filter((automation) => automation.enabled) ?? []
+  const paused = automations?.filter((automation) => !automation.enabled) ?? []
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         <div className="mx-auto w-full max-w-2xl px-4 pt-8 pb-[calc(5rem+env(safe-area-inset-bottom))] md:px-8 md:pt-12">
-          <h1 className="sr-only">Automations</h1>
-
           {active !== null ? (
             <AutomationComposer
               key={active === "new" ? "new" : active._id}
@@ -290,61 +399,67 @@ export function AutomationsScreen({
               onCancel={() => setActive(null)}
               onSaved={(automationId) => {
                 setActive(null)
-                setHighlightId(automationId)
+                setExpandedId(automationId)
               }}
             />
           ) : (
             <>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h1 className="text-2xl tracking-tight">Automations</h1>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Run prompts on a schedule in fresh sandboxes.
+                  </p>
+                </div>
+                {automations?.length ? (
+                  <Button
+                    size="sm"
+                    onClick={() => setActive("new")}
+                    className="shrink-0 gap-1.5"
+                  >
+                    <Plus className="size-4" />
+                    New automation
+                  </Button>
+                ) : null}
+              </div>
+
               {actionError ? (
-                <p className="mb-4 text-sm text-destructive">{actionError}</p>
+                <p className="mt-4 text-sm text-destructive">{actionError}</p>
               ) : null}
 
               {automations === undefined ? (
-                <ul
-                  className={cn(cardSurfaceClass, "divide-y divide-border/60")}
-                >
+                <div className="mt-10 space-y-6">
                   {[0, 1].map((index) => (
-                    <li key={index} className="px-4 py-3">
+                    <div key={index}>
                       <div className="h-4 w-40 animate-pulse rounded bg-muted" />
                       <div className="mt-2 h-3 w-64 animate-pulse rounded bg-muted/60" />
-                    </li>
+                    </div>
                   ))}
-                </ul>
+                </div>
               ) : automations.length === 0 ? (
                 <EmptyState onCreate={() => setActive("new")} />
               ) : (
                 <>
-                  <div className="mb-3 flex justify-end">
-                    <Button
-                      size="sm"
-                      onClick={() => setActive("new")}
-                      className="gap-1.5"
-                    >
-                      <Plus className="size-4" />
-                      New automation
-                    </Button>
-                  </div>
-                  <ul
-                    className={cn(
-                      cardSurfaceClass,
-                      "divide-y divide-border/60"
-                    )}
-                  >
-                    {automations.map((automation) => (
-                      <AutomationRow
-                        key={automation._id}
-                        automation={automation}
-                        busy={busyId === automation._id}
-                        editing={editingId === automation._id}
-                        highlighted={highlightId === automation._id}
-                        onDelete={() => setPendingDelete(automation)}
-                        onEdit={() => setActive(automation)}
-                        onOpenThread={() => onOpenThread(automation.threadId)}
-                        onRunNow={() => void runNow(automation)}
-                        onToggle={(enabled) => void toggle(automation, enabled)}
-                      />
-                    ))}
-                  </ul>
+                  {current.length ? (
+                    <Section title="Current">
+                      {current.map((automation) => (
+                        <AutomationRow
+                          key={automation._id}
+                          {...rowProps(automation)}
+                        />
+                      ))}
+                    </Section>
+                  ) : null}
+                  {paused.length ? (
+                    <Section title="Paused">
+                      {paused.map((automation) => (
+                        <AutomationRow
+                          key={automation._id}
+                          {...rowProps(automation)}
+                        />
+                      ))}
+                    </Section>
+                  ) : null}
                 </>
               )}
             </>

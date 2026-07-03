@@ -2,6 +2,12 @@ import type { Doc } from "@/convex/_generated/dataModel"
 import type { Model, Speed, Thinking } from "@/lib/chat/options"
 import type { BranchMode } from "@/lib/codex/branch-names"
 import {
+  AUTOMATION_SANDBOX_RETENTION_DEFAULT,
+  AUTOMATION_THREAD_MODE_DEFAULT,
+  type AutomationSandboxRetention,
+  type AutomationThreadMode,
+} from "@/lib/automations/config"
+import {
   cronFromScheduleDraft,
   scheduleDraftFromCron,
   type ScheduleDraft,
@@ -30,8 +36,10 @@ export type AutomationDraft = {
   reasoningEffort: Thinking
   repoUrl: string
   sandboxPresetId: string
+  sandboxRetention: AutomationSandboxRetention
   schedule: ScheduleDraft
   speed: Speed
+  threadMode: AutomationThreadMode
   timezone: string
 }
 
@@ -62,8 +70,10 @@ export function emptyAutomationDraft(): AutomationDraft {
     reasoningEffort: "medium",
     repoUrl: "",
     sandboxPresetId: "",
+    sandboxRetention: AUTOMATION_SANDBOX_RETENTION_DEFAULT,
     schedule: { kind: "daily", time: "09:00" },
     speed: "standard",
+    threadMode: AUTOMATION_THREAD_MODE_DEFAULT,
     timezone: browserTimezone(),
   }
 }
@@ -81,11 +91,14 @@ export function automationDraftFromRecord(
     reasoningEffort: automation.reasoningEffort,
     repoUrl: automation.repoUrl,
     sandboxPresetId: automation.sandboxPresetId ?? "",
+    sandboxRetention:
+      automation.sandboxRetention ?? AUTOMATION_SANDBOX_RETENTION_DEFAULT,
     // Crons the structured kinds cannot express reopen losslessly as "Custom".
     schedule: automation.cron
       ? scheduleDraftFromCron(automation.cron)
       : { kind: "daily", time: "09:00" },
     speed: automation.speed,
+    threadMode: automation.threadMode ?? AUTOMATION_THREAD_MODE_DEFAULT,
     timezone: automation.timezone,
   }
 }
@@ -119,7 +132,9 @@ export function automationRequestBody(draft: AutomationDraft) {
     reasoningEffort: draft.reasoningEffort,
     repoUrl: draft.repoUrl,
     sandboxPresetId: draft.sandboxPresetId || undefined,
+    sandboxRetention: draft.sandboxRetention,
     speed: draft.speed,
+    threadMode: draft.threadMode,
     timezone: draft.timezone,
   }
 }

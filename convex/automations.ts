@@ -12,7 +12,14 @@ import {
   appendCodexRunLogs,
   upsertCodexRunCheckpoint,
 } from "./lib/codexRunRecords"
-import { branchMode, model, speed, thinking } from "./lib/codexRunValidators"
+import {
+  automationSandboxRetention,
+  automationThreadMode,
+  branchMode,
+  model,
+  speed,
+  thinking,
+} from "./lib/codexRunValidators"
 import { resolveOwnedPresetOrAutoDefault } from "./lib/sandboxPresets"
 import { ensureCurrentUser, getCurrentUser } from "./lib/users"
 import { requireWorkerSecret } from "./lib/workerAuth"
@@ -37,7 +44,9 @@ const automationConfigArgs = {
   reasoningEffort: thinking,
   repoUrl: v.string(),
   sandboxPresetId: v.optional(v.id("sandboxPresets")),
+  sandboxRetention: v.optional(automationSandboxRetention),
   speed,
+  threadMode: v.optional(automationThreadMode),
   timezone: v.string(),
 }
 
@@ -53,7 +62,9 @@ type AutomationConfigArgs = {
   reasoningEffort: Doc<"automations">["reasoningEffort"]
   repoUrl: string
   sandboxPresetId?: Id<"sandboxPresets">
+  sandboxRetention?: Doc<"automations">["sandboxRetention"]
   speed: Doc<"automations">["speed"]
+  threadMode?: Doc<"automations">["threadMode"]
   timezone: string
 }
 
@@ -147,8 +158,12 @@ export const create = mutation({
       reasoningEffort: args.reasoningEffort,
       repoUrl: args.repoUrl,
       sandboxPresetId,
+      ...(args.sandboxRetention
+        ? { sandboxRetention: args.sandboxRetention }
+        : {}),
       speed: args.speed,
       threadId,
+      ...(args.threadMode ? { threadMode: args.threadMode } : {}),
       timezone: args.timezone.trim(),
       updatedAt: now,
       userId,
@@ -200,7 +215,9 @@ export const update = mutation({
         reasoningEffort: args.reasoningEffort,
         repoUrl: args.repoUrl,
         sandboxPresetId,
+        sandboxRetention: args.sandboxRetention,
         speed: args.speed,
+        threadMode: args.threadMode,
         timezone: args.timezone.trim(),
         updatedAt: now,
       }),
@@ -295,6 +312,38 @@ export const get = query({
     if (!automation || automation.userId !== user._id) return null
 
     return automation
+  },
+})
+
+const RECENT_RUNS_LIMIT = 5
+
+/** Latest runs of one automation, for the expandable row on the screen. */
+export const recentRuns = query({
+  args: {
+    automationId: v.id("automations"),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx)
+    if (!user) return []
+
+    const automation = await ctx.db.get(args.automationId)
+    if (!automation || automation.userId !== user._id) return []
+
+    const runs = await ctx.db
+      .query("codexRuns")
+      .withIndex("by_automation_created", (q) =>
+        q.eq("automationId", args.automationId)
+      )
+      .order("desc")
+      .take(RECENT_RUNS_LIMIT)
+
+    return runs.map((run) => ({
+      createdAt: run.createdAt,
+      finishedAt: run.finishedAt,
+      id: run._id,
+      status: run.status,
+      threadId: run.threadId,
+    }))
   },
 })
 
@@ -438,10 +487,42 @@ export const workerCreateRun = mutation({
 
     const now = Date.now()
     const userId = automation.userId
+    const sandboxRetention = automation.sandboxRetention ?? "delete"
+    const threadMode = automation.threadMode ?? "single"
+
+    // Per-run mode opens a fresh chat once the current one has been used;
+    // automation.threadId always points at the latest chat so "Open chat"
+    // and the overlap guard track it.
+    let threadId = automation.threadId
+    if (threadMode === "per-run" && thread.lastUserMessageAt) {
+      threadId = await ctx.db.insert("threads", {
+        automationId: automation._id,
+        ...(automation.baseBranch ? { baseBranch: automation.baseBranch } : {}),
+        ...(automation.branchMode ? { branchMode: automation.branchMode } : {}),
+        createdAt: now,
+        model: automation.model,
+        repoUrl: automation.repoUrl,
+        sandboxPresetId,
+        title: automation.name,
+        updatedAt: now,
+        userId,
+      })
+    }
+
+    // "Idle" retention keeps the sandbox on the chat at run end; when the
+    // same chat runs again it resumes that sandbox instead of provisioning
+    // a fresh one.
+    const reusedSandboxId =
+      sandboxRetention === "idle" &&
+      threadId === automation.threadId &&
+      thread.sandboxState !== "deleted"
+        ? thread.sandboxId
+        : undefined
+
     await ctx.db.insert("messages", {
       content: automation.prompt,
       role: "user",
-      threadId: automation.threadId,
+      threadId,
       userId,
     })
     const assistantMessageId = await ctx.db.insert("messages", {
@@ -450,7 +531,7 @@ export const workerCreateRun = mutation({
       role: "assistant",
       speed: automation.speed,
       thinking: automation.reasoningEffort,
-      threadId: automation.threadId,
+      threadId,
       userId,
     })
 
@@ -466,15 +547,18 @@ export const workerCreateRun = mutation({
       ...(automation.branchMode ? { branchMode: automation.branchMode } : {}),
       ...(automation.branchName ? { branchName: automation.branchName } : {}),
       createdAt: now,
-      ephemeralSandbox: true,
+      ephemeralSandbox: sandboxRetention === "delete",
       model: automation.model,
       profile: auth.profile,
       reasoningEffort: automation.reasoningEffort,
       repoUrl: automation.repoUrl,
       sandboxPresetId,
+      ...(reusedSandboxId
+        ? { sandboxId: reusedSandboxId, sandboxState: "running" as const }
+        : {}),
       speed: automation.speed,
       status: "queued",
-      threadId: automation.threadId,
+      threadId,
       updatedAt: now,
       userId,
       ...(args.githubUserEmail
@@ -494,15 +578,11 @@ export const workerCreateRun = mutation({
       }),
       upsertCodexRunCheckpoint(
         ctx,
-        { _id: runId, threadId: automation.threadId, userId },
+        { _id: runId, threadId, userId },
         { content: "" }
       ),
-      appendCodexRunLogs(
-        ctx,
-        { _id: runId, threadId: automation.threadId, userId },
-        [queuedLog]
-      ),
-      ctx.db.patch(automation.threadId, {
+      appendCodexRunLogs(ctx, { _id: runId, threadId, userId }, [queuedLog]),
+      ctx.db.patch(threadId, {
         hasPendingMessage: true,
         lastUserMessageAt: now,
         updatedAt: now,
@@ -511,6 +591,7 @@ export const workerCreateRun = mutation({
         lastRunAt: now,
         lastRunError: undefined,
         lastRunStatus: "running",
+        ...(threadId !== automation.threadId ? { threadId } : {}),
         updatedAt: now,
       }),
     ])
@@ -518,7 +599,7 @@ export const workerCreateRun = mutation({
     return {
       ok: true as const,
       runId,
-      threadId: automation.threadId,
+      threadId,
       userId,
     }
   },

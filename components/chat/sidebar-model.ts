@@ -2,6 +2,7 @@ import type { Id } from "@/convex/_generated/dataModel"
 import type { SandboxState } from "@/components/chat/sandbox-types"
 
 export type SidebarChat = {
+  automationId?: Id<"automations">
   id: Id<"threads">
   lastUserMessageAt: number
   pending: boolean
