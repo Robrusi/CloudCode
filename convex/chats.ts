@@ -55,35 +55,51 @@ async function threadRuns(
     .collect()
 }
 
-async function automationIdsForThread(
+/**
+ * An automation keeps a live "current chat" in `threadId`. When the user
+ * deletes that chat we must NOT delete the automation — instead we move it to a
+ * fresh empty shell thread so the schedule keeps firing and posts into a new
+ * chat on its next run. Only the automation's current chat is repointed; older
+ * per-run chats keep their back-link for provenance and are left untouched.
+ */
+async function relinkAutomationsOffThread(
   ctx: MutationCtx,
-  thread: Pick<Doc<"threads">, "_id" | "automationId" | "userId">
+  thread: Pick<Doc<"threads">, "_id" | "userId">
 ) {
-  const [automationsByThread, linkedAutomation] = await Promise.all([
-    ctx.db
-      .query("automations")
-      .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
-      .collect(),
-    thread.automationId ? ctx.db.get(thread.automationId) : null,
-  ])
+  const automations = await ctx.db
+    .query("automations")
+    .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
+    .collect()
 
-  const automationIds = new Set<Id<"automations">>()
-  for (const automation of automationsByThread) {
-    if (automation.userId === thread.userId) {
-      automationIds.add(automation._id)
-    }
-  }
-  // Only an automation's CURRENT chat takes the automation down with it. In
-  // per-run mode older chats keep the back-link for provenance; deleting one
-  // of those must not kill the schedule.
-  if (
-    linkedAutomation?.userId === thread.userId &&
-    linkedAutomation.threadId === thread._id
-  ) {
-    automationIds.add(linkedAutomation._id)
-  }
-
-  return [...automationIds]
+  const now = Date.now()
+  await Promise.all(
+    automations
+      .filter((automation) => automation.userId === thread.userId)
+      .map(async (automation) => {
+        const replacementThreadId = await ctx.db.insert("threads", {
+          automationId: automation._id,
+          ...(automation.baseBranch
+            ? { baseBranch: automation.baseBranch }
+            : {}),
+          ...(automation.branchMode
+            ? { branchMode: automation.branchMode }
+            : {}),
+          createdAt: now,
+          model: automation.model,
+          repoUrl: automation.repoUrl,
+          ...(automation.sandboxPresetId
+            ? { sandboxPresetId: automation.sandboxPresetId }
+            : {}),
+          title: automation.name,
+          updatedAt: now,
+          userId: automation.userId,
+        })
+        await ctx.db.patch(automation._id, {
+          threadId: replacementThreadId,
+          updatedAt: now,
+        })
+      })
+  )
 }
 
 async function presetNameForThread(
@@ -607,12 +623,12 @@ export const deleteThread = mutation({
       ),
     ])
     const sandboxIds = sandboxIdsForThreadRuns(thread, runs)
-    // An automation's history lives on its thread; deleting the thread
-    // deletes the automation with it so no orphaned schedule keeps firing.
-    const automationIds = await automationIdsForThread(ctx, thread)
+    // Deleting an automation's current chat must not delete the automation:
+    // move any such automation onto a fresh shell thread first so its schedule
+    // survives and keeps posting into a new chat.
+    await relinkAutomationsOffThread(ctx, thread)
 
     await Promise.all([
-      ...automationIds.map((automationId) => ctx.db.delete(automationId)),
       ...runs.map((run) => ctx.db.delete(run._id)),
       ...runInputs.flatMap((row) => (row ? [ctx.db.delete(row._id)] : [])),
       ...runCheckpoints.flatMap((row) => (row ? [ctx.db.delete(row._id)] : [])),

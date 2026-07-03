@@ -1,5 +1,6 @@
 "use client"
 
+import { useQuery } from "convex/react"
 import { Check, ChevronDown } from "lucide-react"
 import { useRef, useState, type ReactNode } from "react"
 
@@ -19,11 +20,14 @@ import {
   popoverItem,
   popoverPanel,
 } from "@/components/chat/control-styles"
+import { PresetPill } from "@/components/chat/controls"
 import { RepoChip } from "@/components/chat/repo-chip"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import type { SandboxPresetRecord } from "@/lib/sandbox/preset-types"
 import {
   MODEL_LABEL,
   MODELS,
@@ -38,6 +42,8 @@ import { postJson } from "@/lib/http/client-json"
 import { cn } from "@/lib/shared/utils"
 
 type CreatedAutomation = { automationId: Id<"automations"> }
+
+const EMPTY_SANDBOX_PRESETS: SandboxPresetRecord[] = []
 
 function DetailRow({
   label,
@@ -209,7 +215,13 @@ export function AutomationComposer({
   const [branchTargetOpen, setBranchTargetOpen] = useState(false)
   const [editingRepo, setEditingRepo] = useState(false)
   const [modelOpen, setModelOpen] = useState(false)
+  const [presetOpen, setPresetOpen] = useState(false)
   const [scheduleOpen, setScheduleOpen] = useState(false)
+
+  const rawPresets = useQuery(api.sandboxPresets.list)
+  const sandboxPresets = rawPresets
+    ? (rawPresets as SandboxPresetRecord[])
+    : EMPTY_SANDBOX_PRESETS
 
   const set = <K extends keyof AutomationDraft>(
     key: K,
@@ -349,22 +361,15 @@ export function AutomationComposer({
           />
         </DetailRow>
         <DetailRow label="Environment setup">
-          <OptionChip
-            ariaLabel="Set up the environment automatically"
-            value={draft.autoEnvironment ? "auto" : "default"}
-            onChange={(mode) =>
-              // The chip owns the preset choice; drop any stored preset so the
-              // server resolves the matching built-in.
-              setDraft((current) => ({
-                ...current,
-                autoEnvironment: mode === "auto",
-                sandboxPresetId: "",
-              }))
+          <PresetPill
+            value={draft.sandboxPresetId as Id<"sandboxPresets"> | ""}
+            presets={sandboxPresets}
+            open={presetOpen}
+            setOpen={setPresetOpen}
+            menuPlacement="down"
+            onSelect={(sandboxPresetId) =>
+              set("sandboxPresetId", sandboxPresetId)
             }
-            options={[
-              { label: "Automatic", value: "auto" },
-              { label: "Default", value: "default" },
-            ]}
           />
         </DetailRow>
         <DetailRow label="Sandbox">
