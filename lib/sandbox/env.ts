@@ -178,45 +178,53 @@ export async function removeCloudcodeEnvLocalVars(
   return { changed: true }
 }
 
-export async function withoutCloudcodeEnvLocal<T>(
-  target: SandboxEnvTarget,
+// Shell equivalent of trimManagedBlock: drop the managed block, collapse
+// blank-line runs, and trim leading/trailing blank lines.
+const TRIM_MANAGED_BLOCK_AWK = [
+  "$0 == block_start { skip = 1; next }",
+  "skip { if ($0 == block_end) skip = 0; next }",
+  "/^[[:space:]]*$/ { if (printed) pending = 1; next }",
+  '{ if (pending) print ""; pending = 0; printed = 1; print }',
+].join("\n")
+
+/**
+ * Wraps a shell script so it runs with the Cloudcode-managed env files
+ * hidden: the managed block is stripped from .env.local and the preset env
+ * files are stashed away, then everything is restored on exit. Doing the
+ * stash/restore inside a single sandbox command avoids the many sequential
+ * sandbox roundtrips the file-by-file equivalent would need.
+ */
+export function withoutCloudcodeEnvLocalScript(
   paths: {
     legacyPresetEnvPath?: string
     presetEnvPath: string
     repoPath: string
   },
-  action: () => Promise<T>
+  script: string
 ) {
-  const original = await readEnvLocal(target, paths.repoPath)
-  const cleaned = original === null ? null : trimManagedBlock(original)
-  const changed = original !== null && cleaned !== original.trimEnd()
-  const runtimeEnv = await readFile(target, paths.presetEnvPath)
-  const legacyPresetEnvPath =
+  const envLocal = shellQuote(envLocalPath(paths.repoPath))
+  const presetEnv = shellQuote(paths.presetEnvPath)
+  const legacyPresetEnv = shellQuote(
     paths.legacyPresetEnvPath ?? CLOUDCODE_LEGACY_PRESET_ENV_PATH
+  )
 
-  if (changed) {
-    await writeEnvLocal(target, paths.repoPath, cleaned || null)
-  }
-  await target
-    .runCommand(
-      `rm -f ${shellQuote(paths.presetEnvPath)} ${shellQuote(legacyPresetEnvPath)}`,
-      { timeoutMs: 10_000 }
-    )
-    .catch(() => undefined)
-
-  try {
-    return await action()
-  } finally {
-    if (changed) {
-      await writeEnvLocal(target, paths.repoPath, original)
-    }
-    if (runtimeEnv !== null) {
-      await target.writeTextFile(paths.presetEnvPath, runtimeEnv)
-      await target
-        .runCommand(`chmod 600 ${shellQuote(paths.presetEnvPath)}`, {
-          timeoutMs: 10_000,
-        })
-        .catch(() => undefined)
-    }
-  }
+  return [
+    `__cloudcode_env_stash=$(mktemp -d)`,
+    "__cloudcode_env_restore() {",
+    `  if [ -f "$__cloudcode_env_stash/env.local" ]; then mv -f "$__cloudcode_env_stash/env.local" ${envLocal} 2>/dev/null; fi`,
+    `  if [ -f "$__cloudcode_env_stash/preset-env.sh" ]; then mv -f "$__cloudcode_env_stash/preset-env.sh" ${presetEnv} 2>/dev/null; fi`,
+    `  rm -rf "$__cloudcode_env_stash" 2>/dev/null`,
+    "}",
+    "trap __cloudcode_env_restore EXIT",
+    `if [ -f ${envLocal} ] && grep -qxF ${shellQuote(CLOUDCODE_ENV_START)} ${envLocal}; then`,
+    `  cp ${envLocal} "$__cloudcode_env_stash/env.local"`,
+    `  awk -v block_start=${shellQuote(CLOUDCODE_ENV_START)} -v block_end=${shellQuote(
+      CLOUDCODE_ENV_END
+    )} ${shellQuote(TRIM_MANAGED_BLOCK_AWK)} "$__cloudcode_env_stash/env.local" > ${envLocal}`,
+    `  if ! grep -q '[^[:space:]]' ${envLocal}; then rm -f ${envLocal}; fi`,
+    "fi",
+    `if [ -f ${presetEnv} ]; then mv -f ${presetEnv} "$__cloudcode_env_stash/preset-env.sh"; fi`,
+    `rm -f ${legacyPresetEnv}`,
+    script,
+  ].join("\n")
 }

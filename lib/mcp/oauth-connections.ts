@@ -33,31 +33,52 @@ async function getStoredConnection(provider: McpOauthProvider) {
   })
 }
 
-function staticClientCredentials(
-  provider: McpOauthProvider,
-  redirectUri: string
-) {
+export type McpSuppliedOauthClient = {
+  clientId: string
+  clientSecret: string
+}
+
+function envClientCredentials(provider: McpOauthProvider) {
   if (!provider.staticClientEnv) return null
   const { clientIdVar, clientSecretVar } = provider.staticClientEnv
   const clientId = process.env[clientIdVar]?.trim()
   const clientSecret = process.env[clientSecretVar]?.trim()
-
-  if (!clientId || !clientSecret) {
-    throw new Error(
-      `${provider.name} does not support automatic client registration. Create an OAuth app in ${provider.name} with redirect URL ${redirectUri}, then set ${clientIdVar} and ${clientSecretVar}.`
-    )
-  }
-
+  if (!clientId || !clientSecret) return null
   return { clientId, clientSecret }
 }
 
+async function storedClientCredentials(provider: McpOauthProvider) {
+  const connection = await getStoredConnection(provider).catch(() => null)
+  if (!connection?.clientId || !connection.encryptedClientSecret) return null
+  return {
+    clientId: connection.clientId,
+    clientSecret: decryptSecret(connection.encryptedClientSecret),
+  }
+}
+
+/**
+ * Static-client providers (no dynamic registration) resolve credentials in
+ * priority order: pasted in the setup dialog, deployment env vars, then the
+ * registration already stored from a previous connect so reconnecting stays
+ * one click.
+ */
 async function resolveOauthClient(
   provider: McpOauthProvider,
   registrationEndpoint: string | undefined,
-  redirectUri: string
+  redirectUri: string,
+  suppliedClient?: McpSuppliedOauthClient
 ) {
-  const staticClient = staticClientCredentials(provider, redirectUri)
-  if (staticClient) return staticClient
+  if (suppliedClient) return suppliedClient
+
+  if (provider.staticClientEnv) {
+    const client =
+      envClientCredentials(provider) ??
+      (await storedClientCredentials(provider))
+    if (client) return client
+    throw new Error(
+      `${provider.name} needs a one-time OAuth app. Open ${provider.name} in Settings → Integrations and enter the app's client ID and client secret.`
+    )
+  }
 
   if (!registrationEndpoint) {
     throw new Error(
@@ -73,18 +94,38 @@ async function resolveOauthClient(
   })
 }
 
+/**
+ * Static-client providers that cannot connect one-click yet: no pasted setup
+ * stored for this user and no deployment env credentials.
+ */
+export async function listMcpProvidersNeedingSetup(
+  providers: McpOauthProvider[]
+) {
+  const needingSetup: string[] = []
+  for (const provider of providers) {
+    if (!provider.staticClientEnv) continue
+    if (envClientCredentials(provider)) continue
+    if (await storedClientCredentials(provider)) continue
+    needingSetup.push(provider.id)
+  }
+  return needingSetup
+}
+
 export async function startMcpOauthConnection({
   provider,
   redirectUri,
+  suppliedClient,
 }: {
   provider: McpOauthProvider
   redirectUri: string
+  suppliedClient?: McpSuppliedOauthClient
 }) {
   const metadata = await discoverMcpAuthorizationServer(provider.url)
   const registered = await resolveOauthClient(
     provider,
     metadata.registrationEndpoint,
-    redirectUri
+    redirectUri,
+    suppliedClient
   )
 
   const client = await currentUserConvexHttpClient()

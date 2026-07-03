@@ -146,7 +146,7 @@ export function placeToolsBeforeFinalText(
   ]
 }
 
-export function shouldShowFinalResponseSeparator(
+export function hasWorkBeforeFinalText(
   grouped: AssistantGroupedSegment[],
   lastTextIndex: number
 ): boolean {

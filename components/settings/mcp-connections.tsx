@@ -166,6 +166,11 @@ function SetupStep({
   )
 }
 
+const setupInput = cn(
+  "w-full rounded-lg border border-border bg-background px-2.5 py-2 text-sm text-foreground",
+  "placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none"
+)
+
 function McpProviderSetupDialog({
   provider,
   onClose,
@@ -176,6 +181,9 @@ function McpProviderSetupDialog({
   const staticClient = provider.staticClientEnv
   const Icon = mcpProviderIcon(provider.id) ?? Plug
   const redirectUrl = `${window.location.origin}/api/mcp/oauth/callback`
+  const [clientId, setClientId] = useState("")
+  const [clientSecret, setClientSecret] = useState("")
+  const ready = Boolean(clientId.trim() && clientSecret.trim())
 
   useEffect(() => {
     function handleKeyDown(event: globalThis.KeyboardEvent) {
@@ -207,12 +215,15 @@ function McpProviderSetupDialog({
         className="absolute inset-0 cursor-default border-0 bg-transparent p-0"
         onClick={onClose}
       />
-      <div
+      <form
+        action="/api/mcp/oauth/start"
+        method="post"
         className={cn(
           "relative z-10 w-full max-w-md overflow-hidden p-5",
           popoverSurfaceClass
         )}
       >
+        <input type="hidden" name="provider" value={provider.id} />
         <div className="flex items-start gap-3">
           <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-muted">
             <Icon className="size-5" />
@@ -222,8 +233,8 @@ function McpProviderSetupDialog({
               Set up {provider.name}
             </div>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {provider.name} does not support automatic app registration, so
-              this needs a one-time OAuth app.
+              {provider.name} needs a one-time OAuth app. Create it, paste its
+              credentials, and you are done — no configuration files.
             </p>
           </div>
           <button
@@ -239,7 +250,7 @@ function McpProviderSetupDialog({
         <ol className="mt-5 space-y-4">
           <SetupStep
             step={1}
-            title={`Create an OAuth app in the ${provider.name} developer console.`}
+            title={`Create an app in the ${provider.name} developer console.`}
           >
             <a
               href={staticClient.consoleUrl}
@@ -250,25 +261,36 @@ function McpProviderSetupDialog({
               Open {provider.name} console
               <ArrowUpRight className="size-3" />
             </a>
+            <p className={fieldHint}>{staticClient.setupHint}</p>
           </SetupStep>
           <SetupStep step={2} title="Add this redirect URL to the app.">
             <CopyField label="redirect URL" value={redirectUrl} />
           </SetupStep>
-          <SetupStep
-            step={3}
-            title="Set these environment variables to the app’s client ID and secret."
-          >
-            <CopyField
-              label="client ID variable"
-              value={staticClient.clientIdVar}
+          <SetupStep step={3} title="Paste the app’s credentials here.">
+            <input
+              name="clientId"
+              aria-label="Client ID"
+              value={clientId}
+              onChange={(event) => setClientId(event.target.value)}
+              placeholder="Client ID"
+              autoComplete="off"
+              spellCheck={false}
+              className={setupInput}
             />
-            <CopyField
-              label="client secret variable"
-              value={staticClient.clientSecretVar}
+            <input
+              name="clientSecret"
+              type="password"
+              aria-label="Client secret"
+              value={clientSecret}
+              onChange={(event) => setClientSecret(event.target.value)}
+              placeholder="Client secret"
+              autoComplete="off"
+              spellCheck={false}
+              className={setupInput}
             />
             <p className={fieldHint}>
-              Add them to <code>.env.local</code> in development or your hosting
-              environment in production, then restart the app.
+              Stored encrypted with your account and only used to connect{" "}
+              {provider.name}. You will not need them again.
             </p>
           </SetupStep>
         </ol>
@@ -281,14 +303,18 @@ function McpProviderSetupDialog({
           >
             Close
           </button>
-          <form action="/api/mcp/oauth/start" method="get">
-            <input type="hidden" name="provider" value={provider.id} />
-            <button type="submit" className={navPrimary}>
-              Connect {provider.name}
-            </button>
-          </form>
+          <button
+            type="submit"
+            disabled={!ready}
+            className={cn(
+              navPrimary,
+              "disabled:pointer-events-none disabled:opacity-50"
+            )}
+          >
+            Connect {provider.name}
+          </button>
         </div>
-      </div>
+      </form>
     </dialog>
   )
 }

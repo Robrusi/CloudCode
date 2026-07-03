@@ -310,7 +310,7 @@ function ChatThreadMessages({ thread }: { thread: ThreadContent }) {
         ref={thread.setElement}
         onScroll={thread.onScroll}
         className={cn(
-          "min-h-0 flex-1 overscroll-contain [contain:paint] [overflow-anchor:none]",
+          "min-h-0 flex-1 overscroll-contain [contain:paint] [overflow-anchor:none] [scrollbar-gutter:stable]",
           thread.scrollable ? "overflow-y-auto" : "overflow-hidden"
         )}
         style={{ scrollPaddingBottom: thread.bottomInset }}

@@ -42,6 +42,7 @@ export const MessageBlock = memo(function MessageBlock({
           error={Boolean(message.error)}
           pending={Boolean(message.pending)}
           logs={logs}
+          createdAt={message.createdAt}
           runDiff={message.meta?.diff}
           sandboxId={sandboxId}
         />

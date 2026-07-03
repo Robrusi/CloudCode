@@ -1,11 +1,11 @@
-export const CODEX_APP_SERVER_DAEMON_VERSION = "8"
+export const CODEX_APP_SERVER_DAEMON_VERSION = "9"
 
 export const CODEX_APP_SERVER_DAEMON_SCRIPT = String.raw`import { createHash } from "node:crypto"
 import { spawn } from "node:child_process"
 import fs from "node:fs"
 import net from "node:net"
 
-const VERSION = "8"
+const VERSION = "9"
 const REQUEST_TIMEOUT_MS = Number(process.env.CLOUDCODE_APP_SERVER_REQUEST_TIMEOUT_MS || "45000")
 const AUTH_REFRESH_RESPONSE_TIMEOUT_MS = Number(process.env.CLOUDCODE_AUTH_REFRESH_RESPONSE_TIMEOUT_MS || "120000")
 const SOCKET_PATH = requiredEnv("CLOUDCODE_DAEMON_SOCKET")
@@ -1014,6 +1014,15 @@ async function handleClientPayload(payload, socket) {
     return
   }
   if (type === "run") {
+    const expectedEnvHash = stringValue(payload && payload.expectedEnvHash)
+    if (
+      expectedEnvHash &&
+      expectedEnvHash !== (process.env.CLOUDCODE_DAEMON_ENV_HASH || "")
+    ) {
+      writeLine(socket, { message: "__cloudcode_daemon_env_stale__", type: "error" })
+      socket.end()
+      return
+    }
     await runTurn(payload, socket)
     socket.end()
     return

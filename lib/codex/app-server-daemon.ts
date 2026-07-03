@@ -9,9 +9,29 @@ import { objectRecord, rawStringValue } from "@/lib/shared/unknown-values"
 export type CodexAppServerDaemonPaths = {
   clientPath: string
   scriptPath: string
+  scriptsMarkerPath: string
   sessionId: string
   socketPath: string
   statePath: string
+}
+
+// Emitted as error-event messages when a run request cannot be served by the
+// daemon as-is: the on-disk scripts predate the client command's fingerprint,
+// or the daemon process runs with a stale environment. Both mean "restart the
+// daemon and retry", never "the turn failed".
+export const CODEX_APP_SERVER_DAEMON_SCRIPTS_STALE =
+  "__cloudcode_daemon_scripts_stale__"
+export const CODEX_APP_SERVER_DAEMON_ENV_STALE =
+  "__cloudcode_daemon_env_stale__"
+
+export function isCodexAppServerDaemonStaleError(
+  event: CodexAppServerDaemonEvent
+) {
+  return (
+    event.type === "error" &&
+    (event.message === CODEX_APP_SERVER_DAEMON_SCRIPTS_STALE ||
+      event.message === CODEX_APP_SERVER_DAEMON_ENV_STALE)
+  )
 }
 
 export type CodexAppServerDaemonEvent =
@@ -94,6 +114,7 @@ export function codexAppServerDaemonPaths(
   return {
     clientPath: `${root}/cloudcode-codex-daemon-client.mjs`,
     scriptPath: `${root}/cloudcode-codex-daemon.mjs`,
+    scriptsMarkerPath: `${root}/scripts.sha256`,
     sessionId: "cloudcode-codex-app-server-daemon",
     socketPath: `${root}/codex-app-server.sock`,
     statePath: `${root}/codex-app-server-daemon.json`,
@@ -129,13 +150,32 @@ export function codexAppServerDaemonClientCommand({
   daemonPaths,
   payloadPath,
   paths,
+  scriptsFingerprint,
 }: {
   daemonPaths: CodexAppServerDaemonPaths
   payloadPath: string
   paths: DaytonaSandboxPaths
+  scriptsFingerprint?: string
 }) {
+  // The fingerprint preamble lets a request self-detect stale daemon scripts
+  // without a separate marker-check roundtrip; exit 0 keeps it distinguishable
+  // from real client failures — the stale error event carries the signal.
+  const staleEvent = JSON.stringify({
+    message: CODEX_APP_SERVER_DAEMON_SCRIPTS_STALE,
+    type: "error",
+  })
   return `bash -c ${shellQuote(
     [
+      ...(scriptsFingerprint
+        ? [
+            `if ! grep -qxF -- ${shellQuote(scriptsFingerprint)} ${shellQuote(
+              daemonPaths.scriptsMarkerPath
+            )} 2>/dev/null; then`,
+            `  printf '%s\\n' ${shellQuote(staleEvent)}`,
+            "  exit 0",
+            "fi",
+          ]
+        : []),
       `export CLOUDCODE_DAEMON_SOCKET=${shellQuote(daemonPaths.socketPath)}`,
       `export PATH=${shellQuote(daytonaTerminalPath(paths.home))}:$PATH`,
       `cd ${shellQuote(paths.repoPath)}`,

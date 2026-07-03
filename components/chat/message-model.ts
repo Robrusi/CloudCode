@@ -55,6 +55,27 @@ export function visibleSetupSummaryLogs(logs: ChatRunLog[]) {
   return logs.filter((log) => SETUP_SUMMARY_LOG_KINDS.has(log.kind))
 }
 
+/* How long a completed run worked, from the assistant message's creation to
+   its last run log. Logs older than the message belong to a previous run on
+   the thread (same rule as RunSetupSummary), so they are dropped rather than
+   inflating the duration. Returns null when no usable log times exist. */
+export function workedDurationMs(
+  logs: ChatRunLog[],
+  createdAt?: number
+): number | null {
+  let end = Number.NEGATIVE_INFINITY
+  let start = Number.POSITIVE_INFINITY
+  for (const log of logs) {
+    if (!Number.isFinite(log.time)) continue
+    if (createdAt && log.time < createdAt) continue
+    if (log.time > end) end = log.time
+    if (log.time < start) start = log.time
+  }
+  if (!Number.isFinite(end)) return null
+  const duration = end - (createdAt ?? start)
+  return duration > 0 ? duration : null
+}
+
 export function imageAttachmentLayout(
   dimensions: ImageDimensions,
   compact: boolean

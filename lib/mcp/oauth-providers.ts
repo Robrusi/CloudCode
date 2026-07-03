@@ -29,13 +29,17 @@ export type McpOauthProvider = {
   name: string
   // Set for providers whose authorization server does not support dynamic
   // client registration. The OAuth client must be registered manually with
-  // the provider and its credentials supplied through these env vars.
+  // the provider; its credentials are pasted in the setup dialog (stored
+  // encrypted per user) or preconfigured through these env vars.
   staticClientEnv?: {
     clientIdVar: string
     clientSecretVar: string
     // Developer console where the OAuth app is created; linked from the
     // in-app setup instructions.
     consoleUrl: string
+    // One concrete sentence describing where in the console to click,
+    // rendered under the first setup step.
+    setupHint: string
   }
   // Two-or-three word summary shown on the connect tile.
   tagline: string
@@ -66,6 +70,8 @@ export const MCP_OAUTH_PROVIDERS: McpOauthProvider[] = [
       clientIdVar: "ASANA_MCP_CLIENT_ID",
       clientSecretVar: "ASANA_MCP_CLIENT_SECRET",
       consoleUrl: "https://app.asana.com/0/developer-console",
+      setupHint:
+        "Click 'Create new app', name it anything (for example 'Cloudcode'), then open the app's OAuth section to add the redirect URL and copy the client ID and secret.",
     },
     url: "https://mcp.asana.com/v2/mcp",
   },
@@ -100,6 +106,8 @@ export const MCP_OAUTH_PROVIDERS: McpOauthProvider[] = [
       clientIdVar: "GMAIL_MCP_CLIENT_ID",
       clientSecretVar: "GMAIL_MCP_CLIENT_SECRET",
       consoleUrl: "https://console.cloud.google.com/apis/credentials",
+      setupHint:
+        "Click 'Create credentials' → 'OAuth client ID', pick 'Web application', and add the redirect URL as an authorized redirect URI. Google shows the client ID and secret right after creating it.",
     },
     url: "https://gmailmcp.googleapis.com/mcp/v1",
   },
@@ -120,6 +128,8 @@ export const MCP_OAUTH_PROVIDERS: McpOauthProvider[] = [
       clientIdVar: "HUBSPOT_MCP_CLIENT_ID",
       clientSecretVar: "HUBSPOT_MCP_CLIENT_SECRET",
       consoleUrl: "https://developers.hubspot.com",
+      setupHint:
+        "In your developer account, create an app, open its Auth tab to add the redirect URL, and copy the client ID and secret from the same tab.",
     },
     url: "https://mcp.hubspot.com",
   },
@@ -168,6 +178,8 @@ export const MCP_OAUTH_PROVIDERS: McpOauthProvider[] = [
       clientIdVar: "SLACK_MCP_CLIENT_ID",
       clientSecretVar: "SLACK_MCP_CLIENT_SECRET",
       consoleUrl: "https://api.slack.com/apps",
+      setupHint:
+        "Click 'Create New App' → 'From scratch', add the redirect URL under 'OAuth & Permissions', and copy the client ID and secret from 'Basic Information' → 'App Credentials'.",
     },
     url: "https://mcp.slack.com/mcp",
   },

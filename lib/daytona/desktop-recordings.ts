@@ -287,21 +287,31 @@ async function clearDesktopAgentRecordingState(
   }).catch(() => undefined)
 }
 
+export function desktopAgentRunStateScript(
+  paths: DaytonaSandboxPaths,
+  runId?: string
+) {
+  const runStatePath = desktopAgentRunStatePath(paths)
+  const currentRunId = normalizedRunId(runId)
+  return currentRunId
+    ? `mkdir -p ${shellQuote(`${paths.codexHome}/desktop/state`)} && printf '%s' ${shellQuote(JSON.stringify({ runId: currentRunId }))} > ${shellQuote(runStatePath)}`
+    : `rm -f ${shellQuote(runStatePath)}`
+}
+
 export async function writeDaytonaDesktopAgentRunState(
   sandbox: Sandbox,
   paths: DaytonaSandboxPaths,
   runId?: string,
   signal?: AbortSignal
 ) {
-  const runStatePath = desktopAgentRunStatePath(paths)
-  const currentRunId = normalizedRunId(runId)
-  const command = currentRunId
-    ? `mkdir -p ${shellQuote(`${paths.codexHome}/desktop/state`)} && printf '%s' ${shellQuote(JSON.stringify({ runId: currentRunId }))} > ${shellQuote(runStatePath)}`
-    : `rm -f ${shellQuote(runStatePath)}`
-  const result = await runDaytonaCommand(sandbox, command, {
-    signal,
-    timeoutMs: 10_000,
-  })
+  const result = await runDaytonaCommand(
+    sandbox,
+    desktopAgentRunStateScript(paths, runId),
+    {
+      signal,
+      timeoutMs: 10_000,
+    }
+  )
 
   if (result.exitCode !== 0) {
     throw new Error(

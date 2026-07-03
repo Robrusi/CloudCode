@@ -24,7 +24,7 @@ import {
 import type { CodexRunLog as RunCodexLog } from "@/lib/codex/run-log"
 import {
   CLOUDCODE_LEGACY_PRESET_ENV_PATH,
-  withoutCloudcodeEnvLocal,
+  withoutCloudcodeEnvLocalScript,
   writeCloudcodeEnvLocal,
   type SandboxEnvTarget,
 } from "@/lib/sandbox/env"
@@ -59,6 +59,37 @@ export async function emitRunLog(
   await input.onLog?.(log)
 }
 
+const RUN_STATUS_MARKER = "__CLOUDCODE_RUN_STATUS__"
+const RUN_DIFF_MARKER = "__CLOUDCODE_RUN_DIFF__"
+
+function sectionAfterMarker(output: string, marker: string) {
+  const token = `${marker}\n`
+  let index = output.indexOf(token)
+  // The marker must sit on its own line so status/diff content (which git
+  // always prefixes) can never be mistaken for it.
+  while (index > 0 && output[index - 1] !== "\n") {
+    index = output.indexOf(token, index + token.length)
+  }
+  return index === -1 ? null : output.slice(index + token.length)
+}
+
+export function parseRunDiffAndStatus(output: string) {
+  const afterStatus = sectionAfterMarker(output, RUN_STATUS_MARKER)
+  if (afterStatus === null) return { diff: "", status: "" }
+
+  const diff = sectionAfterMarker(afterStatus, RUN_DIFF_MARKER)
+  if (diff === null) return { diff: "", status: afterStatus }
+
+  const statusEnd =
+    afterStatus.length - diff.length - RUN_DIFF_MARKER.length - 1
+  return { diff, status: afterStatus.slice(0, Math.max(0, statusEnd)) }
+}
+
+/**
+ * Collects the run diff and git status in a single sandbox command. The env
+ * stash, both git reads, and the restore all happen inside one roundtrip so
+ * finishing a run does not pay for a dozen sequential sandbox API calls.
+ */
 export async function collectRunDiffAndStatus({
   exitCode,
   gitAuth,
@@ -72,54 +103,40 @@ export async function collectRunDiffAndStatus({
   paths: DaytonaSandboxPaths
   sandbox: Sandbox
 }) {
-  const target = createSandboxTarget(sandbox, paths, input.signal)
-  return await withoutCloudcodeEnvLocal(
-    target,
+  const repo = shellQuote(paths.repoPath)
+  const script = withoutCloudcodeEnvLocalScript(
     {
       legacyPresetEnvPath: CLOUDCODE_LEGACY_PRESET_ENV_PATH,
       presetEnvPath: paths.presetEnvPath,
       repoPath: paths.repoPath,
     },
-    async () => {
-      const diff = (
-        await runDaytonaCommand(
-          sandbox,
-          [
-            "set -e",
-            `base_ref=$(cat ${shellQuote(paths.baseRefPath)} 2>/dev/null || true)`,
-            'if [ -z "$base_ref" ]; then',
-            `  base_ref=$(git -C ${shellQuote(paths.repoPath)} rev-parse --verify HEAD 2>/dev/null || git -C ${shellQuote(paths.repoPath)} hash-object -t tree /dev/null)`,
-            "fi",
-            `git -C ${shellQuote(paths.repoPath)} add -N . >/dev/null 2>&1 || true`,
-            `git -C ${shellQuote(paths.repoPath)} diff --binary "$base_ref"`,
-          ].join("\n"),
-          {
-            env: repoCommandEnv(paths, gitAuth?.env),
-            signal: input.signal,
-            timeoutMs: 60_000,
-          }
-        )
-      ).stdout
-      const status = await runDaytonaCommand(
-        sandbox,
-        `git -C ${shellQuote(paths.repoPath)} status --short --branch`,
-        {
-          env: repoCommandEnv(paths, gitAuth?.env),
-          signal: input.signal,
-          timeoutMs: 60_000,
-        }
-      ).then((result) => result.stdout)
-      await emitRunLog(input, {
-        kind: "result",
-        message:
-          exitCode === 0
-            ? "Codex run completed"
-            : `Codex exited with code ${exitCode}`,
-      })
-
-      return { diff, status }
-    }
+    [
+      `base_ref=$(cat ${shellQuote(paths.baseRefPath)} 2>/dev/null || true)`,
+      'if [ -z "$base_ref" ]; then',
+      `  base_ref=$(git -C ${repo} rev-parse --verify HEAD 2>/dev/null || git -C ${repo} hash-object -t tree /dev/null)`,
+      "fi",
+      `git -C ${repo} add -N . >/dev/null 2>&1 || true`,
+      `printf '%s\\n' ${shellQuote(RUN_STATUS_MARKER)}`,
+      `git -C ${repo} status --short --branch 2>/dev/null || true`,
+      `printf '%s\\n' ${shellQuote(RUN_DIFF_MARKER)}`,
+      `git -C ${repo} diff --binary "$base_ref" 2>/dev/null || true`,
+    ].join("\n")
   )
+
+  const result = await runDaytonaCommand(sandbox, script, {
+    env: repoCommandEnv(paths, gitAuth?.env),
+    signal: input.signal,
+    timeoutMs: 120_000,
+  })
+  await emitRunLog(input, {
+    kind: "result",
+    message:
+      exitCode === 0
+        ? "Codex run completed"
+        : `Codex exited with code ${exitCode}`,
+  })
+
+  return parseRunDiffAndStatus(result.stdout)
 }
 
 function sha256(value: string) {

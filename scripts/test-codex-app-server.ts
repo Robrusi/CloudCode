@@ -84,6 +84,7 @@ const daemonCommand = codexAppServerDaemonCommand({
   daemonPaths: {
     clientPath: "/tmp/daemon-client.mjs",
     scriptPath: "/tmp/daemon.mjs",
+    scriptsMarkerPath: "/tmp/scripts.sha256",
     sessionId: "daemon-session",
     socketPath: "/tmp/daemon.sock",
     statePath: "/tmp/daemon.json",
@@ -204,7 +205,7 @@ assert.ok(
 )
 assert.match(
   daytonaCodexAgentSource,
-  /setupSandboxGitHubAuth\(\{[\s\S]*installGlobal: true,[\s\S]*persistCredentials: true/
+  /prepareSandboxGitHubAuthPlan\(\{[\s\S]*installGlobal: true,[\s\S]*persistCredentials: true/
 )
 assert.ok(!sandboxGithubAuthSource.includes("if (!remoteUrl) return null"))
 assert.ok(

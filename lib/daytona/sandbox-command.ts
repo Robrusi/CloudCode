@@ -4,7 +4,7 @@ import type { Sandbox } from "@daytona/sdk"
 
 import { envNumber } from "@/lib/daytona/env"
 
-const DEFAULT_COMMAND_STATUS_POLL_MS = 2_000
+const DEFAULT_COMMAND_STATUS_POLL_MS = 250
 const DEFAULT_COMMAND_STATUS_MAX_POLL_MS = 5_000
 
 export type DaytonaCommandResult = {
@@ -31,7 +31,7 @@ function timeoutSeconds(timeoutMs?: number) {
 
 function commandStatusPollMs() {
   return Math.max(
-    500,
+    100,
     Math.round(
       envNumber(
         "DAYTONA_COMMAND_STATUS_POLL_MS",
@@ -175,7 +175,8 @@ async function waitForCommandExit(
   sessionId: string,
   commandId: string,
   signal?: AbortSignal,
-  timeoutMs?: number
+  timeoutMs?: number,
+  streamEnded?: Promise<void>
 ) {
   const deadline =
     typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
@@ -184,6 +185,15 @@ async function waitForCommandExit(
   const initialPollMs = commandStatusPollMs()
   const maxPollMs = commandStatusMaxPollMs()
   let pollMs = initialPollMs
+  // The log stream closing usually means the command just exited. Waking the
+  // poll loop on it (and briefly re-tightening the poll interval) detects the
+  // exit immediately instead of up to maxPollMs later, without hammering the
+  // status endpoint for long-running commands.
+  let streamJustEnded = false
+  const markStreamEnded = () => {
+    streamJustEnded = true
+  }
+  let streamEndSignal = streamEnded?.then(markStreamEnded, markStreamEnded)
   let command = await sandbox.process.getSessionCommand(sessionId, commandId)
 
   while (
@@ -194,7 +204,15 @@ async function waitForCommandExit(
       await sandbox.process.deleteSession(sessionId).catch(() => undefined)
       throw new Error("Run was canceled.")
     }
-    await waitForPoll(pollMs, signal)
+    if (streamEndSignal) {
+      await Promise.race([waitForPoll(pollMs, signal), streamEndSignal])
+      if (streamJustEnded) {
+        streamEndSignal = undefined
+        pollMs = initialPollMs
+      }
+    } else {
+      await waitForPoll(pollMs, signal)
+    }
     if (signal?.aborted) {
       await sandbox.process.deleteSession(sessionId).catch(() => undefined)
       throw new Error("Run was canceled.")
@@ -294,30 +312,28 @@ export async function runDaytonaCommand(
       let stdout = ""
       let stderr = ""
 
-      const logsPromise =
-        options.onStdout || options.onStderr
-          ? sandbox.process
-              .getSessionCommandLogs(
-                sessionId,
-                commandId,
-                (chunk) => {
-                  stdout += chunk
-                  options.onStdout?.(chunk)
-                },
-                (chunk) => {
-                  stderr += chunk
-                  options.onStderr?.(chunk)
-                }
-              )
-              .catch(() => undefined)
-          : Promise.resolve()
+      const logsPromise = sandbox.process
+        .getSessionCommandLogs(
+          sessionId,
+          commandId,
+          (chunk) => {
+            stdout += chunk
+            options.onStdout?.(chunk)
+          },
+          (chunk) => {
+            stderr += chunk
+            options.onStderr?.(chunk)
+          }
+        )
+        .catch(() => undefined)
 
       const exitCode = await waitForCommandExit(
         sandbox,
         sessionId,
         commandId,
         options.signal,
-        options.timeoutMs
+        options.timeoutMs,
+        logsPromise.then(() => undefined)
       )
 
       await Promise.race([logsPromise, wait(1_000)])

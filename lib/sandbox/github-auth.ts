@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto"
+import { randomBytes } from "node:crypto"
 
 import type { Sandbox } from "@daytona/sdk"
 
@@ -10,17 +10,11 @@ import {
   type DaytonaSandboxPaths,
 } from "@/lib/daytona/sandbox"
 
-const GITHUB_AUTH_CONTENT_CURRENT = "__CLOUDCODE_GITHUB_AUTH_CONTENT_CURRENT__"
-
 export type SandboxGitHubAuth = {
   cleanup: () => Promise<void>
   env: Record<string, string>
   remoteUrl: string | null
   tokenPath: string
-}
-
-function sha256(value: string) {
-  return createHash("sha256").update(value).digest("hex")
 }
 
 function gitHubRemoteUrl(repoUrl: string) {
@@ -66,9 +60,7 @@ function credentialPaths(paths: DaytonaSandboxPaths) {
     homeGhHostsPath: `${paths.home}/.config/gh/hosts.yml`,
     runtimeGhConfigDir: `${paths.runtimeHome}/.config/gh`,
     runtimeGhHostsPath: `${paths.runtimeHome}/.config/gh/hosts.yml`,
-    authContentVersionPath: `${dir}/auth-content.sha256`,
     helperPath: `${dir}/git-credential-cloudcode-github`,
-    helperVersionPath: `${dir}/git-credential-cloudcode-github.sha256`,
     tokenPath: `${dir}/token`,
   }
 }
@@ -259,18 +251,7 @@ async function cleanupSandboxGitHubAuth({
   ).catch(() => undefined)
 }
 
-export async function setupSandboxGitHubAuth({
-  githubToken,
-  githubUserEmail,
-  githubUserName,
-  githubUsername,
-  installGlobal,
-  persistCredentials,
-  paths,
-  repoUrl,
-  sandbox,
-  signal,
-}: {
+export type SandboxGitHubAuthOptions = {
   githubToken?: string
   githubUserEmail?: string
   githubUserName?: string
@@ -281,7 +262,39 @@ export async function setupSandboxGitHubAuth({
   repoUrl?: string
   sandbox: Sandbox
   signal?: AbortSignal
-}): Promise<SandboxGitHubAuth | null> {
+}
+
+export type SandboxGitHubAuthPlan = {
+  auth: SandboxGitHubAuth
+  commandEnv: Record<string, string>
+  /**
+   * Setup script without a `set -e` prefix so callers can embed it in a
+   * larger combined command; run uploadSandboxGitHubAuthFiles first — the
+   * script moves those staged files into place.
+   */
+  script: string
+  uploads: { content: string; path: string }[]
+}
+
+/**
+ * Computes everything the sandbox GitHub auth setup needs as staged file
+ * uploads plus one shell script. Secrets travel via file uploads (never in
+ * the command text); the script installs them, so a full auth refresh costs
+ * one parallel upload round plus a single command instead of several
+ * sequential sandbox roundtrips.
+ */
+export async function prepareSandboxGitHubAuthPlan({
+  githubToken,
+  githubUserEmail,
+  githubUserName,
+  githubUsername,
+  installGlobal,
+  persistCredentials,
+  paths,
+  repoUrl,
+  sandbox,
+  signal,
+}: SandboxGitHubAuthOptions): Promise<SandboxGitHubAuthPlan | null> {
   const token = githubToken?.trim()
 
   if (!token || /[\r\n]/.test(token)) return null
@@ -294,7 +307,6 @@ export async function setupSandboxGitHubAuth({
   const cleanGitUserEmail = githubUserEmail?.trim()
   const cleanGitUserName = githubUserName?.trim()
   const helperScript = credentialHelperScript(pathsForAuth.tokenPath)
-  const helperHash = sha256(helperScript)
   const hostsFile = ghHostsFile({ token, username: githubUsername })
   const globalGitHomes = installGlobal
     ? uniquePaths([paths.home, paths.runtimeHome])
@@ -311,56 +323,9 @@ export async function setupSandboxGitHubAuth({
         pathsForAuth.runtimeGhHostsPath,
       ])
     : []
-  const authContentHash = sha256(
-    [token, hostsFile, ...globalGhHostsPaths].join("\0")
-  )
-  const setupResult = await runDaytonaCommand(
-    sandbox,
-    [
-      "set -e",
-      `mkdir -p ${shellQuote(pathsForAuth.dir)}`,
-      `mkdir -p ${shellQuote(pathsForAuth.ghConfigDir)}`,
-      ...globalGhConfigDirs.map((path) => `mkdir -p ${shellQuote(path)}`),
-      `chmod 700 ${shellQuote(pathsForAuth.dir)}`,
-      `chmod 700 ${shellQuote(pathsForAuth.ghConfigDir)}`,
-      ...globalGhConfigDirs.map((path) => `chmod 700 ${shellQuote(path)}`),
-      `helper_hash=${shellQuote(helperHash)}`,
-      `if [ ! -x ${shellQuote(pathsForAuth.helperPath)} ] || ! grep -qxF -- "$helper_hash" ${shellQuote(pathsForAuth.helperVersionPath)} 2>/dev/null; then`,
-      `  cat > ${shellQuote(pathsForAuth.helperPath)} <<'EOF'`,
-      helperScript,
-      "EOF",
-      `  chmod 700 ${shellQuote(pathsForAuth.helperPath)}`,
-      `  printf '%s\\n' "$helper_hash" > ${shellQuote(pathsForAuth.helperVersionPath)}`,
-      "fi",
-      `auth_hash=${shellQuote(authContentHash)}`,
-      `if [ -s ${shellQuote(pathsForAuth.tokenPath)} ] && [ -s ${shellQuote(pathsForAuth.ghHostsPath)} ] && grep -qxF -- "$auth_hash" ${shellQuote(pathsForAuth.authContentVersionPath)} 2>/dev/null${globalGhHostsPaths
-        .map((path) => ` && [ -s ${shellQuote(path)} ]`)
-        .join("")}; then`,
-      `  printf '%s\\n' ${shellQuote(GITHUB_AUTH_CONTENT_CURRENT)}`,
-      "fi",
-    ].join("\n"),
-    { signal, timeoutMs: 10_000 }
-  )
-  if (setupResult.exitCode !== 0) {
-    throw new Error(
-      setupResult.stderr.trim() ||
-        setupResult.stdout.trim() ||
-        "Unable to prepare GitHub credentials in the sandbox."
-    )
-  }
-  const authContentCurrent = setupResult.stdout.includes(
-    GITHUB_AUTH_CONTENT_CURRENT
-  )
-
-  if (!authContentCurrent) {
-    await Promise.all([
-      writeDaytonaTextFile(sandbox, pathsForAuth.tokenPath, token),
-      writeDaytonaTextFile(sandbox, pathsForAuth.ghHostsPath, hostsFile),
-      ...globalGhHostsPaths.map((path) =>
-        writeDaytonaTextFile(sandbox, path, hostsFile)
-      ),
-    ])
-  }
+  const stageId = randomBytes(6).toString("hex")
+  const tokenStagePath = `/tmp/cloudcode-gh-token-${stageId}`
+  const hostsStagePath = `/tmp/cloudcode-gh-hosts-${stageId}`
   const helperCommand = credentialHelperCommand(pathsForAuth.tokenPath)
   const gitConfigEnv: Record<string, string> = {
     GIT_CONFIG_COUNT: "4",
@@ -373,71 +338,119 @@ export async function setupSandboxGitHubAuth({
     GIT_CONFIG_VALUE_2: "git@github.com:",
     GIT_CONFIG_VALUE_3: "ssh://git@github.com/",
   }
-  const configResult = await runDaytonaCommand(
-    sandbox,
-    [
-      "set -e",
-      authContentCurrent
-        ? ""
-        : [
-            `chmod 600 ${shellQuote(pathsForAuth.tokenPath)}`,
-            `chmod 600 ${shellQuote(pathsForAuth.ghHostsPath)}`,
-            ...globalGhHostsPaths.map(
-              (path) => `chmod 600 ${shellQuote(path)}`
-            ),
-            `printf '%s\\n' ${shellQuote(authContentHash)} > ${shellQuote(pathsForAuth.authContentVersionPath)}`,
-            `chmod 600 ${shellQuote(pathsForAuth.authContentVersionPath)}`,
-          ].join("\n"),
-      `chmod 700 ${shellQuote(pathsForAuth.helperPath)}`,
-      ...(installGlobal
-        ? globalGitHomes.flatMap((home) =>
-            gitGlobalSetupCommands({
-              cleanGitUserEmail,
-              cleanGitUserName,
-              helperCommand,
-              home,
-            })
-          )
-        : []),
-    ].join("\n"),
-    { env: terminalHomeEnv(paths), signal, timeoutMs: 10_000 }
+
+  const script = [
+    ...uniquePaths([
+      pathsForAuth.dir,
+      pathsForAuth.ghConfigDir,
+      ...globalGhConfigDirs,
+    ]).map((path) => `mkdir -p ${shellQuote(path)}`),
+    ...uniquePaths([
+      pathsForAuth.dir,
+      pathsForAuth.ghConfigDir,
+      ...globalGhConfigDirs,
+    ]).map((path) => `chmod 700 ${shellQuote(path)}`),
+    `cat > ${shellQuote(pathsForAuth.helperPath)} <<'EOF'`,
+    helperScript,
+    "EOF",
+    `chmod 700 ${shellQuote(pathsForAuth.helperPath)}`,
+    `mv -f ${shellQuote(tokenStagePath)} ${shellQuote(pathsForAuth.tokenPath)}`,
+    `chmod 600 ${shellQuote(pathsForAuth.tokenPath)}`,
+    ...globalGhHostsPaths.map(
+      (path) => `cp ${shellQuote(hostsStagePath)} ${shellQuote(path)}`
+    ),
+    `mv -f ${shellQuote(hostsStagePath)} ${shellQuote(pathsForAuth.ghHostsPath)}`,
+    ...[pathsForAuth.ghHostsPath, ...globalGhHostsPaths].map(
+      (path) => `chmod 600 ${shellQuote(path)}`
+    ),
+    ...(installGlobal
+      ? globalGitHomes.flatMap((home) =>
+          gitGlobalSetupCommands({
+            cleanGitUserEmail,
+            cleanGitUserName,
+            helperCommand,
+            home,
+          })
+        )
+      : []),
+  ]
+    .filter(Boolean)
+    .join("\n")
+
+  return {
+    auth: {
+      cleanup: async () => {
+        if (persistCredentials) return
+        await cleanupSandboxGitHubAuth({
+          installGlobal,
+          paths,
+          sandbox,
+        })
+      },
+      env: {
+        ...gitConfigEnv,
+        GH_CONFIG_DIR: pathsForAuth.ghConfigDir,
+        ...(cleanGitUserEmail
+          ? {
+              GIT_AUTHOR_EMAIL: cleanGitUserEmail,
+              GIT_COMMITTER_EMAIL: cleanGitUserEmail,
+            }
+          : {}),
+        ...(cleanGitUserName
+          ? {
+              GIT_AUTHOR_NAME: cleanGitUserName,
+              GIT_COMMITTER_NAME: cleanGitUserName,
+            }
+          : {}),
+      },
+      remoteUrl,
+      tokenPath: pathsForAuth.tokenPath,
+    },
+    commandEnv: terminalHomeEnv(paths),
+    script,
+    uploads: [
+      { content: token, path: tokenStagePath },
+      { content: hostsFile, path: hostsStagePath },
+    ],
+  }
+}
+
+export async function uploadSandboxGitHubAuthFiles(
+  sandbox: Sandbox,
+  plan: SandboxGitHubAuthPlan
+) {
+  await Promise.all(
+    plan.uploads.map(({ content, path }) =>
+      writeDaytonaTextFile(sandbox, path, content)
+    )
   )
-  if (configResult.exitCode !== 0) {
+}
+
+export async function setupSandboxGitHubAuth(
+  options: SandboxGitHubAuthOptions
+): Promise<SandboxGitHubAuth | null> {
+  const plan = await prepareSandboxGitHubAuthPlan(options)
+  if (!plan) return null
+
+  await uploadSandboxGitHubAuthFiles(options.sandbox, plan)
+  const setupResult = await runDaytonaCommand(
+    options.sandbox,
+    ["set -e", plan.script].join("\n"),
+    {
+      env: terminalHomeEnv(options.paths),
+      signal: options.signal,
+      timeoutMs: 15_000,
+    }
+  )
+  if (setupResult.exitCode !== 0) {
     throw new Error(
-      configResult.stderr.trim() ||
-        configResult.stdout.trim() ||
+      setupResult.stderr.trim() ||
+        setupResult.stdout.trim() ||
         "Unable to configure GitHub credentials in the sandbox."
     )
   }
 
-  return {
-    cleanup: async () => {
-      if (persistCredentials) return
-      await cleanupSandboxGitHubAuth({
-        installGlobal,
-        paths,
-        sandbox,
-      })
-    },
-    env: {
-      ...gitConfigEnv,
-      GH_CONFIG_DIR: pathsForAuth.ghConfigDir,
-      ...(cleanGitUserEmail
-        ? {
-            GIT_AUTHOR_EMAIL: cleanGitUserEmail,
-            GIT_COMMITTER_EMAIL: cleanGitUserEmail,
-          }
-        : {}),
-      ...(cleanGitUserName
-        ? {
-            GIT_AUTHOR_NAME: cleanGitUserName,
-            GIT_COMMITTER_NAME: cleanGitUserName,
-          }
-        : {}),
-    },
-    remoteUrl,
-    tokenPath: pathsForAuth.tokenPath,
-  }
+  return plan.auth
 }
 
 export async function configureSandboxGitHubRemote({

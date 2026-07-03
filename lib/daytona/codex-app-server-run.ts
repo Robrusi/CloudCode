@@ -17,11 +17,13 @@ import { normalizeCodexUsageLimitError } from "@/lib/codex/usage-errors"
 import {
   codexAppServerNotificationMatchesActiveRoute,
   codexAppServerNotificationRoute,
+  isCodexAppServerDaemonStaleError,
   type CodexAppServerDaemonEvent,
 } from "@/lib/codex/app-server-daemon"
 import {
   ensureCodexAppServerDaemon,
   requestCodexAppServerDaemon,
+  resolveCodexAppServerDaemonHandle,
 } from "@/lib/codex/app-server-daemon-runtime"
 import type { CodexRunLog as RunCodexLog } from "@/lib/codex/run-log"
 import type { CodexSpeed, ReasoningEffort } from "@/lib/codex/run-options"
@@ -87,6 +89,34 @@ export function redactCodexAppServerAuthPayloads(value: string) {
   return redactCodexAuthPayloads(value)
 }
 
+type CodexAppServerDaemonResponse = Awaited<
+  ReturnType<typeof requestCodexAppServerDaemon>
+>
+
+function codexAppServerTurnActivityEvent(event: CodexAppServerDaemonEvent) {
+  return (
+    event.type === "thread" ||
+    event.type === "notification" ||
+    event.type === "result" ||
+    event.type === "authRefreshRequest" ||
+    event.type === "mcpStatus"
+  )
+}
+
+/**
+ * True when the run request never reached a current daemon: the client
+ * self-reported stale scripts, the daemon rejected a stale env hash, or the
+ * client could not connect at all. Turn activity of any kind means the daemon
+ * accepted the request, so a failure then must surface instead of retrying.
+ */
+function codexAppServerDaemonUnavailable(
+  response: CodexAppServerDaemonResponse
+) {
+  if (response.events.some(codexAppServerTurnActivityEvent)) return false
+  if (response.events.some(isCodexAppServerDaemonStaleError)) return true
+  return response.result.exitCode !== 0
+}
+
 function validateDaemonResponsePath(
   paths: DaytonaSandboxPaths,
   responsePath: string
@@ -136,15 +166,16 @@ export async function runCodexViaAppServer({
   const authRefreshTasks: Promise<void>[] = []
 
   try {
-    const daemon = await ensureCodexAppServerDaemon({
+    // Resolved without sandbox IO: the run request below carries the expected
+    // env hash and the client command self-checks the scripts fingerprint, so
+    // a healthy daemon serves the turn with zero extra roundtrips. Only a
+    // stale or unreachable daemon pays for ensureCodexAppServerDaemon.
+    const daemonHandle = resolveCodexAppServerDaemonHandle({
       builtInMcpConfig,
       gitAuth,
       mcpServers: input.mcpServers,
-      onLog: (log) => emitLog(input, log),
       paths,
       presetSecrets: input.sandboxPreset?.secrets,
-      sandbox,
-      signal: input.signal,
     })
     const reducer = createCodexAppServerTurnReducer({
       onContentDelta: input.onContentDelta,
@@ -178,7 +209,7 @@ export async function runCodexViaAppServer({
 
     const interruptDaemonRun = () => {
       void requestCodexAppServerDaemon({
-        daemonPaths: daemon.paths,
+        daemonPaths: daemonHandle.paths,
         gitAuth,
         label: "interrupt",
         paths,
@@ -190,149 +221,194 @@ export async function runCodexViaAppServer({
     input.signal?.addEventListener("abort", interruptDaemonRun, { once: true })
     if (input.signal?.aborted) interruptDaemonRun()
 
-    const daemonResponse = await requestCodexAppServerDaemon({
-      daemonPaths: daemon.paths,
-      gitAuth,
-      label: "run",
-      onEvent: (event) => {
-        stdout += `${redactCodexAppServerAuthPayloads(JSON.stringify(event))}\n`
-        switch (event.type) {
-          case "thread": {
-            activeThreadId = event.threadId
-            if (codexThreadIdToResume && !resumeLogged) {
-              resumeLogged = true
-              void emitLog(input, {
-                detail: activeThreadId,
-                kind: "setup",
-                message: "Resumed Codex thread",
-              })
-            }
-            return
+    let turnActivitySeen = false
+    const handleDaemonEvent = (event: CodexAppServerDaemonEvent) => {
+      if (codexAppServerTurnActivityEvent(event)) turnActivitySeen = true
+      stdout += `${redactCodexAppServerAuthPayloads(JSON.stringify(event))}\n`
+      switch (event.type) {
+        case "thread": {
+          activeThreadId = event.threadId
+          if (codexThreadIdToResume && !resumeLogged) {
+            resumeLogged = true
+            void emitLog(input, {
+              detail: activeThreadId,
+              kind: "setup",
+              message: "Resumed Codex thread",
+            })
           }
-          case "notification": {
-            const { notification } = event
-            if (
-              !codexAppServerNotificationMatchesActiveRoute({
-                activeThreadId,
-                activeTurnId,
-                notification,
-              })
-            ) {
-              return
-            }
-
-            const route = codexAppServerNotificationRoute(notification)
-            if (
-              notification.method === "turn/started" &&
-              route.turnId &&
-              (!activeThreadId ||
-                !route.threadId ||
-                route.threadId === activeThreadId)
-            ) {
-              activeTurnId ??= route.turnId
-            }
-
-            reducer.handleNotification(notification)
-            return
-          }
-          case "stderr":
-            stderr += `${event.line}\n`
-            emitDaemonStderr(event.line)
-            return
-          case "setup":
-            if (
-              event.message === "Codex using bundled bubblewrap sandbox helper"
-            ) {
-              if (bundledBubblewrapWarningLogged) return
-              bundledBubblewrapWarningLogged = true
-            }
-            void emitLog(input, { kind: "setup", message: event.message })
-            return
-          case "mcpStatus": {
-            const discovered = discoveredMcpServersFromStatus(event.status)
-            if (!discovered.length || !input.onMcpServerToolsDiscovered) {
-              return
-            }
-            discoveryTasks.push(
-              Promise.resolve(input.onMcpServerToolsDiscovered(discovered))
-                .then(() => undefined)
-                .catch((error) => {
-                  void emitLog(input, {
-                    detail:
-                      error instanceof Error ? error.message : String(error),
-                    kind: "stderr",
-                    message: "Unable to save discovered MCP tools",
-                  })
-                })
-            )
-            return
-          }
-          case "error":
-            daemonError = event.message
-            return
-          case "authRefreshRequest": {
-            const task = (async () => {
-              const responsePath = validateDaemonResponsePath(
-                paths,
-                event.responsePath
-              )
-              try {
-                if (!input.onAuthRefreshRequest) {
-                  throw new Error(
-                    "Cloudcode auth refresh coordinator is unavailable."
-                  )
-                }
-                const refreshed = await input.onAuthRefreshRequest({
-                  ...(event.previousAccountId
-                    ? { previousAccountId: event.previousAccountId }
-                    : {}),
-                  requestId: event.requestId,
-                })
-                await writeDaytonaTextFile(
-                  sandbox,
-                  responsePath,
-                  JSON.stringify(refreshed)
-                )
-              } catch (error) {
-                await writeDaytonaTextFile(
-                  sandbox,
-                  responsePath,
-                  JSON.stringify({
-                    error:
-                      error instanceof Error
-                        ? error.message
-                        : "Cloudcode auth refresh failed.",
-                  })
-                ).catch(() => undefined)
-              }
-            })()
-            authRefreshTasks.push(task)
-            return
-          }
-          case "result":
-            daemonResult = event
-            activeThreadId = event.threadId
-            return
+          return
         }
-      },
-      paths,
-      payload: {
-        authHash: sha256(input.authJson),
-        authJson: input.authJson,
-        authRefreshResponseDir: `${paths.runtimeHome.replace(
-          /\/+$/,
-          ""
-        )}/codex-app-server`,
-        codexThreadIdToResume,
-        threadParams,
-        turnParams,
-        type: "run",
-      },
-      sandbox,
-      signal: input.signal,
-    }).finally(() => {
+        case "notification": {
+          const { notification } = event
+          if (
+            !codexAppServerNotificationMatchesActiveRoute({
+              activeThreadId,
+              activeTurnId,
+              notification,
+            })
+          ) {
+            return
+          }
+
+          const route = codexAppServerNotificationRoute(notification)
+          if (
+            notification.method === "turn/started" &&
+            route.turnId &&
+            (!activeThreadId ||
+              !route.threadId ||
+              route.threadId === activeThreadId)
+          ) {
+            activeTurnId ??= route.turnId
+          }
+
+          reducer.handleNotification(notification)
+          return
+        }
+        case "stderr":
+          stderr += `${event.line}\n`
+          emitDaemonStderr(event.line)
+          return
+        case "setup":
+          if (
+            event.message === "Codex using bundled bubblewrap sandbox helper"
+          ) {
+            if (bundledBubblewrapWarningLogged) return
+            bundledBubblewrapWarningLogged = true
+          }
+          void emitLog(input, { kind: "setup", message: event.message })
+          return
+        case "mcpStatus": {
+          const discovered = discoveredMcpServersFromStatus(event.status)
+          if (!discovered.length || !input.onMcpServerToolsDiscovered) {
+            return
+          }
+          discoveryTasks.push(
+            Promise.resolve(input.onMcpServerToolsDiscovered(discovered))
+              .then(() => undefined)
+              .catch((error) => {
+                void emitLog(input, {
+                  detail:
+                    error instanceof Error ? error.message : String(error),
+                  kind: "stderr",
+                  message: "Unable to save discovered MCP tools",
+                })
+              })
+          )
+          return
+        }
+        case "error":
+          daemonError = event.message
+          return
+        case "authRefreshRequest": {
+          const task = (async () => {
+            const responsePath = validateDaemonResponsePath(
+              paths,
+              event.responsePath
+            )
+            try {
+              if (!input.onAuthRefreshRequest) {
+                throw new Error(
+                  "Cloudcode auth refresh coordinator is unavailable."
+                )
+              }
+              const refreshed = await input.onAuthRefreshRequest({
+                ...(event.previousAccountId
+                  ? { previousAccountId: event.previousAccountId }
+                  : {}),
+                requestId: event.requestId,
+              })
+              await writeDaytonaTextFile(
+                sandbox,
+                responsePath,
+                JSON.stringify(refreshed)
+              )
+            } catch (error) {
+              await writeDaytonaTextFile(
+                sandbox,
+                responsePath,
+                JSON.stringify({
+                  error:
+                    error instanceof Error
+                      ? error.message
+                      : "Cloudcode auth refresh failed.",
+                })
+              ).catch(() => undefined)
+            }
+          })()
+          authRefreshTasks.push(task)
+          return
+        }
+        case "result":
+          daemonResult = event
+          activeThreadId = event.threadId
+          return
+      }
+    }
+
+    const attemptRunRequest = () =>
+      requestCodexAppServerDaemon({
+        daemonPaths: daemonHandle.paths,
+        gitAuth,
+        label: "run",
+        onEvent: handleDaemonEvent,
+        paths,
+        payload: {
+          authHash: sha256(input.authJson),
+          authJson: input.authJson,
+          authRefreshResponseDir: `${paths.runtimeHome.replace(
+            /\/+$/,
+            ""
+          )}/codex-app-server`,
+          codexThreadIdToResume,
+          expectedEnvHash: daemonHandle.envHash,
+          threadParams,
+          turnParams,
+          type: "run",
+        },
+        sandbox,
+        signal: input.signal,
+        verifyScripts: true,
+      })
+
+    let daemonResponse: CodexAppServerDaemonResponse
+    try {
+      // A missing, stale, or crashed daemon cannot have started the turn, so
+      // one restart-and-retry is safe. Never retry once turn activity was
+      // seen — that could execute the turn twice.
+      const firstAttempt = await attemptRunRequest().catch((error) => {
+        if (
+          turnActivitySeen ||
+          input.signal?.aborted ||
+          isWorkerRunCanceledError(error)
+        ) {
+          throw error
+        }
+        return undefined
+      })
+      if (firstAttempt && !codexAppServerDaemonUnavailable(firstAttempt)) {
+        daemonResponse = firstAttempt
+      } else {
+        stdout = ""
+        stderr = ""
+        daemonError = ""
+        daemonResult = undefined
+        activeThreadId = codexThreadIdToResume
+        activeTurnId = undefined
+        await ensureCodexAppServerDaemon({
+          builtInMcpConfig,
+          gitAuth,
+          mcpServers: input.mcpServers,
+          onLog: (log) => emitLog(input, log),
+          paths,
+          presetSecrets: input.sandboxPreset?.secrets,
+          sandbox,
+          signal: input.signal,
+        })
+        daemonResponse = await attemptRunRequest()
+      }
+    } finally {
       input.signal?.removeEventListener("abort", interruptDaemonRun)
-    })
+    }
     const { result } = daemonResponse
     await Promise.all(authRefreshTasks)
     updatedAuthJson = daemonResponse.updatedAuthJson

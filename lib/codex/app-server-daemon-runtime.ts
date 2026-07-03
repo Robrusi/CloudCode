@@ -141,6 +141,23 @@ function codexAppServerDaemonEnv({
   }
 }
 
+/**
+ * Computes the daemon handle (paths, env, env hash) without touching the
+ * sandbox. The hot path sends a run request tagged with this env hash
+ * directly; the daemon rejects it as stale if its own environment differs,
+ * so no separate health roundtrip is needed while the daemon is current.
+ */
+export function resolveCodexAppServerDaemonHandle(options: {
+  builtInMcpConfig?: string
+  gitAuth?: SandboxGitHubAuth | null
+  mcpServers?: McpServerInput[]
+  paths: DaytonaSandboxPaths
+  presetSecrets?: SandboxPresetEnvVar[]
+}): CodexAppServerDaemonHandle {
+  const { daemonPaths, env, envHash } = codexAppServerDaemonEnv(options)
+  return { env, envHash, paths: daemonPaths }
+}
+
 function codexAppServerDaemonRequestPath(
   paths: DaytonaSandboxPaths,
   label: string
@@ -164,7 +181,7 @@ async function writeCodexAppServerDaemonScripts(
   daemonPaths: CodexAppServerDaemonPaths,
   signal?: AbortSignal
 ) {
-  const markerPath = `${paths.runtimeHome}/codex-app-server/scripts.sha256`
+  const markerPath = daemonPaths.scriptsMarkerPath
   const fingerprint = codexAppServerDaemonScriptsFingerprint()
   const marker = await runDaytonaCommand(
     sandbox,
@@ -235,6 +252,7 @@ export async function requestCodexAppServerDaemon({
   sandbox,
   signal,
   timeoutMs,
+  verifyScripts,
 }: {
   daemonPaths: CodexAppServerDaemonPaths
   gitAuth?: SandboxGitHubAuth | null
@@ -245,6 +263,7 @@ export async function requestCodexAppServerDaemon({
   sandbox: Sandbox
   signal?: AbortSignal
   timeoutMs?: number
+  verifyScripts?: boolean
 }) {
   const payloadPath = codexAppServerDaemonRequestPath(paths, label)
   const authOutputPath = codexAppServerDaemonRequestPath(paths, `${label}-auth`)
@@ -270,7 +289,14 @@ export async function requestCodexAppServerDaemon({
   try {
     const result = await runDaytonaCommand(
       sandbox,
-      codexAppServerDaemonClientCommand({ daemonPaths, paths, payloadPath }),
+      codexAppServerDaemonClientCommand({
+        daemonPaths,
+        paths,
+        payloadPath,
+        ...(verifyScripts
+          ? { scriptsFingerprint: codexAppServerDaemonScriptsFingerprint() }
+          : {}),
+      }),
       {
         env: repoCommandEnv(paths, gitAuth?.env),
         onStdout: (chunk) => {

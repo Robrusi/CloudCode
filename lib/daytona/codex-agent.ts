@@ -13,9 +13,9 @@ import {
 } from "@/lib/daytona/codex-cli-setup"
 import {
   daytonaDesktopToolContentFingerprint,
+  desktopAgentRunStateScript,
   installDaytonaDesktopTools,
   stopDaytonaDesktopAgentRecordings,
-  writeDaytonaDesktopAgentRunState,
   type DaytonaDesktopRecordingArtifact,
 } from "@/lib/daytona/desktop"
 import {
@@ -81,7 +81,8 @@ import {
 import { cloudcodeYamlAgentContext } from "@/lib/cloudcode/yaml"
 import {
   configureSandboxGitHubRemote,
-  setupSandboxGitHubAuth,
+  prepareSandboxGitHubAuthPlan,
+  uploadSandboxGitHubAuthFiles,
   type SandboxGitHubAuth,
 } from "@/lib/sandbox/github-auth"
 import { parseGitHubRepoUrl } from "@/lib/github/repo"
@@ -221,70 +222,66 @@ function hotContinuationHashHelpers() {
   ].join("\n")
 }
 
-async function readHotContinuationState({
+/**
+ * Emits the hot-continuation readiness probe as a script fragment so it can
+ * ride along in the combined pre-run command instead of costing its own
+ * sandbox roundtrip. It must be the last fragment in a combined command:
+ * every miss exits the shell (with status 0) after printing the marker.
+ */
+function hotContinuationCheckScript({
   contextEnabled,
-  enabled,
   expectedFingerprint,
   expectedRemoteUrl,
   githubEnabled,
   paths,
-  sandbox,
-  signal,
 }: {
   contextEnabled: boolean
-  enabled: boolean
   expectedFingerprint: string
   expectedRemoteUrl?: string | null
   githubEnabled: boolean
   paths: DaytonaSandboxPaths
-  sandbox: Sandbox
-  signal?: AbortSignal
 }) {
-  if (!enabled) return { ready: false as const }
+  return [
+    "set +e",
+    `repo_path=${shellQuote(paths.repoPath)}`,
+    `marker_path=${shellQuote(hotContinuationMarkerPath(paths))}`,
+    `expected_fingerprint=${shellQuote(expectedFingerprint)}`,
+    `expected_remote=${shellQuote(expectedRemoteUrl ?? "")}`,
+    `context_enabled=${contextEnabled ? "1" : "0"}`,
+    `github_enabled=${githubEnabled ? "1" : "0"}`,
+    hotContinuationHashHelpers(),
+    "miss() {",
+    `  printf '${HOT_CONTINUATION_STATUS_MARKER} miss %s\\n' "$1"`,
+    "  exit 0",
+    "}",
+    '[ -f "$marker_path" ] || miss marker',
+    '[ -d "$repo_path/.git" ] || miss repo',
+    `[ -x ${shellQuote(paths.codexLauncherPath)} ] || miss launcher`,
+    `[ -s ${shellQuote(paths.baseRefPath)} ] || miss base-ref`,
+    `[ -s ${shellQuote(paths.presetEnvPath)} ] || miss preset-env`,
+    `[ -s ${shellQuote(`${paths.codexHome}/AGENTS.md`)} ] || miss agents`,
+    `[ -s ${shellQuote(`${paths.codexHome}/config.toml`)} ] || miss config`,
+    `[ -x ${shellQuote(`${paths.codexHome}/desktop/cloudcode-desktop-mcp.mjs`)} ] || miss desktop-tool`,
+    `[ -s ${shellQuote(`${paths.codexHome}/desktop/tool-version`)} ] || miss desktop-marker`,
+    `[ "$context_enabled" != "1" ] || [ -x ${shellQuote(`${paths.codexHome}/context/cloudcode-context-mcp.mjs`)} ] || miss context-tool`,
+    `[ "$context_enabled" != "1" ] || [ -s ${shellQuote(`${paths.codexHome}/context/tool-version`)} ] || miss context-marker`,
+    `[ "$github_enabled" != "1" ] || [ -x ${shellQuote(`${paths.codexHome}/github/cloudcode-github-mcp.mjs`)} ] || miss github-tool`,
+    `[ "$github_enabled" != "1" ] || [ -s ${shellQuote(`${paths.codexHome}/github/tool-version`)} ] || miss github-marker`,
+    "yaml_hash=$(repo_cloudcode_hash)",
+    "mise_hash=$(repo_mise_hash)",
+    'expected_line="$expected_fingerprint $yaml_hash $mise_hash"',
+    'grep -qxF -- "$expected_line" "$marker_path" 2>/dev/null || miss fingerprint',
+    'branch=$(git -C "$repo_path" rev-parse --abbrev-ref HEAD 2>/dev/null || true)',
+    '[ -n "$branch" ] && [ "$branch" != HEAD ] || miss branch',
+    'remote=$(git -C "$repo_path" remote get-url origin 2>/dev/null || true)',
+    '[ -z "$expected_remote" ] || [ "$remote" = "$expected_remote" ] || miss remote',
+    `printf '${HOT_CONTINUATION_STATUS_MARKER} ready %s\\n' "$branch"`,
+  ].join("\n")
+}
 
-  const result = await runDaytonaCommand(
-    sandbox,
-    [
-      "set +e",
-      `repo_path=${shellQuote(paths.repoPath)}`,
-      `marker_path=${shellQuote(hotContinuationMarkerPath(paths))}`,
-      `expected_fingerprint=${shellQuote(expectedFingerprint)}`,
-      `expected_remote=${shellQuote(expectedRemoteUrl ?? "")}`,
-      `context_enabled=${contextEnabled ? "1" : "0"}`,
-      `github_enabled=${githubEnabled ? "1" : "0"}`,
-      hotContinuationHashHelpers(),
-      "miss() {",
-      `  printf '${HOT_CONTINUATION_STATUS_MARKER} miss %s\\n' "$1"`,
-      "  exit 0",
-      "}",
-      '[ -f "$marker_path" ] || miss marker',
-      '[ -d "$repo_path/.git" ] || miss repo',
-      `[ -x ${shellQuote(paths.codexLauncherPath)} ] || miss launcher`,
-      `[ -s ${shellQuote(paths.baseRefPath)} ] || miss base-ref`,
-      `[ -s ${shellQuote(paths.presetEnvPath)} ] || miss preset-env`,
-      `[ -s ${shellQuote(`${paths.codexHome}/AGENTS.md`)} ] || miss agents`,
-      `[ -s ${shellQuote(`${paths.codexHome}/config.toml`)} ] || miss config`,
-      `[ -x ${shellQuote(`${paths.codexHome}/desktop/cloudcode-desktop-mcp.mjs`)} ] || miss desktop-tool`,
-      `[ -s ${shellQuote(`${paths.codexHome}/desktop/tool-version`)} ] || miss desktop-marker`,
-      `[ "$context_enabled" != "1" ] || [ -x ${shellQuote(`${paths.codexHome}/context/cloudcode-context-mcp.mjs`)} ] || miss context-tool`,
-      `[ "$context_enabled" != "1" ] || [ -s ${shellQuote(`${paths.codexHome}/context/tool-version`)} ] || miss context-marker`,
-      `[ "$github_enabled" != "1" ] || [ -x ${shellQuote(`${paths.codexHome}/github/cloudcode-github-mcp.mjs`)} ] || miss github-tool`,
-      `[ "$github_enabled" != "1" ] || [ -s ${shellQuote(`${paths.codexHome}/github/tool-version`)} ] || miss github-marker`,
-      "yaml_hash=$(repo_cloudcode_hash)",
-      "mise_hash=$(repo_mise_hash)",
-      'expected_line="$expected_fingerprint $yaml_hash $mise_hash"',
-      'grep -qxF -- "$expected_line" "$marker_path" 2>/dev/null || miss fingerprint',
-      'branch=$(git -C "$repo_path" rev-parse --abbrev-ref HEAD 2>/dev/null || true)',
-      '[ -n "$branch" ] && [ "$branch" != HEAD ] || miss branch',
-      'remote=$(git -C "$repo_path" remote get-url origin 2>/dev/null || true)',
-      '[ -z "$expected_remote" ] || [ "$remote" = "$expected_remote" ] || miss remote',
-      `printf '${HOT_CONTINUATION_STATUS_MARKER} ready %s\\n' "$branch"`,
-    ].join("\n"),
-    { signal, timeoutMs: 10_000 }
-  ).catch(() => undefined)
-
-  const line = result?.stdout
-    .split(/\r?\n/)
+function parseHotContinuationStatus(stdout: string | undefined) {
+  const line = stdout
+    ?.split(/\r?\n/)
     .find((candidate) => candidate.startsWith(HOT_CONTINUATION_STATUS_MARKER))
   const [, status, branchName] = line?.split(/\s+/, 3) ?? []
   if (status === "ready" && branchName) {
@@ -477,7 +474,9 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       sandbox,
       input.sandboxIdleMinutes
     )
-    gitAuth = await setupSandboxGitHubAuth({
+    // Computed locally; the credential files upload and the setup script run
+    // as part of the combined pre-run roundtrip below.
+    const gitAuthPlan = await prepareSandboxGitHubAuthPlan({
       githubToken,
       githubUserEmail: input.githubUserEmail,
       githubUserName: input.githubUserName,
@@ -489,6 +488,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       sandbox,
       signal: input.signal,
     })
+    gitAuth = gitAuthPlan?.auth ?? null
 
     await emitLog(input, {
       detail: sandbox.snapshot,
@@ -572,12 +572,6 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     }
 
     const finishRun = async () => {
-      await writeDaytonaDesktopAgentRunState(
-        sandbox,
-        paths,
-        input.runId,
-        input.signal
-      )
       const appServerResult = await runCodexViaAppServer({
         builtInMcpConfig: mcpConfig,
         codexThreadIdToResume,
@@ -592,16 +586,13 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       })
       await stopDesktopAgentRecording()
 
-      await Promise.all([
-        appServerResult.exitCode === 0
-          ? Promise.resolve()
-          : emitLog(input, {
-              detail: String(appServerResult.exitCode),
-              kind: "stderr",
-              message: `Codex exited with code ${appServerResult.exitCode}`,
-            }),
-        cleanupRunFiles(sandbox, paths, input.signal),
-      ])
+      if (appServerResult.exitCode !== 0) {
+        await emitLog(input, {
+          detail: String(appServerResult.exitCode),
+          kind: "stderr",
+          message: `Codex exited with code ${appServerResult.exitCode}`,
+        })
+      }
       const { updatedAuthJson } = appServerResult
 
       const { diff, status } = await collectRunDiffAndStatus({
@@ -643,21 +634,52 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       requestedBranchName,
       useBaseBranch,
     })
-    const hotContinuation = await readHotContinuationState({
-      contextEnabled: Boolean(contextConfig),
-      enabled: Boolean(
-        input.sandboxId &&
-        existingCodexThreadId &&
-        !createdSandbox &&
-        !recoveredSandbox
-      ),
-      expectedFingerprint: hotFingerprint,
-      expectedRemoteUrl: gitAuth?.remoteUrl,
-      githubEnabled: Boolean(githubConfig),
-      paths,
+    const hotContinuationEnabled = Boolean(
+      input.sandboxId &&
+      existingCodexThreadId &&
+      !createdSandbox &&
+      !recoveredSandbox
+    )
+
+    // One staged-upload round plus one command covers GitHub auth setup, the
+    // desktop run-state write, and the hot-continuation probe — work that
+    // previously cost half a dozen sequential sandbox roundtrips per message.
+    if (gitAuthPlan) {
+      await uploadSandboxGitHubAuthFiles(sandbox, gitAuthPlan)
+    }
+    const preRunResult = await runDaytonaCommand(
       sandbox,
-      signal: input.signal,
-    })
+      [
+        "set -e",
+        gitAuthPlan?.script ?? "",
+        desktopAgentRunStateScript(paths, input.runId),
+        hotContinuationEnabled
+          ? hotContinuationCheckScript({
+              contextEnabled: Boolean(contextConfig),
+              expectedFingerprint: hotFingerprint,
+              expectedRemoteUrl: gitAuth?.remoteUrl,
+              githubEnabled: Boolean(githubConfig),
+              paths,
+            })
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      {
+        env: gitAuthPlan?.commandEnv,
+        signal: input.signal,
+        timeoutMs: 20_000,
+      }
+    )
+    if (preRunResult.exitCode !== 0) {
+      throw new Error(
+        compactLine(preRunResult.stderr || preRunResult.stdout) ||
+          "Unable to prepare the sandbox for this run."
+      )
+    }
+    const hotContinuation = hotContinuationEnabled
+      ? parseHotContinuationStatus(preRunResult.stdout)
+      : { ready: false as const }
     if (hotContinuation.ready) {
       if (contextConfig || githubConfig) {
         const toolStateReady = await writeRunToolState()

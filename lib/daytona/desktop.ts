@@ -28,6 +28,7 @@ import {
   uiTestsToolContentFingerprint,
 } from "@/lib/daytona/ui-tests-mcp-script"
 export {
+  desktopAgentRunStateScript,
   getCachedDaytonaDesktopRecordingFile,
   getDaytonaDesktopRecordingFile,
   isDaytonaDesktopSandboxRunning,
