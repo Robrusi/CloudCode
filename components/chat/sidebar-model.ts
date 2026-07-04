@@ -1,6 +1,8 @@
 import type { Id } from "@/convex/_generated/dataModel"
 import type { SandboxState } from "@/components/chat/sandbox-types"
 
+
+// types
 export type SidebarChat = {
   automationId?: Id<"automations">
   id: Id<"threads">
