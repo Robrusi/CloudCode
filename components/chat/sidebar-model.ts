@@ -1,7 +1,6 @@
 import type { Id } from "@/convex/_generated/dataModel"
 import type { SandboxState } from "@/components/chat/sandbox-types"
 
-
 // types
 export type SidebarChat = {
   automationId?: Id<"automations">
@@ -120,8 +119,8 @@ export function groupSidebarChats(chats: SidebarChat[]): SidebarChatGroup[] {
   return groups.sort((a, b) => b.latest - a.latest)
 }
 
-export function relativeTime(timestamp: number) {
-  const diff = Math.max(0, Date.now() - timestamp)
+export function relativeTime(timestamp: number, now = Date.now()) {
+  const diff = Math.max(0, now - timestamp)
   const seconds = Math.floor(diff / 1000)
   if (seconds < 60) return seconds <= 1 ? "just now" : `${seconds} seconds ago`
   const minutes = Math.floor(seconds / 60)

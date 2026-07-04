@@ -10,7 +10,7 @@ import {
   type LucideIcon,
   ListChecks,
 } from "lucide-react"
-import { useMemo } from "react"
+import { useEffect, useMemo, useState } from "react"
 
 import {
   relativeTime,
@@ -19,6 +19,8 @@ import {
   type WorkspaceHealthLevel,
 } from "@/components/chat/sidebar-model"
 import { cn } from "@/lib/shared/utils"
+
+const WORKSPACE_HEALTH_REFRESH_MS = 60_000
 
 const LEVEL_COPY: Record<
   WorkspaceHealthLevel,
@@ -47,10 +49,23 @@ const LEVEL_COPY: Record<
 }
 
 export function SidebarWorkspaceHealth({ chats }: { chats: SidebarChat[] }) {
-  const summary = useMemo(() => summarizeWorkspaceHealth(chats), [chats])
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    const interval = window.setInterval(
+      () => setNow(Date.now()),
+      WORKSPACE_HEALTH_REFRESH_MS
+    )
+    return () => window.clearInterval(interval)
+  }, [])
+
+  const summary = useMemo(
+    () => summarizeWorkspaceHealth(chats, now),
+    [chats, now]
+  )
   const copy = LEVEL_COPY[summary.level]
   const latestLabel = summary.latestActivityAt
-    ? relativeTime(summary.latestActivityAt)
+    ? relativeTime(summary.latestActivityAt, now)
     : "No activity yet"
   const activeShare =
     summary.totalChats === 0
