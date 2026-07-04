@@ -12,12 +12,15 @@ import {
   textareaClass,
 } from "@/components/settings/shared"
 import { Button } from "@/components/ui/button"
+import { ColorPicker } from "@/components/ui/color-picker"
 import {
   SegmentedControl,
   type SegmentedOption,
 } from "@/components/ui/segmented-control"
 import { Slider } from "@/components/ui/slider"
 import { api } from "@/convex/_generated/api"
+import { useAccent } from "@/hooks/use-accent"
+import { DEFAULT_ACCENT, DEFAULT_CUSTOM_COLOR } from "@/lib/theme/accent"
 import {
   clampSandboxIdleMinutes,
   SANDBOX_IDLE_MINUTES_MAX,
@@ -168,6 +171,43 @@ function IdleTimeoutSetting() {
   )
 }
 
+function AccentSetting() {
+  const {
+    accent,
+    customColor,
+    setAccent,
+    previewCustomColor,
+    commitCustomColor,
+    mounted,
+  } = useAccent()
+
+  // Default = the neutral accent (black/white buttons); disable Reset there.
+  const isDefault = mounted && accent === DEFAULT_ACCENT
+
+  return (
+    <div className="flex items-center justify-between gap-4 border-t border-border/60 pt-6">
+      <div className="text-sm font-medium text-foreground/90">Accent</div>
+      <div className="flex items-center gap-2">
+        <ColorPicker
+          ariaLabel="Accent color"
+          value={mounted ? customColor : DEFAULT_CUSTOM_COLOR}
+          onChange={previewCustomColor}
+          onCommit={commitCustomColor}
+        />
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={isDefault}
+          onClick={() => setAccent(DEFAULT_ACCENT)}
+        >
+          Reset
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 export function CustomizationSettings() {
   const { theme, setTheme } = useTheme()
   // next-themes can't know the resolved theme until mounted; render a stable
@@ -198,6 +238,7 @@ export function CustomizationSettings() {
           options={THEME_OPTIONS}
         />
       </div>
+      <AccentSetting />
     </SettingsPage>
   )
 }

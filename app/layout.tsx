@@ -71,6 +71,21 @@ export default function RootLayout({
         geist.variable
       )}
     >
+      <head>
+        {/* Apply the stored accent before first paint so primary controls never
+            flash the neutral colour. next-themes handles the light/dark class;
+            this mirrors it for the [data-accent] attribute. Preset accents get
+            their colour from CSS; the custom accent sets --accent-solid inline
+            with a luminance-picked text colour (kept in sync with
+            contrastForeground in lib/theme/accent.ts). Unknown values map to no
+            CSS rule (= the neutral "mono" default). */}
+        <script
+          // eslint-disable-next-line react/no-danger
+          dangerouslySetInnerHTML={{
+            __html: `try{var e=document.documentElement,a=localStorage.getItem('cc-accent');if(a&&a!=='mono')e.setAttribute('data-accent',a);if(a==='custom'){var c=localStorage.getItem('cc-accent-color');if(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(c||'')){var h=c.slice(1);if(h.length===3)h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2];var r=parseInt(h.slice(0,2),16)/255,g=parseInt(h.slice(2,4),16)/255,b=parseInt(h.slice(4,6),16)/255;e.style.setProperty('--accent-solid',c);e.style.setProperty('--accent-solid-foreground',0.299*r+0.587*g+0.114*b>0.6?'#0a0a0a':'#ffffff')}}}catch(e){}`,
+          }}
+        />
+      </head>
       <body>
         <ClerkProvider>
           <ConvexClientProvider>
