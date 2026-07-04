@@ -9,6 +9,7 @@ import {
  * which losslessly holds any expression the structured kinds cannot express.
  */
 export type ScheduleDraft =
+  | { kind: "minutely"; every: number }
   | { kind: "hourly"; every: number; minute: number }
   | { kind: "daily"; time: string }
   | { kind: "weekly"; days: number[]; time: string }
@@ -22,6 +23,7 @@ export type ScheduleKind = ScheduleDraft["kind"]
  * the rest map one-to-one onto a kind.
  */
 export const FREQUENCY_OPTIONS = [
+  "minutely",
   "hourly",
   "daily",
   "weekdays",
@@ -34,9 +36,13 @@ export const FREQUENCY_LABEL: Record<FrequencyOption, string> = {
   custom: "Custom",
   daily: "Daily",
   hourly: "Hourly",
+  minutely: "Minutely",
   weekdays: "Weekdays",
   weekly: "Weekly",
 }
+
+/** Minute intervals offered by the editor; other stored values still render. */
+export const MINUTE_INTERVALS = [5, 10, 15, 20, 30]
 
 /** Hour intervals offered by the editor; other stored values still render. */
 export const HOURLY_INTERVALS = [1, 2, 3, 4, 6, 8, 12]
@@ -115,6 +121,8 @@ function timeOfDraft(draft: ScheduleDraft): string {
       return draft.time
     case "hourly":
       return `09:${pad2(draft.minute)}`
+    case "minutely":
+      return DEFAULT_TIME
     case "custom":
       return timeFromCron(draft.cron) ?? DEFAULT_TIME
   }
@@ -122,6 +130,14 @@ function timeOfDraft(draft: ScheduleDraft): string {
 
 export function cronFromScheduleDraft(draft: ScheduleDraft): string {
   if (draft.kind === "custom") return validateAutomationCron(draft.cron)
+
+  if (draft.kind === "minutely") {
+    if (!Number.isInteger(draft.every) || draft.every < 1 || draft.every > 59) {
+      throw new Error("Pick a valid minute interval.")
+    }
+    const minute = draft.every === 1 ? "*" : `*/${draft.every}`
+    return `${minute} * * * *`
+  }
 
   if (draft.kind === "hourly") {
     if (
@@ -160,6 +176,22 @@ function structuredFromCron(cron: string): ScheduleDraft | null {
   if (fields.length !== 5) return null
 
   const [minute, hour, dayOfMonth, month, dayOfWeek] = fields
+
+  // "Every N minutes": minute is "*" or "*/N", everything else wild.
+  if (
+    month === "*" &&
+    dayOfMonth === "*" &&
+    dayOfWeek === "*" &&
+    hour === "*"
+  ) {
+    if (minute === "*") return { every: 1, kind: "minutely" }
+    const step = /^\*\/(\d{1,2})$/.exec(minute)
+    if (step) {
+      const every = Number(step[1])
+      if (every >= 1 && every <= 59) return { every, kind: "minutely" }
+    }
+  }
+
   if (month !== "*" || !/^\d{1,2}$/.test(minute) || Number(minute) > 59) {
     return null
   }
@@ -204,6 +236,8 @@ export function scheduleDraftFromCron(cron: string): ScheduleDraft {
 /** Which dropdown option a draft currently reads as. */
 export function frequencyOfSchedule(draft: ScheduleDraft): FrequencyOption {
   switch (draft.kind) {
+    case "minutely":
+      return "minutely"
     case "hourly":
       return "hourly"
     case "daily":
@@ -235,6 +269,11 @@ export function scheduleForFrequency(
 ): ScheduleDraft {
   const time = timeOfDraft(current)
   switch (option) {
+    case "minutely":
+      return {
+        every: current.kind === "minutely" ? current.every : 15,
+        kind: "minutely",
+      }
     case "hourly":
       return {
         every: current.kind === "hourly" ? current.every : 1,
@@ -298,6 +337,8 @@ export function humanizeCron(cron: string): string {
 /** Compact list-row label: "Hourly", "Every 6h", "Weekdays 09:00". */
 export function shortScheduleLabel(draft: ScheduleDraft): string {
   switch (draft.kind) {
+    case "minutely":
+      return draft.every === 1 ? "Every minute" : `Every ${draft.every}m`
     case "hourly":
       return draft.every === 1 ? "Hourly" : `Every ${draft.every}h`
     case "daily":
@@ -317,6 +358,8 @@ export function shortScheduleLabel(draft: ScheduleDraft): string {
 
 export function describeScheduleDraft(draft: ScheduleDraft): string {
   switch (draft.kind) {
+    case "minutely":
+      return draft.every === 1 ? "Every minute" : `Every ${draft.every} minutes`
     case "hourly": {
       const base =
         draft.every === 1 ? "Every hour" : `Every ${draft.every} hours`

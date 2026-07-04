@@ -20,6 +20,7 @@ import {
   FREQUENCY_OPTIONS,
   frequencyOfSchedule,
   HOURLY_INTERVALS,
+  MINUTE_INTERVALS,
   scheduleForFrequency,
   upcomingRuns,
   WEEKDAY_LONG,
@@ -185,6 +186,33 @@ function ScheduleFields({
   schedule: ScheduleDraft
   onScheduleChange: (schedule: ScheduleDraft) => void
 }) {
+  if (schedule.kind === "minutely") {
+    const intervalOptions: Option[] = [
+      ...(MINUTE_INTERVALS.includes(schedule.every)
+        ? []
+        : [
+            {
+              label: `Every ${schedule.every} minutes`,
+              value: String(schedule.every),
+            },
+          ]),
+      ...MINUTE_INTERVALS.map((every) => ({
+        label: every === 1 ? "Every minute" : `Every ${every} minutes`,
+        value: String(every),
+      })),
+    ]
+    return (
+      <MenuSelect
+        ariaLabel="Minute interval"
+        value={String(schedule.every)}
+        options={intervalOptions}
+        onChange={(value) =>
+          onScheduleChange({ ...schedule, every: Number(value) })
+        }
+      />
+    )
+  }
+
   if (schedule.kind === "hourly") {
     const intervalOptions: Option[] = [
       ...(HOURLY_INTERVALS.includes(schedule.every)
