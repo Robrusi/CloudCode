@@ -392,7 +392,12 @@ export function AutomationsScreen({
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
-        <div className="mx-auto w-full max-w-2xl px-4 pt-8 pb-[calc(5rem+env(safe-area-inset-bottom))] md:px-8 md:pt-12">
+        <div
+          className={cn(
+            "mx-auto w-full px-4 pt-8 pb-[calc(5rem+env(safe-area-inset-bottom))] md:px-8 md:pt-12",
+            active !== null ? "max-w-4xl" : "max-w-2xl"
+          )}
+        >
           {active !== null ? (
             <AutomationComposer
               key={active === "new" ? "new" : active._id}

@@ -125,138 +125,154 @@ export function AutomationComposer({
       }}
       className="w-full"
     >
-      <Input
-        variant="bare"
-        aria-label="Automation title"
-        value={draft.name}
-        onChange={(event) => set("name", event.target.value)}
-        placeholder="Scheduled task title"
-        className="text-2xl tracking-tight placeholder:text-muted-foreground/50"
-      />
+      <div className="flex flex-col gap-8 md:flex-row md:gap-16">
+        <div className="min-w-0 flex-1">
+          <Input
+            variant="bare"
+            aria-label="Automation title"
+            value={draft.name}
+            onChange={(event) => set("name", event.target.value)}
+            placeholder="Scheduled task title"
+            className="text-2xl tracking-tight placeholder:text-muted-foreground/50"
+          />
 
-      <Textarea
-        ref={promptRef}
-        variant="bare"
-        aria-label="Automation prompt"
-        rows={2}
-        value={draft.prompt}
-        onChange={(event) => set("prompt", event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-            event.preventDefault()
-            void submit()
-          }
-        }}
-        placeholder="Add prompt e.g. check Linear and work on my top issue"
-        className="mt-5 min-h-12 overflow-hidden text-[15px] leading-6 placeholder:text-muted-foreground/50"
-      />
+          <Textarea
+            ref={promptRef}
+            variant="bare"
+            aria-label="Automation prompt"
+            rows={2}
+            value={draft.prompt}
+            onChange={(event) => set("prompt", event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault()
+                void submit()
+              }
+            }}
+            placeholder="Add prompt e.g. check Linear and work on my top issue"
+            className="mt-5 min-h-12 overflow-hidden text-[15px] leading-6 placeholder:text-muted-foreground/50"
+          />
+        </div>
 
-      <div className="mt-8 text-sm text-muted-foreground">Details</div>
+        <div className="w-full shrink-0 md:sticky md:top-12 md:w-72 md:self-start">
+          <div className="text-sm text-muted-foreground">Details</div>
 
-      <div className="mt-2">
-        <DetailRow label="Repository">
-          <RepoChip
-            value={draft.repoUrl}
-            editing={editingRepo}
-            setEditing={setEditingRepo}
-            onChange={(repoUrl) => set("repoUrl", repoUrl)}
-            locked={false}
-          />
-        </DetailRow>
-        <DetailRow label="Base branch">
-          <BranchChip
-            value={draft.baseBranch}
-            repoUrl={draft.repoUrl}
-            onChange={(baseBranch) => set("baseBranch", baseBranch)}
-            locked={false}
-          />
-        </DetailRow>
-        <DetailRow label="Branch target">
-          <BranchTargetChip
-            mode={draft.branchMode}
-            branchName={draft.branchName}
-            baseBranch={draft.baseBranch}
-            open={branchTargetOpen}
-            setOpen={setBranchTargetOpen}
-            onChangeMode={(branchMode) => set("branchMode", branchMode)}
-            onChangeBranchName={(branchName) => set("branchName", branchName)}
-          />
-        </DetailRow>
-        <DetailRow label="Repeats">
-          <ScheduleChip
-            schedule={draft.schedule}
-            timezone={draft.timezone}
-            open={scheduleOpen}
-            setOpen={setScheduleOpen}
-            onScheduleChange={(schedule) => set("schedule", schedule)}
-            onTimezoneChange={(timezone) => set("timezone", timezone)}
-          />
-        </DetailRow>
-        <DetailRow label="Model">
-          <ModelChip
-            model={draft.model}
-            thinking={draft.reasoningEffort}
-            onSelectModel={(model) => set("model", model)}
-            onSelectThinking={(thinking) => set("reasoningEffort", thinking)}
-            open={modelOpen}
-            setOpen={setModelOpen}
-          />
-        </DetailRow>
-        <DetailRow label="Environment setup">
-          <PresetPill
-            value={draft.sandboxPresetId as Id<"sandboxPresets"> | ""}
-            presets={sandboxPresets}
-            open={presetOpen}
-            setOpen={setPresetOpen}
-            menuPlacement="down"
-            onSelect={(sandboxPresetId) =>
-              set("sandboxPresetId", sandboxPresetId)
-            }
-          />
-        </DetailRow>
-        <DetailRow label="Sandbox">
-          <OptionChip
-            ariaLabel="Sandbox after run"
-            value={draft.sandboxRetention}
-            onChange={(sandboxRetention) =>
-              set("sandboxRetention", sandboxRetention)
-            }
-            options={[
-              { label: "Delete after run", value: "delete" },
-              { label: "Keep idle", value: "idle" },
-            ]}
-          />
-        </DetailRow>
-        <DetailRow label="Chat">
-          <OptionChip
-            ariaLabel="Chat per run"
-            value={draft.threadMode}
-            onChange={(threadMode) => set("threadMode", threadMode)}
-            options={[
-              { label: "Same chat", value: "single" },
-              { label: "New chat per run", value: "per-run" },
-            ]}
-          />
-        </DetailRow>
-      </div>
+          <div className="mt-2">
+            <DetailRow label="Repository">
+              <RepoChip
+                value={draft.repoUrl}
+                editing={editingRepo}
+                setEditing={setEditingRepo}
+                onChange={(repoUrl) => set("repoUrl", repoUrl)}
+                locked={false}
+              />
+            </DetailRow>
+            <DetailRow label="Base branch">
+              <BranchChip
+                value={draft.baseBranch}
+                repoUrl={draft.repoUrl}
+                onChange={(baseBranch) => set("baseBranch", baseBranch)}
+                locked={false}
+              />
+            </DetailRow>
+            <DetailRow label="Branch target">
+              <BranchTargetChip
+                mode={draft.branchMode}
+                branchName={draft.branchName}
+                baseBranch={draft.baseBranch}
+                open={branchTargetOpen}
+                setOpen={setBranchTargetOpen}
+                onChangeMode={(branchMode) => set("branchMode", branchMode)}
+                onChangeBranchName={(branchName) =>
+                  set("branchName", branchName)
+                }
+              />
+            </DetailRow>
+            <DetailRow label="Repeats">
+              <ScheduleChip
+                schedule={draft.schedule}
+                timezone={draft.timezone}
+                open={scheduleOpen}
+                setOpen={setScheduleOpen}
+                onScheduleChange={(schedule) => set("schedule", schedule)}
+                onTimezoneChange={(timezone) => set("timezone", timezone)}
+              />
+            </DetailRow>
+            <DetailRow label="Model">
+              <ModelChip
+                model={draft.model}
+                thinking={draft.reasoningEffort}
+                onSelectModel={(model) => set("model", model)}
+                onSelectThinking={(thinking) =>
+                  set("reasoningEffort", thinking)
+                }
+                open={modelOpen}
+                setOpen={setModelOpen}
+              />
+            </DetailRow>
+            <DetailRow label="Environment setup">
+              <PresetPill
+                value={draft.sandboxPresetId as Id<"sandboxPresets"> | ""}
+                presets={sandboxPresets}
+                open={presetOpen}
+                setOpen={setPresetOpen}
+                menuPlacement="down"
+                onSelect={(sandboxPresetId) =>
+                  set("sandboxPresetId", sandboxPresetId)
+                }
+              />
+            </DetailRow>
+            <DetailRow label="Sandbox">
+              <OptionChip
+                ariaLabel="Sandbox after run"
+                value={draft.sandboxRetention}
+                onChange={(sandboxRetention) =>
+                  set("sandboxRetention", sandboxRetention)
+                }
+                options={[
+                  { label: "Delete after run", value: "delete" },
+                  { label: "Keep idle", value: "idle" },
+                ]}
+              />
+            </DetailRow>
+            <DetailRow label="Chat">
+              <OptionChip
+                ariaLabel="Chat per run"
+                value={draft.threadMode}
+                onChange={(threadMode) => set("threadMode", threadMode)}
+                options={[
+                  { label: "Same chat", value: "single" },
+                  { label: "New chat per run", value: "per-run" },
+                ]}
+              />
+            </DetailRow>
+          </div>
 
-      {error ? <p className="mt-3 text-xs text-destructive">{error}</p> : null}
+          {error ? (
+            <p className="mt-3 text-xs text-destructive">{error}</p>
+          ) : null}
 
-      <div className="mt-6 flex items-center justify-end gap-2">
-        {onCancel ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={onCancel}
-            className="text-muted-foreground"
-          >
-            Cancel
-          </Button>
-        ) : null}
-        <Button type="submit" size="sm" disabled={busy || !draft.prompt.trim()}>
-          {automation ? "Save" : "Create"}
-        </Button>
+          <div className="mt-6 flex items-center justify-end gap-2">
+            {onCancel ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={onCancel}
+                className="text-muted-foreground"
+              >
+                Cancel
+              </Button>
+            ) : null}
+            <Button
+              type="submit"
+              size="sm"
+              disabled={busy || !draft.prompt.trim()}
+            >
+              {automation ? "Save" : "Create"}
+            </Button>
+          </div>
+        </div>
       </div>
     </form>
   )

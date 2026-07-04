@@ -160,7 +160,7 @@ export function ReviewComposer({
           />
         </div>
 
-        <div className="w-full shrink-0 md:w-72">
+        <div className="w-full shrink-0 md:sticky md:top-12 md:w-72 md:self-start">
           <div className="text-sm text-muted-foreground">Details</div>
 
           <div className="mt-2">
