@@ -12,6 +12,7 @@ import {
   type SidebarChat,
 } from "@/components/chat/sidebar-model"
 import { SidebarSettingsNav } from "@/components/chat/sidebar-settings-nav"
+import { SidebarWorkspaceHealth } from "@/components/chat/sidebar-workspace-health"
 import type { SettingsSectionId } from "@/components/settings/sections"
 import type { Id } from "@/convex/_generated/dataModel"
 import { useIsMobile } from "@/hooks/use-is-mobile"
@@ -125,6 +126,8 @@ export function Sidebar({
               <span>Automations</span>
             </button>
           </div>
+
+          <SidebarWorkspaceHealth chats={chats} />
 
           <div className="mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-4">
             {groups.length === 0 ? (

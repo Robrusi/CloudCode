@@ -16,10 +16,10 @@ trustPolicyExclude:
   - "@effect/platform-node-shared"
 
 # Postinstall scripts stay blocked (each verified unnecessary): esbuild,
-# @depot/cli, unrs-resolver, and msgpackr-extract all ship their native
-# binaries via platform-specific optional deps (the scripts are fallback
-# downloaders/compilers); @clerk/shared's script only prints a telemetry
-# notice; protobufjs's script only generates optional CLI artifacts.
+# @depot/cli, unrs-resolver, msgpackr-extract, msw, sharp, and
+# unicode-animations all ship usable package artifacts without running their
+# install scripts in this workspace; @clerk/shared's script only prints a
+# telemetry notice; protobufjs's script only generates optional CLI artifacts.
 ignoredBuiltDependencies:
   - esbuild
   - protobufjs
@@ -27,6 +27,9 @@ ignoredBuiltDependencies:
   - "@clerk/shared"
   - unrs-resolver
   - msgpackr-extract
+  - msw
+  - sharp
+  - unicode-animations
 
 # Security overrides for vulnerable transitive dependencies (pnpm audit).
 # Scoped by major version where multiple majors coexist in the tree.
@@ -55,3 +58,14 @@ overrides:
   # 3.10.1 dropped provenance attestation (trustPolicy no-downgrade rejects it);
   # 4.4.x restores SLSA provenance. Lint-only tooling via eslint-config-next.
   eslint-import-resolver-typescript: ^4.4.3
+
+allowBuilds:
+  "@clerk/shared": false
+  "@depot/cli": false
+  esbuild: false
+  msgpackr-extract: false
+  msw: false
+  protobufjs: false
+  sharp: false
+  unicode-animations: false
+  unrs-resolver: false
