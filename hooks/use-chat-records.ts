@@ -129,6 +129,12 @@ export function useChatRecords() {
   // empty until its full record loads. Track that gap so the UI can hold the
   // thread layout instead of flashing the new-chat empty state.
   const activeThreadLoading = activeId !== null && rawActiveChat === undefined
+  // Review threads label their collapsed prompt with the review's name.
+  const activeReview = useQuery(
+    api.reviews.get,
+    activeChat?.reviewId ? { reviewId: activeChat.reviewId } : "skip"
+  )
+  const activeReviewName = activeReview?.name ?? null
   const rawLiveRun = useQuery(
     api.codexRuns.liveForThread,
     activeId ? { threadId: activeId } : "skip"
@@ -179,6 +185,7 @@ export function useChatRecords() {
 
   return {
     activeId,
+    activeReviewName,
     activeRunKey,
     activeThreadLoading,
     beginComposerLaunch,

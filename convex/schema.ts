@@ -539,6 +539,9 @@ export default defineSchema({
     // Set when the thread belongs to an automation; such threads stay out of
     // the chat list until their first run posts messages.
     automationId: v.optional(v.id("automations")),
+    // Set when the thread belongs to a review run; such threads never join
+    // the chat list — they are reached from the Review tab's run history.
+    reviewId: v.optional(v.id("reviews")),
     baseBranch: v.optional(v.string()),
     branchMode: v.optional(branchMode),
     codexThreadId: v.optional(v.string()),

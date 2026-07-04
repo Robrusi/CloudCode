@@ -38,6 +38,7 @@ export function Sidebar({
   onShowReviews,
   onShowSettings,
   onExitSettings,
+  reviewContext,
   settingsSection,
   onSelectSettingsSection,
   onClose,
@@ -55,6 +56,9 @@ export function Sidebar({
   onShowReviews: () => void
   onShowSettings: () => void
   onExitSettings: () => void
+  // True in the Review tab and while a review thread is open as a chat; the
+  // chat list then shows review threads only and the Review nav stays lit.
+  reviewContext: boolean
   settingsSection: SettingsSectionId
   onSelectSettingsSection: (id: SettingsSectionId) => void
   onClose: () => void
@@ -136,10 +140,10 @@ export function Sidebar({
             <button
               type="button"
               onClick={onShowReviews}
-              aria-current={currentView === "reviews" ? "page" : undefined}
+              aria-current={reviewContext ? "page" : undefined}
               className={cn(
                 "flex w-full items-center gap-2 rounded-xl px-[0.625rem] py-2 text-[0.8125rem] transition-colors",
-                currentView === "reviews"
+                reviewContext
                   ? "bg-muted text-foreground"
                   : "text-foreground/80 hover:bg-muted"
               )}
@@ -152,7 +156,7 @@ export function Sidebar({
           <div className="mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-4">
             {groups.length === 0 ? (
               <div className="px-3 pt-4 text-[0.6875rem] text-muted-foreground/80">
-                No chats yet
+                {reviewContext ? "No review threads yet" : "No chats yet"}
               </div>
             ) : (
               <div className="space-y-1">

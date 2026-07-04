@@ -34,6 +34,7 @@ export type CachedRunState = {
 
 export type ChatRecord = {
   automationId?: Id<"automations">
+  reviewId?: Id<"reviews">
   baseBranch?: string
   branchMode?: BranchMode
   codexThreadId?: string

@@ -97,6 +97,9 @@ type ThreadContent = {
   onOpenFileDiff: (path: string, diff: string) => void
   onScroll: UIEventHandler<HTMLDivElement>
   onScrollToLatest: () => void
+  // Set on review threads: the review's name, used as the label of the
+  // collapsed prompt pill so the thread opens on the agent's report.
+  reviewPromptLabel: string | null
   scrollable: boolean
   setElement: (element: HTMLDivElement | null) => void
   showNewActivity: boolean
@@ -314,6 +317,11 @@ function ChatThreadMessages({ thread }: { thread: ThreadContent }) {
     !lastMessage.content.trim()
       ? lastMessage
       : null
+  // Only the composed review prompt collapses; later user messages in the
+  // thread are real conversation.
+  const collapsedPromptId = thread.reviewPromptLabel
+    ? thread.messages.find((message) => message.role === "user")?.id
+    : undefined
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -340,6 +348,11 @@ function ChatThreadMessages({ thread }: { thread: ThreadContent }) {
                 <MessageBlock
                   key={message.id}
                   message={message}
+                  collapsePromptLabel={
+                    message.id === collapsedPromptId
+                      ? (thread.reviewPromptLabel ?? undefined)
+                      : undefined
+                  }
                   repoName={thread.activeRepoName}
                   sandboxId={thread.activeSandboxId}
                   onOpenFile={thread.onOpenFile}

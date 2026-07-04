@@ -113,6 +113,7 @@ async function presetNameForThread(
 async function threadSummaryRecord(ctx: QueryCtx, thread: Doc<"threads">) {
   return {
     automationId: thread.automationId,
+    reviewId: thread.reviewId,
     baseBranch: thread.baseBranch,
     branchMode: thread.branchMode,
     codexThreadId: thread.codexThreadId,
@@ -170,6 +171,8 @@ export const list = query({
 
     // Automation threads only join the chat list once a run has posted to
     // them; before that they are empty shells managed from Automations.
+    // Review threads are included but tagged with reviewId — the client shows
+    // them only inside the Review view, never among normal chats.
     const visible = threads.filter(
       (thread) => !thread.automationId || thread.lastUserMessageAt
     )

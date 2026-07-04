@@ -1,7 +1,12 @@
 import { v } from "convex/values"
 
 import type { Doc, Id } from "./_generated/dataModel"
-import { mutation, query, type MutationCtx } from "./_generated/server"
+import {
+  internalMutation,
+  mutation,
+  query,
+  type MutationCtx,
+} from "./_generated/server"
 import { findCodexAuth } from "./lib/codexRunAuth"
 import {
   appendCodexRunLogs,
@@ -233,8 +238,23 @@ export const remove = mutation({
     const userId = await ensureCurrentUser(ctx)
     const review = await requireOwnedReview(ctx, args.reviewId, userId)
 
-    // Run threads carry real conversation history and survive as normal
-    // chats; only the config is dropped.
+    // Run threads carry real conversation history. Deleting the config also
+    // removes the run-history UI that reaches them, so release them into the
+    // regular chat list instead of leaving them orphaned and invisible.
+    const runs = await ctx.db
+      .query("codexRuns")
+      .withIndex("by_review_created", (q) => q.eq("reviewId", review._id))
+      .collect()
+    const threadIds = [...new Set(runs.map((run) => run.threadId))]
+    await Promise.all(
+      threadIds.map(async (threadId) => {
+        const thread = await ctx.db.get(threadId)
+        if (thread?.reviewId === review._id) {
+          await ctx.db.patch(threadId, { reviewId: undefined })
+        }
+      })
+    )
+
     await ctx.db.delete(review._id)
   },
 })
@@ -399,11 +419,12 @@ export const workerCreateRun = mutation({
     })
     const title = `PR #${args.pr.number}: ${args.pr.title}`
 
-    // Each pull request gets its own thread; the first message gives it real
-    // content, so it shows up in the chat list like any other conversation.
+    // Each pull request gets its own thread. reviewId keeps it out of the
+    // chat list; it is reached from the Review tab's run history instead.
     const threadId = await ctx.db.insert("threads", {
       baseBranch: args.pr.baseRef,
       branchMode: "base",
+      reviewId: review._id,
       createdAt: now,
       model: review.model,
       repoUrl: review.repoUrl,
@@ -498,6 +519,36 @@ export const workerCreateRun = mutation({
       threadId,
       userId,
     }
+  },
+})
+
+// One-off backfill: stamp reviewId onto threads created by review runs
+// before threads carried the flag. Idempotent; skips threads whose review
+// config no longer exists (deletion releases threads to the chat list).
+export const backfillThreadReviewIds = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const runs = await ctx.db
+      .query("codexRuns")
+      .filter((q) => q.neq(q.field("reviewId"), undefined))
+      .collect()
+
+    let patched = 0
+    const seen = new Set<string>()
+    for (const run of runs) {
+      if (!run.reviewId || seen.has(run.threadId as string)) continue
+      seen.add(run.threadId as string)
+      const [thread, review] = await Promise.all([
+        ctx.db.get(run.threadId),
+        ctx.db.get(run.reviewId),
+      ])
+      if (thread && review && !thread.reviewId) {
+        await ctx.db.patch(run.threadId, { reviewId: run.reviewId })
+        patched += 1
+      }
+    }
+
+    return { patched, reviewRuns: runs.length }
   },
 })
 

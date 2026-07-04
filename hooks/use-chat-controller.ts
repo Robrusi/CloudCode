@@ -41,6 +41,7 @@ export function useChatController(): ChatShellProps {
   const { isLoading: userLoading } = useStoreUserEffect()
   const {
     activeId,
+    activeReviewName,
     activeRunKey,
     activeThreadLoading,
     beginComposerLaunch,
@@ -649,6 +650,19 @@ export function useChatController(): ChatShellProps {
     uploadingAttachmentCount,
   }
 
+  // Review threads live only inside the Review context; normal views never
+  // list them, and the review context lists nothing else. Opening a review
+  // thread renders as a chat but keeps the sidebar in the review context.
+  const reviewContext =
+    view === "reviews" || (view === "chat" && Boolean(active?.reviewId))
+  const visibleSidebarChats = useMemo(
+    () =>
+      reviewContext
+        ? sidebarChats.filter((chat) => chat.reviewId)
+        : sidebarChats.filter((chat) => !chat.reviewId),
+    [sidebarChats, reviewContext]
+  )
+
   return {
     dialogs: {
       deleteBusy,
@@ -714,6 +728,9 @@ export function useChatController(): ChatShellProps {
         onOpenFileDiff: openFileDiff,
         onScroll: onThreadScroll,
         onScrollToLatest: scrollToLatest,
+        reviewPromptLabel: active?.reviewId
+          ? (activeReviewName ?? "Review prompt")
+          : null,
         scrollable: threadScrollable,
         setElement: setThreadElement,
         showNewActivity,
@@ -748,7 +765,7 @@ export function useChatController(): ChatShellProps {
       open: sidebarOpen,
       props: {
         activeId,
-        chats: sidebarChats,
+        chats: visibleSidebarChats,
         currentView: view,
         onClose: () => setSidebarOpen(false),
         onDelete: requestDeleteChat,
@@ -761,6 +778,7 @@ export function useChatController(): ChatShellProps {
         onShowAutomations: showAutomations,
         onShowReviews: showReviews,
         onShowSettings: () => showSettings(),
+        reviewContext,
         settingsSection,
       },
     },

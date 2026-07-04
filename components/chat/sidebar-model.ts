@@ -3,6 +3,7 @@ import type { SandboxState } from "@/components/chat/sandbox-types"
 
 export type SidebarChat = {
   automationId?: Id<"automations">
+  reviewId?: Id<"reviews">
   id: Id<"threads">
   lastUserMessageAt: number
   pending: boolean

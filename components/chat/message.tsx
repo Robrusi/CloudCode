@@ -8,15 +8,21 @@ import {
   logsForMessage,
   type ChatMessage,
 } from "@/components/chat/message-model"
-import { UserMessageBubble } from "@/components/chat/message-user"
+import {
+  CollapsedPromptBubble,
+  UserMessageBubble,
+} from "@/components/chat/message-user"
 
 export const MessageBlock = memo(function MessageBlock({
+  collapsePromptLabel,
   message,
   onOpenFile,
   onOpenFileDiff,
   repoName,
   sandboxId,
 }: {
+  // When set, a user message renders collapsed behind this label.
+  collapsePromptLabel?: string
   message: ChatMessage
   onOpenFile: (path: string) => void
   onOpenFileDiff: (path: string, diff: string) => void
@@ -29,7 +35,11 @@ export const MessageBlock = memo(function MessageBlock({
   )
 
   if (message.role === "user") {
-    return <UserMessageBubble message={message} />
+    return collapsePromptLabel ? (
+      <CollapsedPromptBubble label={collapsePromptLabel} message={message} />
+    ) : (
+      <UserMessageBubble message={message} />
+    )
   }
 
   return (
