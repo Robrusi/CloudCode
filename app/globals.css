@@ -72,10 +72,9 @@
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   /* Primary/solid button colour. Defaults to the neutral foreground/background
-     pair so the "mono" accent keeps the current black↔white buttons; coloured
-     accents override these under the [data-accent="…"] rules below. Because
-     these reference --foreground/--background, mono stays adaptive in .dark
-     without a separate override. */
+     pair (black↔white buttons); a chosen accent overrides these as inline
+     styles on <html> (see hooks/use-accent.ts). Referencing --foreground/
+     --background keeps the default adaptive in .dark with no extra override. */
   --accent-solid: var(--foreground);
   --accent-solid-foreground: var(--background);
   --destructive: oklch(0.577 0.245 27.325);
@@ -150,65 +149,6 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
-}
-
-/*
- * Accent themes. Each recolours the primary/solid buttons via --accent-solid.
- * The attribute selector matches both the <html> element (set from the stored
- * accent, so buttons app-wide adopt the colour) and the swatch preview spans in
- * the settings picker (so each swatch shows its own colour with no duplication).
- * Coloured accents use white text in both modes. Light values sit here; the
- * .dark[data-accent="…"] rules brighten them for dark backgrounds. Keep the ids
- * in sync with ACCENTS in lib/theme/accent.ts.
- */
-/* Mono resets to the neutral pair explicitly (not by inheritance) so its swatch
-   preview stays black/white even while an ancestor sets a coloured accent. */
-[data-accent="mono"] {
-  --accent-solid: var(--foreground);
-  --accent-solid-foreground: var(--background);
-}
-[data-accent="blue"] {
-  --accent-solid: oklch(0.55 0.2 258);
-  --accent-solid-foreground: oklch(0.985 0 0);
-}
-[data-accent="violet"] {
-  --accent-solid: oklch(0.52 0.23 293);
-  --accent-solid-foreground: oklch(0.985 0 0);
-}
-[data-accent="green"] {
-  --accent-solid: oklch(0.56 0.14 158);
-  --accent-solid-foreground: oklch(0.985 0 0);
-}
-[data-accent="amber"] {
-  --accent-solid: oklch(0.6 0.15 55);
-  --accent-solid-foreground: oklch(0.985 0 0);
-}
-[data-accent="rose"] {
-  --accent-solid: oklch(0.57 0.22 15);
-  --accent-solid-foreground: oklch(0.985 0 0);
-}
-[data-accent="cyan"] {
-  --accent-solid: oklch(0.58 0.11 220);
-  --accent-solid-foreground: oklch(0.985 0 0);
-}
-
-.dark[data-accent="blue"] {
-  --accent-solid: oklch(0.62 0.19 258);
-}
-.dark[data-accent="violet"] {
-  --accent-solid: oklch(0.6 0.22 293);
-}
-.dark[data-accent="green"] {
-  --accent-solid: oklch(0.64 0.15 158);
-}
-.dark[data-accent="amber"] {
-  --accent-solid: oklch(0.68 0.15 60);
-}
-.dark[data-accent="rose"] {
-  --accent-solid: oklch(0.65 0.21 15);
-}
-.dark[data-accent="cyan"] {
-  --accent-solid: oklch(0.66 0.12 220);
 }
 
 @layer base {

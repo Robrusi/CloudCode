@@ -1,49 +1,24 @@
 /**
- * Accent theme palette. The selected accent recolors the primary ("solid")
- * buttons — the black/white `default` button variant — via the
- * `--accent-solid` / `--accent-solid-foreground` CSS variables.
- *
- * The colour values themselves live in `app/globals.css` under
- * `[data-accent="…"]` rules (light) and `.dark[data-accent="…"]` rules (dark)
- * so theming stays flash-free and purely CSS-driven. Swatch previews in the
- * settings picker read the same variables by tagging the swatch element with a
- * `data-accent` attribute, so there is a single source of truth for colours.
- *
- * To add an accent: add an entry here and matching CSS rules in globals.css.
+ * Accent theme. The primary ("solid") buttons, sliders, and toggles read the
+ * `--accent-solid` / `--accent-solid-foreground` CSS variables. Those default
+ * to the neutral foreground/background pair in `app/globals.css`; a chosen
+ * accent overrides them as inline styles on `<html>` (see hooks/use-accent.ts).
  */
 
 export const ACCENT_STORAGE_KEY = "cc-accent"
 export const ACCENT_COLOR_STORAGE_KEY = "cc-accent-color"
 export const ACCENT_ATTRIBUTE = "data-accent"
 
-/** Neutral default — keeps the current black/white (foreground/background) look. */
+/** Neutral default — keeps the black/white (foreground/background) look. */
 export const DEFAULT_ACCENT = "mono"
 
-/** Free-form accent whose colour is picked from a full colour palette. */
+/** Free-form accent whose colour is picked from the colour picker. */
 export const CUSTOM_ACCENT = "custom"
 
 /** Fallback colour for the custom accent before the user picks one (indigo). */
 export const DEFAULT_CUSTOM_COLOR = "#6366f1"
 
-export type AccentOption = {
-  id: string
-  label: string
-  /** Custom accents render a colour input instead of a fixed swatch. */
-  custom?: boolean
-}
-
-export const ACCENTS: AccentOption[] = [
-  { id: DEFAULT_ACCENT, label: "Mono" },
-  { id: "blue", label: "Blue" },
-  { id: "violet", label: "Violet" },
-  { id: "green", label: "Green" },
-  { id: "amber", label: "Amber" },
-  { id: "rose", label: "Rose" },
-  { id: "cyan", label: "Cyan" },
-  { id: CUSTOM_ACCENT, label: "Custom", custom: true },
-]
-
-const ACCENT_IDS = new Set(ACCENTS.map((accent) => accent.id))
+const ACCENT_IDS = new Set([DEFAULT_ACCENT, CUSTOM_ACCENT])
 
 /** Narrow an arbitrary string (e.g. from storage) to a known accent id. */
 export function resolveAccent(value: string | null | undefined): string {
