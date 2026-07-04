@@ -284,14 +284,36 @@ function getDaytonaClient() {
   })
 }
 
+// The user home dir cannot change for a live sandbox, but resolving it costs
+// a Daytona API call — and nearly every route resolves paths. Cache it per
+// sandbox id (bounded, insertion-order eviction).
+const SANDBOX_HOME_CACHE_MAX_ENTRIES = 500
+const sandboxHomeCache = new Map<string, string>()
+
+async function resolveSandboxHome(sandbox?: Sandbox) {
+  if (!sandbox) return DEFAULT_DAYTONA_HOME
+
+  const cached = sandboxHomeCache.get(sandbox.id)
+  if (cached) return cached
+
+  const resolved = (
+    await sandbox.getUserHomeDir().catch(() => undefined)
+  )?.trim()
+  if (!resolved) return DEFAULT_DAYTONA_HOME
+
+  sandboxHomeCache.set(sandbox.id, resolved)
+  while (sandboxHomeCache.size > SANDBOX_HOME_CACHE_MAX_ENTRIES) {
+    const oldest = sandboxHomeCache.keys().next()
+    if (oldest.done) break
+    sandboxHomeCache.delete(oldest.value)
+  }
+  return resolved
+}
+
 export async function resolveDaytonaPaths(
   sandbox?: Sandbox
 ): Promise<DaytonaSandboxPaths> {
-  const home =
-    (sandbox
-      ? await sandbox.getUserHomeDir().catch(() => undefined)
-      : undefined
-    )?.trim() || DEFAULT_DAYTONA_HOME
+  const home = await resolveSandboxHome(sandbox)
   const repoPath =
     process.env.DAYTONA_REPO_PATH?.trim() || `${home.replace(/\/+$/, "")}/repo`
   const runtimeHome =

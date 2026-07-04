@@ -1,10 +1,14 @@
 import { auth } from "@clerk/nextjs/server"
 import type { ConvexHttpClient } from "convex/browser"
 
+import type { Sandbox } from "@daytona/sdk"
+
 import { api } from "@/convex/_generated/api"
 import {
   daytonaSandboxBillingResources,
+  DaytonaSandboxNotRunningError,
   getDaytonaSandbox,
+  getRunningDaytonaSandbox,
   getStartedDaytonaSandbox,
   readDaytonaSandboxInfo,
   stopDaytonaSandbox,
@@ -150,6 +154,64 @@ export async function pauseCurrentUserSandboxForBilling(sandboxId: string) {
   }
 }
 
+// Read-heavy routes (file browser, diff panel) hit these helpers once per
+// file. The Daytona lookup result cannot meaningfully change within a few
+// seconds, so a short shared cache turns a burst of reads into one upstream
+// lookup. Authorization and infra access stay per-request (their own caches).
+const SANDBOX_LOOKUP_CACHE_TTL_MS = 10_000
+const BILLING_OBSERVATION_THROTTLE_MS = 30_000
+
+type SandboxLookupCacheEntry = {
+  expiresAt: number
+  promise: Promise<Sandbox>
+}
+
+const startedSandboxCache = new Map<string, SandboxLookupCacheEntry>()
+const runningSandboxCache = new Map<string, SandboxLookupCacheEntry>()
+const lastBillingObservationAt = new Map<string, number>()
+
+function cachedSandboxLookup(
+  cache: Map<string, SandboxLookupCacheEntry>,
+  sandboxId: string,
+  lookup: () => Promise<Sandbox>
+) {
+  const now = Date.now()
+  const cached = cache.get(sandboxId)
+  if (cached && cached.expiresAt > now) return cached.promise
+  if (cached) cache.delete(sandboxId)
+
+  const promise = lookup()
+  cache.set(sandboxId, {
+    expiresAt: now + SANDBOX_LOOKUP_CACHE_TTL_MS,
+    promise,
+  })
+  promise.catch(() => {
+    if (cache.get(sandboxId)?.promise === promise) cache.delete(sandboxId)
+  })
+  return promise
+}
+
+/**
+ * Records a usage sample without blocking or failing the caller: billing
+ * segments are reconciled by the worker cron every minute, so per-request
+ * observations are throttled redundancy, not the source of truth.
+ */
+function observeCurrentUserDaytonaBillingThrottled(sandbox: Sandbox) {
+  const now = Date.now()
+  const last = lastBillingObservationAt.get(sandbox.id) ?? 0
+  if (now - last < BILLING_OBSERVATION_THROTTLE_MS) return
+
+  lastBillingObservationAt.set(sandbox.id, now)
+  void observeCurrentUserDaytonaBilling({
+    resources: daytonaSandboxBillingResources(sandbox),
+    sandboxId: sandbox.id,
+    state: "running",
+  }).catch((error) => {
+    lastBillingObservationAt.delete(sandbox.id)
+    console.warn("Unable to observe sandbox billing.", error)
+  })
+}
+
 export async function getStartedCurrentUserDaytonaSandbox(
   sandboxId: string
 ): Promise<{
@@ -165,12 +227,12 @@ export async function getStartedCurrentUserDaytonaSandbox(
     }
     throw error
   }
-  const sandbox = await getStartedDaytonaSandbox(sandboxId)
-  await observeCurrentUserDaytonaBilling({
-    resources: daytonaSandboxBillingResources(sandbox),
+  const sandbox = await cachedSandboxLookup(
+    startedSandboxCache,
     sandboxId,
-    state: "running",
-  })
+    () => getStartedDaytonaSandbox(sandboxId)
+  )
+  observeCurrentUserDaytonaBillingThrottled(sandbox)
   return { access, sandbox }
 }
 
@@ -181,8 +243,22 @@ export async function getRunningCurrentUserDaytonaSandbox(
   sandbox: Awaited<ReturnType<typeof getDaytonaSandbox>>
 }> {
   const access = await requireCurrentUserSandbox(sandboxId)
-  const info = await readDaytonaSandboxInfo(sandboxId)
-  if (info.state !== "running") throw new SandboxNotRunningError()
+  const sandbox = await cachedSandboxLookup(
+    runningSandboxCache,
+    sandboxId,
+    async () => {
+      const running = await getRunningDaytonaSandbox(sandboxId).catch(
+        (error) => {
+          if (error instanceof DaytonaSandboxNotRunningError) {
+            throw new SandboxNotRunningError()
+          }
+          throw error
+        }
+      )
+      if (running.state !== "started") throw new SandboxNotRunningError()
+      return running
+    }
+  )
 
   try {
     await requireCurrentUserInfraAccess()
@@ -193,9 +269,6 @@ export async function getRunningCurrentUserDaytonaSandbox(
     throw error
   }
 
-  const sandbox = await getDaytonaSandbox(sandboxId)
-  if (sandbox.state !== "started") throw new SandboxNotRunningError()
-
-  await observeCurrentUserDaytonaBillingInfo(info)
+  observeCurrentUserDaytonaBillingThrottled(sandbox)
   return { access, sandbox }
 }
