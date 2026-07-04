@@ -2,9 +2,11 @@
 
 import { useQuery } from "convex/react"
 import {
+  ChevronDown,
   ChevronRight,
   ExternalLink,
   GitPullRequest,
+  LayoutTemplate,
   Loader2,
   MessageSquare,
   Pencil,
@@ -36,6 +38,7 @@ import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { useClickOutside } from "@/hooks/use-click-outside"
 import { postJson } from "@/lib/http/client-json"
+import { REVIEW_TEMPLATES, type ReviewTemplate } from "@/lib/reviews/templates"
 import { cn } from "@/lib/shared/utils"
 
 function statusDotClass(review: ReviewRecord) {
@@ -217,7 +220,7 @@ function RunOnPrButton({
               }
             }}
             placeholder="PR number"
-            className="h-8 text-sm"
+            className="h-8 rounded-md border-border/60 px-2.5 text-sm focus:border-border focus:ring-0"
           />
           <Button
             type="button"
@@ -343,6 +346,58 @@ function ReviewRow({
   )
 }
 
+/** "Templates" button + popover: prompt presets that open the composer
+ * prefilled, from report-only reviews to fix-and-push. */
+function TemplatesButton({
+  onSelect,
+}: {
+  onSelect: (template: ReviewTemplate) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useClickOutside(ref, open, () => setOpen(false))
+
+  return (
+    <div ref={ref} className="relative">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={() => setOpen(!open)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="gap-1.5 text-muted-foreground"
+      >
+        <LayoutTemplate className="size-4" />
+        Templates
+        <ChevronDown className="size-3 opacity-60" />
+      </Button>
+      {open ? (
+        <div className={cn(popoverPanel, "top-9 right-0 w-72")}>
+          {REVIEW_TEMPLATES.map((template) => (
+            <button
+              key={template.id}
+              type="button"
+              onClick={() => {
+                onSelect(template)
+                setOpen(false)
+              }}
+              className="block w-full rounded-lg px-2.5 py-2 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/30"
+            >
+              <span className="block text-sm text-foreground">
+                {template.name}
+              </span>
+              <span className="mt-0.5 block text-xs text-muted-foreground">
+                {template.description}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function Section({
   title,
   children,
@@ -360,7 +415,13 @@ function Section({
   )
 }
 
-function EmptyState({ onCreate }: { onCreate: () => void }) {
+function EmptyState({
+  onCreate,
+  onSelectTemplate,
+}: {
+  onCreate: () => void
+  onSelectTemplate: (template: ReviewTemplate) => void
+}) {
   return (
     <div className="flex flex-col items-center pt-16 text-center">
       <div className="grid size-11 place-items-center rounded-2xl bg-muted text-muted-foreground">
@@ -371,10 +432,13 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
         Reviews run on every new pull request in a fresh sandbox and post the
         findings, proposed fixes, and a confidence score as a PR comment.
       </p>
-      <Button size="sm" onClick={onCreate} className="mt-5 gap-1.5">
-        <Plus className="size-4" />
-        Create review
-      </Button>
+      <div className="mt-5 flex items-center gap-2">
+        <TemplatesButton onSelect={onSelectTemplate} />
+        <Button size="sm" onClick={onCreate} className="gap-1.5">
+          <Plus className="size-4" />
+          Create review
+        </Button>
+      </div>
     </div>
   )
 }
@@ -392,8 +456,15 @@ export function ReviewsScreen({
   const [pendingDelete, setPendingDelete] = useState<ReviewRecord | null>(null)
   const [busyId, setBusyId] = useState<Id<"reviews"> | null>(null)
   const [actionError, setActionError] = useState("")
+  // Template picked for the next "new" composer; null means a blank one.
+  const [template, setTemplate] = useState<ReviewTemplate | null>(null)
 
   const editingId = active && active !== "new" ? active._id : null
+
+  const openComposer = (nextTemplate: ReviewTemplate | null) => {
+    setTemplate(nextTemplate)
+    setActive("new")
+  }
 
   async function runAction(
     review: ReviewRecord,
@@ -467,11 +538,19 @@ export function ReviewsScreen({
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
-        <div className="mx-auto w-full max-w-2xl px-4 pt-8 pb-[calc(5rem+env(safe-area-inset-bottom))] md:px-8 md:pt-12">
+        <div
+          className={cn(
+            "mx-auto w-full px-4 pt-8 pb-[calc(5rem+env(safe-area-inset-bottom))] md:px-8 md:pt-12",
+            active !== null ? "max-w-4xl" : "max-w-2xl"
+          )}
+        >
           {active !== null ? (
             <ReviewComposer
-              key={active === "new" ? "new" : active._id}
+              key={
+                active === "new" ? `new-${template?.id ?? "blank"}` : active._id
+              }
               review={active === "new" ? null : active}
+              template={active === "new" ? template : null}
               defaultRepoUrl={defaultRepoUrl}
               onCancel={() => setActive(null)}
               onSaved={(reviewId) => {
@@ -490,14 +569,17 @@ export function ReviewsScreen({
                   </p>
                 </div>
                 {reviews?.length ? (
-                  <Button
-                    size="sm"
-                    onClick={() => setActive("new")}
-                    className="shrink-0 gap-1.5"
-                  >
-                    <Plus className="size-4" />
-                    New review
-                  </Button>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <TemplatesButton onSelect={openComposer} />
+                    <Button
+                      size="sm"
+                      onClick={() => openComposer(null)}
+                      className="gap-1.5"
+                    >
+                      <Plus className="size-4" />
+                      New review
+                    </Button>
+                  </div>
                 ) : null}
               </div>
 
@@ -515,7 +597,10 @@ export function ReviewsScreen({
                   ))}
                 </div>
               ) : reviews.length === 0 ? (
-                <EmptyState onCreate={() => setActive("new")} />
+                <EmptyState
+                  onCreate={() => openComposer(null)}
+                  onSelectTemplate={openComposer}
+                />
               ) : (
                 <>
                   {current.length ? (

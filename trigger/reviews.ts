@@ -11,6 +11,7 @@ import {
 import { createWorkerGitHubRepoCredential } from "@/lib/github/app-worker"
 import { createIssueComment, getPullRequest } from "@/lib/github/pull-requests"
 import { parseGitHubRepoUrl } from "@/lib/github/repo"
+import { reviewAllowsAuthor } from "@/lib/reviews/config"
 import type { ReviewPullRequestContext } from "@/lib/reviews/prompt"
 import { encryptSecret } from "@/lib/security/secret-crypto"
 import type { cloudcodeRun } from "@/trigger/cloudcode-run"
@@ -65,6 +66,15 @@ export const reviewDispatch = task({
       if (
         payload.action === "ready_for_review" &&
         !review.reviewReadyForReview
+      ) {
+        continue
+      }
+      if (
+        !reviewAllowsAuthor(
+          review.authorFilterMode,
+          review.authorFilters,
+          payload.pr.authorLogin
+        )
       ) {
         continue
       }
@@ -133,6 +143,17 @@ export const reviewRun = task({
     if (!review) return { dispatched: false, reason: "not_found" as const }
     if (!review.enabled && !payload.manual) {
       return { dispatched: false, reason: "disabled" as const }
+    }
+    // Manual runs name one specific PR, so they bypass the author filter.
+    if (
+      !payload.manual &&
+      !reviewAllowsAuthor(
+        review.authorFilterMode,
+        review.authorFilters,
+        payload.pr?.authorLogin
+      )
+    ) {
+      return { dispatched: false, reason: "author_filtered" as const }
     }
 
     const repo = parseGitHubRepoUrl(review.repoUrl)

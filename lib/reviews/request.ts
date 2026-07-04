@@ -10,14 +10,21 @@ import {
 import { canonicalGitHubRepoUrl } from "@/lib/github/repo"
 import { jsonRawStringField, type JsonRecord } from "@/lib/http/api-route"
 import {
+  parseReviewAuthorFilterMode,
+  parseReviewAuthorFilters,
   parseReviewAutoEnvironment,
+  parseReviewAutofix,
   parseReviewName,
   parseReviewPrompt,
   parseReviewReadyForReview,
+  type ReviewAuthorFilterMode,
 } from "@/lib/reviews/config"
 
 export type ReviewRequestConfig = {
+  authorFilterMode?: ReviewAuthorFilterMode
+  authorFilters: string[]
   autoEnvironment: boolean
+  autofix: boolean
   model: Model
   name: string
   profile?: string
@@ -55,7 +62,10 @@ export function parseReviewRequestConfig(
   if (!speed) throw new Error(CODEX_SPEED_ERROR)
 
   return {
+    authorFilterMode: parseReviewAuthorFilterMode(body.authorFilterMode),
+    authorFilters: parseReviewAuthorFilters(body.authorFilters),
     autoEnvironment: parseReviewAutoEnvironment(body.autoEnvironment),
+    autofix: parseReviewAutofix(body.autofix),
     model,
     name: parseReviewName(body.name),
     profile: jsonRawStringField(body, "profile"),

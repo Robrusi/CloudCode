@@ -19,7 +19,10 @@ export async function POST(request: Request) {
 
     const client = await currentUserConvexHttpClient()
     const created = await client.mutation(api.reviews.create, {
+      authorFilterMode: config.authorFilterMode,
+      authorFilters: config.authorFilters,
       autoEnvironment: config.autoEnvironment,
+      autofix: config.autofix,
       model: config.model,
       name: config.name,
       profile: config.profile,

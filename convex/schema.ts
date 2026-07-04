@@ -115,8 +115,16 @@ export default defineSchema({
     .index("by_thread", ["threadId"]),
 
   reviews: defineTable({
+    // Which PR authors get reviewed: unset means everyone, "allow" means only
+    // the logins in authorFilters, "block" means everyone except them.
+    authorFilterMode: v.optional(
+      v.union(v.literal("allow"), v.literal("block"))
+    ),
+    authorFilters: v.optional(v.array(v.string())),
     // Unset means true: runs use the built-in auto environment preset.
     autoEnvironment: v.optional(v.boolean()),
+    // Runs also fix and push what they find; unset means false.
+    autofix: v.optional(v.boolean()),
     createdAt: v.number(),
     disabledReason: v.optional(v.string()),
     enabled: v.boolean(),

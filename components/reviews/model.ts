@@ -16,7 +16,10 @@ export const REVIEW_STATUS_LABEL: Record<ReviewRunStatus, string> = {
 }
 
 export type ReviewDraft = {
+  authorFilterMode: "" | "allow" | "block"
+  authorFilters: string[]
   autoEnvironment: boolean
+  autofix: boolean
   model: Model
   name: string
   prompt: string
@@ -29,7 +32,10 @@ export type ReviewDraft = {
 
 export function emptyReviewDraft(): ReviewDraft {
   return {
+    authorFilterMode: "",
+    authorFilters: [],
     autoEnvironment: true,
+    autofix: false,
     model: "gpt-5.5",
     name: "",
     prompt: DEFAULT_REVIEW_PROMPT,
@@ -43,7 +49,10 @@ export function emptyReviewDraft(): ReviewDraft {
 
 export function reviewDraftFromRecord(review: ReviewRecord): ReviewDraft {
   return {
+    authorFilterMode: review.authorFilterMode ?? "",
+    authorFilters: review.authorFilters ?? [],
     autoEnvironment: review.autoEnvironment ?? true,
+    autofix: review.autofix ?? false,
     model: review.model,
     name: review.name,
     prompt: review.prompt ?? DEFAULT_REVIEW_PROMPT,
@@ -60,7 +69,10 @@ export function reviewRequestBody(draft: ReviewDraft) {
   // tracking the built-in template when it improves.
   const prompt = draft.prompt.trim()
   return {
+    authorFilterMode: draft.authorFilterMode || undefined,
+    authorFilters: draft.authorFilters,
     autoEnvironment: draft.autoEnvironment,
+    autofix: draft.autofix,
     model: draft.model,
     name: draft.name,
     prompt: prompt !== DEFAULT_REVIEW_PROMPT ? prompt || undefined : undefined,

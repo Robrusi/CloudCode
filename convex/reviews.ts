@@ -17,12 +17,16 @@ import {
   codexAuthReconnectMessage,
 } from "@/lib/codex/auth-errors"
 import { canonicalGitHubRepoUrl } from "@/lib/github/repo"
+import { parseReviewAuthorFilters } from "@/lib/reviews/config"
 import { buildReviewPrompt } from "@/lib/reviews/prompt"
 
 const THREAD_TITLE_MAX_LENGTH = 120
 
 const reviewConfigArgs = {
+  authorFilterMode: v.optional(v.union(v.literal("allow"), v.literal("block"))),
+  authorFilters: v.optional(v.array(v.string())),
   autoEnvironment: v.optional(v.boolean()),
+  autofix: v.optional(v.boolean()),
   model,
   name: v.string(),
   profile: v.optional(v.string()),
@@ -35,7 +39,10 @@ const reviewConfigArgs = {
 }
 
 type ReviewConfigArgs = {
+  authorFilterMode?: Doc<"reviews">["authorFilterMode"]
+  authorFilters?: string[]
   autoEnvironment?: boolean
+  autofix?: boolean
   model: Doc<"reviews">["model"]
   name: string
   profile?: string
@@ -66,7 +73,18 @@ function validateReviewConfig(args: ReviewConfigArgs) {
   const repoUrl = canonicalGitHubRepoUrl(args.repoUrl)
   if (!repoUrl) throw new Error("repoUrl must be a GitHub repository URL.")
 
-  return { repoUrl }
+  // A filter mode without logins would match nothing (allow) or everything
+  // (block) — store neither so the config plainly reviews everyone.
+  const authorFilters = parseReviewAuthorFilters(args.authorFilters)
+  const authorFilterMode = authorFilters.length
+    ? args.authorFilterMode
+    : undefined
+
+  return {
+    authorFilterMode,
+    authorFilters: authorFilterMode ? authorFilters : undefined,
+    repoUrl,
+  }
 }
 
 async function requireOwnedReview(
@@ -117,7 +135,8 @@ export const create = mutation({
   args: reviewConfigArgs,
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
-    const { repoUrl } = validateReviewConfig(args)
+    const { authorFilterMode, authorFilters, repoUrl } =
+      validateReviewConfig(args)
     const sandboxPresetId = await resolveOwnedPresetOrAutoDefault(
       ctx,
       args.sandboxPresetId,
@@ -127,7 +146,9 @@ export const create = mutation({
 
     const now = Date.now()
     const reviewId = await ctx.db.insert("reviews", {
+      ...(authorFilterMode ? { authorFilterMode, authorFilters } : {}),
       autoEnvironment: args.autoEnvironment,
+      ...(args.autofix ? { autofix: true } : {}),
       createdAt: now,
       enabled: true,
       failureCount: 0,
@@ -155,7 +176,8 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
-    const { repoUrl } = validateReviewConfig(args)
+    const { authorFilterMode, authorFilters, repoUrl } =
+      validateReviewConfig(args)
     const review = await requireOwnedReview(ctx, args.reviewId, userId)
     const sandboxPresetId = await resolveOwnedPresetOrAutoDefault(
       ctx,
@@ -165,7 +187,10 @@ export const update = mutation({
     )
 
     await ctx.db.patch(review._id, {
+      authorFilterMode,
+      authorFilters,
       autoEnvironment: args.autoEnvironment,
+      autofix: args.autofix || undefined,
       model: args.model,
       name: args.name.trim(),
       profile: args.profile,
@@ -279,6 +304,8 @@ export const listEnabledForRepoForWorker = query({
 
     return reviews.map((review) => ({
       _id: review._id,
+      authorFilterMode: review.authorFilterMode,
+      authorFilters: review.authorFilters,
       reviewReadyForReview: review.reviewReadyForReview ?? false,
       userId: review.userId,
     }))
@@ -367,7 +394,9 @@ export const workerCreateRun = mutation({
 
     const now = Date.now()
     const userId = review.userId
-    const prompt = buildReviewPrompt(review.prompt, review.repoUrl, args.pr)
+    const prompt = buildReviewPrompt(review.prompt, review.repoUrl, args.pr, {
+      autofix: review.autofix ?? false,
+    })
     const title = `PR #${args.pr.number}: ${args.pr.title}`
 
     // Each pull request gets its own thread; the first message gives it real
