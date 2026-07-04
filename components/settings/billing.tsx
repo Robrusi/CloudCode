@@ -5,13 +5,12 @@ import { Check, Clock, CreditCard, Loader2, X } from "lucide-react"
 import { useEffect, useReducer } from "react"
 
 import {
-  navDestructive,
-  navPrimary,
   SettingsPage,
   statusBadge,
   statusIdle,
   statusOk,
 } from "@/components/settings/shared"
+import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { api } from "@/convex/_generated/api"
 import {
@@ -435,11 +434,13 @@ export function BillingSettings() {
                       <Clock className="size-3.5" />
                       Next cycle
                     </span>
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="sm"
                       disabled={Boolean(busyPlanId) || cancelingScheduledPlan}
                       onClick={() => void cancelPlanChange()}
-                      className={navDestructive}
+                      className="text-muted-foreground hover:text-destructive"
                     >
                       {cancelingScheduledPlan ? (
                         <Loader2 className="size-3.5 animate-spin" />
@@ -447,20 +448,20 @@ export function BillingSettings() {
                         <X className="size-3.5" />
                       )}
                       Cancel
-                    </button>
+                    </Button>
                   </div>
                 ) : (
-                  <button
+                  <Button
                     type="button"
+                    size="sm"
                     disabled={Boolean(busyPlanId)}
                     onClick={() => void purchasePlan(plan.planId)}
-                    className={navPrimary}
                   >
                     {busy ? (
                       <Loader2 className="size-3.5 animate-spin" />
                     ) : null}
                     Choose
-                  </button>
+                  </Button>
                 )}
               </div>
             )
@@ -499,16 +500,16 @@ export function BillingSettings() {
                 dispatch({ type: "code-input", value: event.target.value })
               }
             />
-            <button
+            <Button
               type="submit"
+              size="sm"
               disabled={redeemingCode || !codeInput.trim()}
-              className={cn(navPrimary, "h-9")}
             >
               {redeemingCode ? (
                 <Loader2 className="size-3.5 animate-spin" />
               ) : null}
               Redeem
-            </button>
+            </Button>
           </form>
           {redeemFeedback ? (
             <div

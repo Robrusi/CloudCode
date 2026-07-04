@@ -8,10 +8,10 @@ import { useEffect, useState } from "react"
 import {
   fieldHint,
   fieldLabel,
-  navAction,
   SettingsPage,
   textareaClass,
 } from "@/components/settings/shared"
+import { Button } from "@/components/ui/button"
 import {
   SegmentedControl,
   type SegmentedOption,
@@ -99,14 +99,16 @@ function InstructionsSetting() {
           {hint}
         </span>
         {dirty || saving ? (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             onClick={handleSave}
             disabled={saving || over}
-            className={navAction}
+            className="text-muted-foreground"
           >
             {saving ? "Saving" : "Save"}
-          </button>
+          </Button>
         ) : null}
       </div>
     </label>

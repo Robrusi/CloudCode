@@ -3,9 +3,9 @@
 import { Check, CheckCircle2, Circle, X } from "lucide-react"
 
 import { codexAccountTitle } from "@/components/settings/chatgpt-model"
-import { iconBtn, inputClass } from "@/components/settings/shared"
+import { IconButton } from "@/components/ui/icon-button"
+import { Input } from "@/components/ui/input"
 import type { CodexAuthAccountStatus } from "@/lib/codex/auth-types"
-import { cn } from "@/lib/shared/utils"
 
 export function ChatGPTAccountEditRow({
   account,
@@ -31,8 +31,8 @@ export function ChatGPTAccountEditRow({
       ) : (
         <Circle className="size-4 shrink-0 text-muted-foreground" />
       )}
-      <input
-        className={cn(inputClass, "h-8")}
+      <Input
+        className="h-8"
         value={draftDisplayName}
         maxLength={80}
         placeholder={codexAccountTitle(account)}
@@ -47,26 +47,22 @@ export function ChatGPTAccountEditRow({
           }
         }}
       />
-      <button
-        type="button"
-        className={iconBtn}
+      <IconButton
         disabled={renaming}
         title="Save name"
         aria-label="Save ChatGPT account name"
         onClick={onRename}
       >
         <Check className="size-4" />
-      </button>
-      <button
-        type="button"
-        className={iconBtn}
+      </IconButton>
+      <IconButton
         disabled={renaming}
         title="Cancel rename"
         aria-label="Cancel ChatGPT account rename"
         onClick={onCancel}
       >
         <X className="size-4" />
-      </button>
+      </IconButton>
     </div>
   )
 }

@@ -2,26 +2,18 @@
 
 import { type ReactNode, useEffect } from "react"
 
+import { Button } from "@/components/ui/button"
 import { popoverSurfaceClass } from "@/components/ui/surface"
 import { cn } from "@/lib/shared/utils"
-
-export const navAction =
-  "inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-sm text-foreground/80 transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-
-export const navPrimary =
-  "inline-flex h-8 items-center gap-1.5 rounded-lg bg-foreground px-3 text-sm font-medium text-background transition-colors hover:bg-foreground/90 disabled:pointer-events-none disabled:opacity-50"
-
-export const navDestructive =
-  "inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-sm text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:pointer-events-none disabled:opacity-50"
 
 export const iconBtn =
   "inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
 
 export const inputClass =
-  "h-9 w-full rounded-lg border border-border bg-background px-3 text-sm transition-colors outline-none placeholder:text-muted-foreground/50 focus:border-ring focus:ring-3 focus:ring-ring/20 disabled:opacity-60"
+  "h-9 w-full rounded-lg border border-field bg-background px-3 text-sm transition-colors outline-none placeholder:text-muted-foreground/60 focus:border-ring focus:ring-3 focus:ring-ring/20 disabled:pointer-events-none disabled:opacity-60"
 
 export const textareaClass =
-  "w-full resize-y rounded-lg border border-border bg-background px-3 py-2 font-[family-name:var(--font-mono)] text-xs leading-5 transition-colors outline-none placeholder:text-muted-foreground/50 focus:border-ring focus:ring-3 focus:ring-ring/20"
+  "w-full resize-y rounded-lg border border-field bg-background px-3 py-2 font-[family-name:var(--font-mono)] text-xs leading-5 transition-colors outline-none placeholder:text-muted-foreground/60 focus:border-ring focus:ring-3 focus:ring-ring/20"
 
 export const fieldLabel = "grid gap-1.5 text-xs font-medium text-foreground/80"
 
@@ -123,25 +115,23 @@ export function SettingsConfirmDialog({
           <p className="mt-1.5 text-sm text-muted-foreground">{description}</p>
         ) : null}
         <div className="mt-5 flex justify-end gap-2">
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             onClick={onCancel}
-            className="rounded-lg border border-border px-3 py-2 text-sm text-foreground/80 transition-colors hover:bg-muted"
+            className="text-muted-foreground"
           >
             {cancelLabel}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant={destructive ? "destructive" : "default"}
+            size="sm"
             onClick={onConfirm}
-            className={cn(
-              "rounded-lg px-3 py-2 text-sm transition-colors",
-              destructive
-                ? "text-destructive-foreground bg-destructive hover:bg-destructive/90"
-                : "bg-foreground text-background hover:bg-foreground/90"
-            )}
           >
             {confirmLabel}
-          </button>
+          </Button>
         </div>
       </div>
     </dialog>

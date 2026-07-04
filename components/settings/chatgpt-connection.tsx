@@ -12,12 +12,9 @@ import {
   codexAccountTitle,
   initialChatGPTConnectionState,
 } from "@/components/settings/chatgpt-model"
-import {
-  navAction,
-  navPrimary,
-  SettingsConfirmDialog,
-} from "@/components/settings/shared"
+import { SettingsConfirmDialog } from "@/components/settings/shared"
 import { OpenAIIcon } from "@/components/ui/brand-icons"
+import { Button } from "@/components/ui/button"
 import { useCodexAuthWindow } from "@/hooks/use-codex-auth-window"
 import type {
   CodexAuthAccountStatus,
@@ -244,35 +241,39 @@ export function ChatGPTConnectionRow({
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-1.5 sm:shrink-0 sm:justify-end">
-          <button
+          <Button
             type="button"
-            className={navAction}
+            variant="ghost"
+            size="sm"
+            className="gap-1.5 text-muted-foreground"
             onClick={() => dispatch({ type: "import-open" })}
           >
             <FileUp className="size-3.5" />
             Import auth.json
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className={navAction}
+            variant="ghost"
+            size="sm"
+            className="gap-1.5 text-muted-foreground"
             onClick={() => dispatch({ type: "apikey-open" })}
           >
             <KeyRound className="size-3.5" />
             Add API key
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className={
-              connected && !activeAccount?.invalidatedAt
-                ? navAction
-                : navPrimary
+            variant={
+              connected && !activeAccount?.invalidatedAt ? "ghost" : "default"
             }
+            size="sm"
+            className="gap-1.5"
             disabled={loginOpening}
             onClick={startLogin}
           >
             <LogIn className="size-3.5" />
             {loginOpening ? "Opening..." : "Sign in"}
-          </button>
+          </Button>
         </div>
       </div>
       {status?.invalidatedAt ? (

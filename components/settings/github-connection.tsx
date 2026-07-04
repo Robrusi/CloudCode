@@ -3,15 +3,10 @@
 import { CornerDownRight } from "lucide-react"
 import { useState } from "react"
 
-import {
-  navAction,
-  navDestructive,
-  navPrimary,
-  statusBadge,
-  statusIdle,
-  statusOk,
-} from "@/components/settings/shared"
+import { statusBadge, statusIdle, statusOk } from "@/components/settings/shared"
 import { GitHubIcon } from "@/components/ui/brand-icons"
+import { Button } from "@/components/ui/button"
+import { buttonVariants } from "@/components/ui/button-variants"
 import { fetchJson } from "@/lib/http/client-json"
 import type { GitHubAuthStatus } from "@/lib/github/auth"
 import { cn } from "@/lib/shared/utils"
@@ -87,36 +82,36 @@ export function GitHubConnectionRow({
               {appReady ? (
                 <input type="hidden" name="next" value="settings" />
               ) : null}
-              <button
-                type="submit"
-                disabled={disconnecting}
-                className={navPrimary}
-              >
+              <Button type="submit" size="sm" disabled={disconnecting}>
                 {appReady ? "Authenticate" : "Connect GitHub"}
-              </button>
+              </Button>
             </form>
           ) : null}
           {userReady ? (
             <form action="/api/github/app/install" method="get">
               <input type="hidden" name="intent" value="add-org" />
-              <button
+              <Button
                 type="submit"
+                variant="ghost"
+                size="sm"
                 disabled={disconnecting}
-                className={navAction}
+                className="text-muted-foreground"
               >
                 Add org
-              </button>
+              </Button>
             </form>
           ) : null}
           {userReady ? (
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               disabled={disconnecting}
               onClick={disconnect}
-              className={navDestructive}
+              className="text-muted-foreground hover:text-destructive"
             >
               {disconnecting ? "Disconnecting" : "Disconnect"}
-            </button>
+            </Button>
           ) : null}
         </div>
       </div>
@@ -165,13 +160,15 @@ export function GitHubConnectionRow({
                   {targetId ? (
                     <input type="hidden" name="targetId" value={targetId} />
                   ) : null}
-                  <button
+                  <Button
                     type="submit"
+                    variant="ghost"
+                    size="sm"
                     disabled={disconnecting}
-                    className={navAction}
+                    className="text-muted-foreground"
                   >
                     {account.installed ? "Update repos" : "Select repos"}
-                  </button>
+                  </Button>
                 </form>
                 {account.installed && account.htmlUrl ? (
                   <a
@@ -179,8 +176,9 @@ export function GitHubConnectionRow({
                     target="_blank"
                     rel="noreferrer"
                     className={cn(
-                      navDestructive,
-                      disconnecting ? "pointer-events-none opacity-50" : ""
+                      buttonVariants({ variant: "ghost", size: "sm" }),
+                      "text-muted-foreground hover:text-destructive",
+                      disconnecting && "pointer-events-none opacity-50"
                     )}
                   >
                     Remove

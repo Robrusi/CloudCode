@@ -16,6 +16,7 @@ import { useEffect, useState, type ComponentType } from "react"
 import { fieldHint } from "@/components/settings/shared"
 import { Button } from "@/components/ui/button"
 import { IconButton } from "@/components/ui/icon-button"
+import { Input } from "@/components/ui/input"
 import { cardSurfaceClass, popoverSurfaceClass } from "@/components/ui/surface"
 import { api } from "@/convex/_generated/api"
 import { fetchJson } from "@/lib/http/client-json"
@@ -172,11 +173,6 @@ function SetupStep({
   )
 }
 
-const setupInput = cn(
-  "w-full rounded-lg border border-border bg-background px-2.5 py-2 text-sm text-foreground",
-  "placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none"
-)
-
 function McpProviderSetupDialog({
   provider,
   onClose,
@@ -272,7 +268,7 @@ function McpProviderSetupDialog({
             <CopyField label="redirect URL" value={redirectUrl} />
           </SetupStep>
           <SetupStep step={3} title="Paste the app’s credentials here.">
-            <input
+            <Input
               name="clientId"
               aria-label="Client ID"
               value={clientId}
@@ -280,9 +276,8 @@ function McpProviderSetupDialog({
               placeholder="Client ID"
               autoComplete="off"
               spellCheck={false}
-              className={setupInput}
             />
-            <input
+            <Input
               name="clientSecret"
               type="password"
               aria-label="Client secret"
@@ -291,7 +286,6 @@ function McpProviderSetupDialog({
               placeholder="Client secret"
               autoComplete="off"
               spellCheck={false}
-              className={setupInput}
             />
             <p className={fieldHint}>
               Stored encrypted with your account and only used to connect{" "}
@@ -301,10 +295,10 @@ function McpProviderSetupDialog({
         </ol>
 
         <div className="mt-5 flex items-center justify-end gap-2">
-          <Button type="button" variant="outline" onClick={onClose}>
+          <Button type="button" variant="outline" size="sm" onClick={onClose}>
             Close
           </Button>
-          <Button type="submit" disabled={!ready}>
+          <Button type="submit" size="sm" disabled={!ready}>
             Connect {provider.name}
           </Button>
         </div>

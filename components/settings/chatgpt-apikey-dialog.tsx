@@ -2,7 +2,9 @@
 
 import { useEffect } from "react"
 
-import { fieldHint, fieldLabel, inputClass } from "@/components/settings/shared"
+import { fieldHint, fieldLabel } from "@/components/settings/shared"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { popoverSurfaceClass } from "@/components/ui/surface"
 import { cn } from "@/lib/shared/utils"
 
@@ -68,8 +70,8 @@ export function ChatGPTApiKeyDialog({
           </code>
           .
         </p>
-        <label className={cn(fieldLabel, "mt-4")}>
-          <input
+        <div className={cn(fieldLabel, "mt-4")}>
+          <Input
             autoFocus
             type="password"
             autoComplete="off"
@@ -82,35 +84,36 @@ export function ChatGPTApiKeyDialog({
               if (event.key === "Enter" && canConfirm) onConfirm()
             }}
             placeholder="sk-..."
-            className={inputClass}
           />
           <span className={fieldHint}>
             Stored encrypted on your account and only decrypted to authorize a
             run.
           </span>
-        </label>
+        </div>
         {error ? (
           <div className="mt-2 text-[11px] leading-4 text-destructive">
             {error}
           </div>
         ) : null}
         <div className="mt-5 flex justify-end gap-2">
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             onClick={onCancel}
             disabled={busy}
-            className="rounded-lg border border-border px-3 py-2 text-sm text-foreground/80 transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+            className="text-muted-foreground"
           >
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            size="sm"
             onClick={onConfirm}
             disabled={!canConfirm}
-            className="rounded-lg bg-foreground px-3 py-2 text-sm text-background transition-colors hover:bg-foreground/90 disabled:pointer-events-none disabled:opacity-50"
           >
             {busy ? "Saving..." : "Save"}
-          </button>
+          </Button>
         </div>
       </div>
     </dialog>
