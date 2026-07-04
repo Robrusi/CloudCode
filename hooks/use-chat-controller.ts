@@ -543,6 +543,7 @@ export function useChatController(): ChatShellProps {
     openFileDiff,
     openFileFromToolPanel,
     openNotesFullscreen,
+    preloadGithubPanel,
     preloadTerminalPanel,
     toggleTerminal,
   } = useChatPanelActions({
@@ -650,18 +651,27 @@ export function useChatController(): ChatShellProps {
     uploadingAttachmentCount,
   }
 
-  // Review threads live only inside the Review context; normal views never
-  // list them, and the review context lists nothing else. Opening a review
-  // thread renders as a chat but keeps the sidebar in the review context.
-  const reviewContext =
-    view === "reviews" || (view === "chat" && Boolean(active?.reviewId))
-  const visibleSidebarChats = useMemo(
-    () =>
-      reviewContext
-        ? sidebarChats.filter((chat) => chat.reviewId)
-        : sidebarChats.filter((chat) => !chat.reviewId),
-    [sidebarChats, reviewContext]
-  )
+  // Automation and review threads live in their own sidebar contexts. Normal
+  // chat views list regular chats only; opening an automation/review thread
+  // still renders as chat but keeps the matching sidebar context active.
+  const sidebarThreadContext =
+    view === "automations" || (view === "chat" && Boolean(active?.automationId))
+      ? "automations"
+      : view === "reviews" || (view === "chat" && Boolean(active?.reviewId))
+        ? "reviews"
+        : "chats"
+  const visibleSidebarChats = useMemo(() => {
+    switch (sidebarThreadContext) {
+      case "automations":
+        return sidebarChats.filter((chat) => chat.automationId)
+      case "reviews":
+        return sidebarChats.filter((chat) => chat.reviewId)
+      default:
+        return sidebarChats.filter(
+          (chat) => !chat.automationId && !chat.reviewId
+        )
+    }
+  }, [sidebarChats, sidebarThreadContext])
 
   return {
     dialogs: {
@@ -778,7 +788,7 @@ export function useChatController(): ChatShellProps {
         onShowAutomations: showAutomations,
         onShowReviews: showReviews,
         onShowSettings: () => showSettings(),
-        reviewContext,
+        sidebarThreadContext,
         settingsSection,
       },
     },
@@ -866,7 +876,11 @@ export function useChatController(): ChatShellProps {
         },
         github: {
           canOpen: view === "chat" && Boolean(activeSandboxId),
-          onToggle: () => toggleToolPanel("github"),
+          onPreload: preloadGithubPanel,
+          onToggle: () => {
+            preloadGithubPanel()
+            toggleToolPanel("github")
+          },
           open: githubOpen,
         },
         ssh: {

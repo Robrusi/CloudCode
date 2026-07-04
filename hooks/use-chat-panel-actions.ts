@@ -2,7 +2,10 @@
 
 import { useCallback, type Dispatch, type SetStateAction } from "react"
 
-import { loadSandboxTerminalPanel } from "@/components/chat/lazy-panels"
+import {
+  loadGithubPanel,
+  loadSandboxTerminalPanel,
+} from "@/components/chat/lazy-panels"
 import type { FileBrowserOpenMode } from "@/components/files/browser"
 
 type OpenFilePanel = (
@@ -71,6 +74,10 @@ export function useChatPanelActions({
     void loadSandboxTerminalPanel()
   }, [])
 
+  const preloadGithubPanel = useCallback(() => {
+    void loadGithubPanel()
+  }, [])
+
   const toggleTerminal = useCallback(() => {
     void loadSandboxTerminalPanel()
     setTerminalOpen((value) => !value)
@@ -82,6 +89,7 @@ export function useChatPanelActions({
     openFileDiff,
     openFileFromToolPanel,
     openNotesFullscreen,
+    preloadGithubPanel,
     preloadTerminalPanel,
     toggleTerminal,
   }

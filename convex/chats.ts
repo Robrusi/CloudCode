@@ -169,10 +169,10 @@ export const list = query({
       .order("desc")
       .take(THREAD_LIST_LIMIT)
 
-    // Automation threads only join the chat list once a run has posted to
+    // Automation threads only join the sidebar feed once a run has posted to
     // them; before that they are empty shells managed from Automations.
-    // Review threads are included but tagged with reviewId — the client shows
-    // them only inside the Review view, never among normal chats.
+    // Automation/review threads are tagged so the client can keep them in
+    // their own sidebar contexts, never among normal chats.
     const visible = threads.filter(
       (thread) => !thread.automationId || thread.lastUserMessageAt
     )

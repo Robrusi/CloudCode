@@ -14,6 +14,7 @@ import {
   getAllowedMergeMethods,
   getCommitChecks,
   getPullRequest,
+  getPullRequestReviews,
 } from "@/lib/github/pull-requests"
 import { fetchGitHubRepoMetadata } from "@/lib/github/repo-api"
 import { requireSameOrigin } from "@/lib/http/request-security"
@@ -30,18 +31,22 @@ export async function GET(request: Request) {
   if (!sandboxId) {
     return jsonError("sandboxId required", 400)
   }
+  const includeDetails = searchStringParam(request, "details") === "1"
+  const requestedBranch = searchStringParam(request, "branch")
 
   try {
     const ctx = await resolveSandboxGitContext(sandboxId)
     const credential = await maybeGetCurrentGitHubRepoCredential(ctx.repoUrl)
     const token = credential?.token
-    const branch = await getCurrentSandboxBranch(ctx.sandbox, ctx.paths)
+    const branch =
+      requestedBranch ?? (await getCurrentSandboxBranch(ctx.sandbox, ctx.paths))
 
     if (!ctx.repo || !branch) {
       return NextResponse.json({
         allowedMergeMethods: [],
         branch,
         connected: Boolean(credential),
+        detailsReady: true,
         prs: [],
       })
     }
@@ -49,30 +54,45 @@ export async function GET(request: Request) {
     const repo = ctx.repo
     const summaries = await findPullRequestsForBranch({ branch, repo, token })
 
+    if (!includeDetails) {
+      return NextResponse.json({
+        allowedMergeMethods: [],
+        branch,
+        connected: Boolean(credential),
+        detailsReady: false,
+        prs: summaries.map((summary) => ({
+          ...summary,
+          checks: null,
+          reviews: null,
+        })),
+      })
+    }
+
     // Only open PRs need merge readiness (`mergeable`, which the list endpoint
     // omits) and CI checks; closed/merged ones are display-only.
-    const prs = await Promise.all(
-      summaries.map(async (summary) => {
-        if (summary.state !== "open" || summary.merged) {
-          return { ...summary, checks: null }
-        }
-        const [full, checks] = await Promise.all([
-          getPullRequest({ number: summary.number, repo, token }),
-          getCommitChecks({ ref: summary.headSha, repo, token }),
-        ])
-        return { ...(full ?? summary), checks }
-      })
-    )
-
-    const hasOpen = prs.some((pr) => pr.state === "open" && !pr.merged)
-    const allowedMergeMethods = hasOpen
-      ? await getAllowedMergeMethods({ repo, token })
-      : []
+    const hasOpen = summaries.some((pr) => pr.state === "open" && !pr.merged)
+    const [prs, allowedMergeMethods] = await Promise.all([
+      Promise.all(
+        summaries.map(async (summary) => {
+          if (summary.state !== "open" || summary.merged) {
+            return { ...summary, checks: null, reviews: null }
+          }
+          const [full, checks, reviews] = await Promise.all([
+            getPullRequest({ number: summary.number, repo, token }),
+            getCommitChecks({ ref: summary.headSha, repo, token }),
+            getPullRequestReviews({ number: summary.number, repo, token }),
+          ])
+          return { ...(full ?? summary), checks, reviews }
+        })
+      ),
+      hasOpen ? getAllowedMergeMethods({ repo, token }) : [],
+    ])
 
     return NextResponse.json({
       allowedMergeMethods,
       branch,
       connected: Boolean(credential),
+      detailsReady: true,
       prs,
     })
   } catch (error) {

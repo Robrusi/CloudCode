@@ -2,15 +2,26 @@
 
 import { cn } from "@/lib/shared/utils"
 
+export type SidePanelTabDot = "danger" | "muted" | "pending" | "success"
+
+const TAB_DOT_CLASSES: Record<SidePanelTabDot, string> = {
+  danger: "bg-destructive",
+  muted: "bg-muted-foreground/50",
+  pending: "animate-pulse bg-muted-foreground",
+  success: "bg-success",
+}
+
 export function SidePanelTabButton({
   active,
   label,
   count,
+  dot,
   onClick,
 }: {
   active: boolean
   label: string
   count?: number
+  dot?: SidePanelTabDot
   onClick: () => void
 }) {
   return (
@@ -37,6 +48,11 @@ export function SidePanelTabButton({
         >
           {count}
         </span>
+      ) : dot ? (
+        <span
+          className={cn("size-1.5 rounded-full", TAB_DOT_CLASSES[dot])}
+          aria-hidden
+        />
       ) : null}
     </button>
   )

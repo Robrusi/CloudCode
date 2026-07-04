@@ -4,6 +4,7 @@ import type { GitHubRepo } from "@/lib/github/repo"
 export type PullRequestState = "open" | "closed"
 
 export type PullRequestSummary = {
+  authorAvatarUrl?: string
   authorLogin?: string
   baseRef: string
   body?: string
@@ -49,6 +50,51 @@ export type ChecksSummary = {
 
 export type MergeMethod = "merge" | "rebase" | "squash"
 
+export type PullRequestReviewState =
+  | "approved"
+  | "changes_requested"
+  | "commented"
+  | "dismissed"
+  | "pending"
+
+export type PullRequestReviewSummary = {
+  authorAvatarUrl?: string
+  authorLogin?: string
+  body?: string
+  htmlUrl?: string
+  id: string
+  state: PullRequestReviewState
+  submittedAt: number | null
+}
+
+export type PullRequestTimelineItem = {
+  authorAvatarUrl?: string
+  authorLogin?: string
+  body?: string
+  htmlUrl?: string
+  id: string
+  kind: "comment" | "review" | "review-comment"
+  /** File the comment is anchored to; review-comment only. */
+  path?: string
+  /** Review verdict; review only. */
+  reviewState?: PullRequestReviewState
+  timestamp: number | null
+}
+
+export type PullRequestCommit = {
+  additions: number
+  authorAvatarUrl?: string
+  authorLogin?: string
+  authorName: string | null
+  deletions: number
+  filesChanged: number
+  htmlUrl?: string
+  sha: string
+  shortSha: string
+  subject: string
+  timestamp: number | null
+}
+
 export type CreatePullRequestResult =
   | { compareUrl: string; kind: "manual" }
   | { kind: "created"; pr: PullRequestSummary }
@@ -78,7 +124,7 @@ type GitHubPullResponse = {
   number?: unknown
   state?: unknown
   title?: unknown
-  user?: { login?: unknown } | null
+  user?: { avatar_url?: unknown; login?: unknown } | null
 }
 
 type GitHubCheckRunsResponse = {
@@ -97,6 +143,24 @@ type GitHubCommitStatusResponse = {
     state?: unknown
     target_url?: unknown
   }>
+}
+
+type GitHubReviewResponse = {
+  body?: unknown
+  html_url?: unknown
+  id?: unknown
+  state?: unknown
+  submitted_at?: unknown
+  user?: { avatar_url?: unknown; login?: unknown } | null
+}
+
+type GitHubCommentResponse = {
+  body?: unknown
+  created_at?: unknown
+  html_url?: unknown
+  id?: unknown
+  path?: unknown
+  user?: { avatar_url?: unknown; login?: unknown } | null
 }
 
 type GitHubRepositoryMergeSettingsResponse = {
@@ -158,6 +222,7 @@ function normalizePullRequest(
   const baseRepoName = optionalString(data.base?.repo?.full_name)
 
   return {
+    authorAvatarUrl: optionalString(data.user?.avatar_url),
     authorLogin: optionalString(data.user?.login),
     baseRef,
     body: typeof data.body === "string" ? data.body : undefined,
@@ -318,6 +383,243 @@ export async function getCommitChecks({
   }
 
   return { checks, failing, pending, succeeded, total: checks.length }
+}
+
+const REVIEW_STATES: Record<string, PullRequestReviewState> = {
+  APPROVED: "approved",
+  CHANGES_REQUESTED: "changes_requested",
+  COMMENTED: "commented",
+  DISMISSED: "dismissed",
+  PENDING: "pending",
+}
+
+function normalizeReview(
+  data: GitHubReviewResponse
+): PullRequestReviewSummary | null {
+  const id =
+    typeof data.id === "number" || typeof data.id === "string"
+      ? String(data.id)
+      : undefined
+  const state = REVIEW_STATES[optionalString(data.state) ?? ""]
+  if (!id || !state) return null
+
+  const submittedAtRaw = optionalString(data.submitted_at)
+  const submittedAt = submittedAtRaw ? Date.parse(submittedAtRaw) : NaN
+
+  return {
+    authorAvatarUrl: optionalString(data.user?.avatar_url),
+    authorLogin: optionalString(data.user?.login),
+    body:
+      typeof data.body === "string" && data.body.trim() ? data.body : undefined,
+    htmlUrl: optionalString(data.html_url),
+    id,
+    state,
+    submittedAt: Number.isFinite(submittedAt) ? submittedAt : null,
+  }
+}
+
+/** Review events in submission order (oldest first), like the PR timeline. */
+export async function getPullRequestReviews({
+  number,
+  repo,
+  token,
+}: {
+  number: number
+  repo: GitHubRepo
+  token?: string
+}): Promise<PullRequestReviewSummary[]> {
+  const result = await githubFetch<GitHubReviewResponse[]>(
+    `${githubRepoApiUrl(repo)}/pulls/${number}/reviews?per_page=100`,
+    token
+  )
+  if (!result.ok || !Array.isArray(result.data)) return []
+
+  const reviews: PullRequestReviewSummary[] = []
+  for (const item of result.data) {
+    const review = normalizeReview(item)
+    if (review) reviews.push(review)
+  }
+  return reviews.sort((a, b) => (a.submittedAt ?? 0) - (b.submittedAt ?? 0))
+}
+
+function normalizeComment(
+  data: GitHubCommentResponse,
+  kind: "comment" | "review-comment"
+): PullRequestTimelineItem | null {
+  const id =
+    typeof data.id === "number" || typeof data.id === "string"
+      ? String(data.id)
+      : undefined
+  const body = typeof data.body === "string" ? data.body.trim() : ""
+  if (!id || !body) return null
+
+  const createdAtRaw = optionalString(data.created_at)
+  const createdAt = createdAtRaw ? Date.parse(createdAtRaw) : NaN
+
+  return {
+    authorAvatarUrl: optionalString(data.user?.avatar_url),
+    authorLogin: optionalString(data.user?.login),
+    body,
+    htmlUrl: optionalString(data.html_url),
+    id: `${kind}:${id}`,
+    kind,
+    path: kind === "review-comment" ? optionalString(data.path) : undefined,
+    timestamp: Number.isFinite(createdAt) ? createdAt : null,
+  }
+}
+
+async function listComments(
+  url: string,
+  token: string | undefined,
+  kind: "comment" | "review-comment"
+): Promise<PullRequestTimelineItem[]> {
+  const result = await githubFetch<GitHubCommentResponse[]>(url, token)
+  if (!result.ok || !Array.isArray(result.data)) return []
+
+  const items: PullRequestTimelineItem[] = []
+  for (const entry of result.data) {
+    const item = normalizeComment(entry, kind)
+    if (item) items.push(item)
+  }
+  return items
+}
+
+/**
+ * The pull request conversation, oldest first: top-of-thread comments, review
+ * verdicts, and line-anchored review comments. Reviews that only exist as
+ * containers for line comments (no verdict, no body) are dropped.
+ */
+export async function getPullRequestConversation({
+  number,
+  repo,
+  token,
+}: {
+  number: number
+  repo: GitHubRepo
+  token?: string
+}): Promise<PullRequestTimelineItem[]> {
+  const base = githubRepoApiUrl(repo)
+  const [comments, reviewComments, reviews] = await Promise.all([
+    listComments(
+      `${base}/issues/${number}/comments?per_page=100`,
+      token,
+      "comment"
+    ),
+    listComments(
+      `${base}/pulls/${number}/comments?per_page=100`,
+      token,
+      "review-comment"
+    ),
+    getPullRequestReviews({ number, repo, token }),
+  ])
+
+  const items: PullRequestTimelineItem[] = [...comments, ...reviewComments]
+  for (const review of reviews) {
+    const isVerdict =
+      review.state === "approved" || review.state === "changes_requested"
+    if (!isVerdict && !review.body) continue
+    items.push({
+      authorAvatarUrl: review.authorAvatarUrl,
+      authorLogin: review.authorLogin,
+      body: review.body,
+      htmlUrl: review.htmlUrl,
+      id: `review:${review.id}`,
+      kind: "review",
+      reviewState: review.state,
+      timestamp: review.submittedAt,
+    })
+  }
+
+  return items.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0))
+}
+
+type GitHubPrCommitResponse = {
+  author?: { avatar_url?: unknown; login?: unknown } | null
+  commit?: {
+    author?: { date?: unknown; name?: unknown } | null
+    message?: unknown
+  } | null
+  html_url?: unknown
+  sha?: unknown
+}
+
+type GitHubCommitDetailResponse = {
+  files?: unknown[]
+  stats?: { additions?: unknown; deletions?: unknown }
+}
+
+/** Per-commit diff stats require one extra request each; cap the enrichment. */
+const COMMIT_STATS_LIMIT = 30
+
+function normalizePrCommit(
+  data: GitHubPrCommitResponse
+): PullRequestCommit | null {
+  const sha = optionalString(data.sha)
+  if (!sha) return null
+
+  const message = optionalString(data.commit?.message) ?? ""
+  const dateRaw = optionalString(data.commit?.author?.date)
+  const date = dateRaw ? Date.parse(dateRaw) : NaN
+
+  return {
+    additions: 0,
+    authorAvatarUrl: optionalString(data.author?.avatar_url),
+    authorLogin: optionalString(data.author?.login),
+    authorName: optionalString(data.commit?.author?.name) ?? null,
+    deletions: 0,
+    filesChanged: 0,
+    htmlUrl: optionalString(data.html_url),
+    sha,
+    shortSha: sha.slice(0, 7),
+    subject: message.split("\n")[0] ?? "",
+    timestamp: Number.isFinite(date) ? date : null,
+  }
+}
+
+/**
+ * The pull request's commits (newest first), enriched with per-commit diff
+ * stats for the most recent `COMMIT_STATS_LIMIT` entries.
+ */
+export async function getPullRequestCommits({
+  number,
+  repo,
+  token,
+}: {
+  number: number
+  repo: GitHubRepo
+  token?: string
+}): Promise<PullRequestCommit[]> {
+  const base = githubRepoApiUrl(repo)
+  const result = await githubFetch<GitHubPrCommitResponse[]>(
+    `${base}/pulls/${number}/commits?per_page=100`,
+    token
+  )
+  if (!result.ok || !Array.isArray(result.data)) return []
+
+  const commits: PullRequestCommit[] = []
+  for (const item of result.data) {
+    const commit = normalizePrCommit(item)
+    if (commit) commits.push(commit)
+  }
+  commits.reverse()
+
+  await Promise.all(
+    commits.slice(0, COMMIT_STATS_LIMIT).map(async (commit) => {
+      const detail = await githubFetch<GitHubCommitDetailResponse>(
+        `${base}/commits/${commit.sha}`,
+        token
+      )
+      if (!detail.ok) return
+      const { files, stats } = detail.data
+      commit.additions =
+        typeof stats?.additions === "number" ? stats.additions : 0
+      commit.deletions =
+        typeof stats?.deletions === "number" ? stats.deletions : 0
+      commit.filesChanged = Array.isArray(files) ? files.length : 0
+    })
+  )
+
+  return commits
 }
 
 export async function getAllowedMergeMethods({

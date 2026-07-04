@@ -25,6 +25,7 @@ export function TopBarToolsMenu({
   onToggleTerminal,
   githubOpen,
   canOpenGithub,
+  onPreloadGithub,
   onToggleGithub,
   desktopOpen,
   canOpenDesktop,
@@ -41,6 +42,7 @@ export function TopBarToolsMenu({
   onToggleTerminal: () => void
   githubOpen: boolean
   canOpenGithub: boolean
+  onPreloadGithub?: () => void
   onToggleGithub: () => void
   desktopOpen: boolean
   canOpenDesktop: boolean
@@ -87,17 +89,24 @@ export function TopBarToolsMenu({
       icon: <GitBranch className="size-4" />,
       active: githubOpen,
       disabled: !canOpenGithub,
-      onSelect: onToggleGithub,
+      onSelect: () => {
+        onPreloadGithub?.()
+        onToggleGithub()
+      },
     },
   ]
+  const preloadPanels = () => {
+    onPreloadTerminal()
+    onPreloadGithub?.()
+  }
 
   return (
     <div className={cn("relative", className)}>
       <TopBarIconButton
         ref={triggerRef}
         onClick={toggleMenu}
-        onFocus={onPreloadTerminal}
-        onPointerEnter={onPreloadTerminal}
+        onFocus={preloadPanels}
+        onPointerEnter={preloadPanels}
         label="Sandbox tools"
         active={open || anyOpen}
         ariaHasPopup="menu"

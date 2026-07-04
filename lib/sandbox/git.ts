@@ -32,6 +32,28 @@ export type SandboxGitFile = {
   staged: boolean
 }
 
+export type SandboxGitCommit = {
+  additions: number
+  authorName: string | null
+  deletions: number
+  filesChanged: number
+  sha: string
+  shortSha: string
+  subject: string
+  /** Author time in epoch milliseconds. */
+  timestamp: number | null
+}
+
+export type SandboxGitLog = {
+  commits: SandboxGitCommit[]
+  hasRepo: boolean
+  /**
+   * "branch": commits ahead of the base branch (the pull request's commits).
+   * "recent": plain recent history, used when nothing is ahead of the base.
+   */
+  scope: "branch" | "recent"
+}
+
 export type SandboxGitStatus = {
   ahead: number
   behind: number
@@ -138,52 +160,37 @@ function parsePorcelain(blob: string): SandboxGitFile[] {
   return files
 }
 
-export async function readSandboxGitStatus(
-  sandbox: Sandbox,
-  paths: DaytonaSandboxPaths,
-  options: { env?: Record<string, string>; signal?: AbortSignal } = {}
-): Promise<SandboxGitStatus> {
-  const repo = shellQuote(paths.repoPath)
-  const command = [
-    "set -e",
-    `repo=${repo}`,
-    `if [ ! -d "$repo/.git" ]; then printf '%s\\n' ${shellQuote(NO_REPO_MARKER)}; exit 0; fi`,
-    `printf '__CC_BRANCH__\\n'`,
-    `git -C "$repo" rev-parse --abbrev-ref HEAD 2>/dev/null || true`,
-    `printf '__CC_SHA__\\n'`,
-    `git -C "$repo" rev-parse --short HEAD 2>/dev/null || true`,
-    `printf '__CC_UPSTREAM__\\n'`,
-    `upstream=$(git -C "$repo" rev-parse --abbrev-ref --symbolic-full-name @{upstream} 2>/dev/null || true)`,
-    `printf '%s\\n' "$upstream"`,
-    `printf '__CC_AHEADBEHIND__\\n'`,
-    `if [ -n "$upstream" ]; then git -C "$repo" rev-list --left-right --count "@{upstream}...HEAD" 2>/dev/null || true; fi`,
-    `printf '\\n__CC_STATUS__\\n'`,
-    `git -C "$repo" status --porcelain=v1 -z 2>/dev/null || true`,
-  ].join("\n")
+const EMPTY_STATUS: SandboxGitStatus = {
+  ahead: 0,
+  behind: 0,
+  branch: null,
+  detached: false,
+  files: [],
+  hasRepo: false,
+  sha: null,
+  stagedCount: 0,
+  unstagedCount: 0,
+  untrackedCount: 0,
+  upstream: null,
+}
 
-  const result = await runDaytonaCommand(sandbox, command, {
-    env: options.env ?? repoCommandEnv(paths),
-    signal: options.signal,
-    timeoutMs: 20_000,
-  })
+// Shell fragments assume `$repo` has been set and the repo exists.
+const STATUS_SCRIPT = [
+  `printf '__CC_BRANCH__\\n'`,
+  `git -C "$repo" rev-parse --abbrev-ref HEAD 2>/dev/null || true`,
+  `printf '__CC_SHA__\\n'`,
+  `git -C "$repo" rev-parse --short HEAD 2>/dev/null || true`,
+  `printf '__CC_UPSTREAM__\\n'`,
+  `upstream=$(git -C "$repo" rev-parse --abbrev-ref --symbolic-full-name @{upstream} 2>/dev/null || true)`,
+  `printf '%s\\n' "$upstream"`,
+  `printf '__CC_AHEADBEHIND__\\n'`,
+  `if [ -n "$upstream" ]; then git -C "$repo" rev-list --left-right --count "@{upstream}...HEAD" 2>/dev/null || true; fi`,
+  `printf '\\n__CC_STATUS__\\n'`,
+  `git -C "$repo" status --porcelain=v1 -z 2>/dev/null || true`,
+]
 
-  if (result.stdout.includes(NO_REPO_MARKER)) {
-    return {
-      ahead: 0,
-      behind: 0,
-      branch: null,
-      detached: false,
-      files: [],
-      hasRepo: false,
-      sha: null,
-      stagedCount: 0,
-      unstagedCount: 0,
-      untrackedCount: 0,
-      upstream: null,
-    }
-  }
-
-  const [header, statusBlob = ""] = result.stdout.split("__CC_STATUS__\n")
+function parseStatusOutput(output: string): SandboxGitStatus {
+  const [header, statusBlob = ""] = output.split("__CC_STATUS__\n")
   const branchRaw = section(header, "__CC_BRANCH__\n", "__CC_SHA__")
   const sha = section(header, "__CC_SHA__\n", "__CC_UPSTREAM__") || null
   const upstream =
@@ -211,6 +218,238 @@ export async function readSandboxGitStatus(
     untrackedCount: files.filter((file) => file.code === "U").length,
     upstream,
   }
+}
+
+const GIT_LOG_FORMAT = "__CC_COMMIT__%x00%H%x00%h%x00%at%x00%an%x00%s"
+
+const SHORTSTAT_PATTERN =
+  /(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/
+
+function parseGitLog(blob: string): SandboxGitCommit[] {
+  const commits: SandboxGitCommit[] = []
+
+  for (const segment of blob.split("__CC_COMMIT__")) {
+    const parts = segment.split("\0")
+    if (parts.length < 6) continue
+
+    const sha = parts[1]?.trim()
+    const shortSha = parts[2]?.trim()
+    if (!sha || !shortSha) continue
+
+    const timestamp = Number.parseInt(parts[3] ?? "", 10)
+    const authorName = parts[4]?.trim() || null
+
+    // The subject is the last format field, so the tail holds the subject
+    // line followed by this commit's `--shortstat` summary (when non-empty).
+    const tail = parts.slice(5).join("\0").split("\n")
+    const subject = tail[0]?.trim() ?? ""
+    const stat = SHORTSTAT_PATTERN.exec(
+      tail.find((line) => SHORTSTAT_PATTERN.test(line)) ?? ""
+    )
+
+    commits.push({
+      additions: stat?.[2] ? Number.parseInt(stat[2], 10) : 0,
+      authorName,
+      deletions: stat?.[3] ? Number.parseInt(stat[3], 10) : 0,
+      filesChanged: stat?.[1] ? Number.parseInt(stat[1], 10) : 0,
+      sha,
+      shortSha,
+      subject,
+      timestamp: Number.isFinite(timestamp) ? timestamp * 1000 : null,
+    })
+  }
+
+  return commits
+}
+
+// Shell fragment; assumes `$repo` and `$base` are set and the repo exists.
+// Single-branch clones lack `origin/<base>`; fetch it once (the ref persists)
+// so the log range is the pull request's commits rather than plain history.
+const LOG_SCRIPT = (() => {
+  const format = shellQuote(GIT_LOG_FORMAT)
+  return [
+    `out=""`,
+    `if [ -n "$base" ] && ! git -C "$repo" rev-parse --verify --quiet "origin/$base" >/dev/null 2>&1; then`,
+    `  git -C "$repo" fetch origin "+refs/heads/$base:refs/remotes/origin/$base" --no-tags --quiet 2>/dev/null || true`,
+    `fi`,
+    `if [ -n "$base" ] && git -C "$repo" rev-parse --verify --quiet "origin/$base" >/dev/null 2>&1; then`,
+    `  out=$(git -C "$repo" log --shortstat -n 50 --pretty=format:${format} "origin/$base..HEAD" 2>/dev/null || true)`,
+    `fi`,
+    `if [ -n "$out" ]; then`,
+    `  printf '__CC_SCOPE__branch\\n%s\\n' "$out"`,
+    `else`,
+    `  printf '__CC_SCOPE__recent\\n'`,
+    `  git -C "$repo" log --shortstat -n 20 --pretty=format:${format} 2>/dev/null || true`,
+    `fi`,
+  ]
+})()
+
+function parseLogOutput(output: string): SandboxGitLog {
+  const scope = output.includes("__CC_SCOPE__branch") ? "branch" : "recent"
+  return { commits: parseGitLog(output), hasRepo: true, scope }
+}
+
+export type SandboxGitBaseDiff = {
+  patch: string
+  truncated: boolean
+}
+
+export type SandboxGitOverview = {
+  /**
+   * Diff of the branch against the merge base with `origin/<base>` (the pull
+   * request's diff); null when the base ref is unavailable.
+   */
+  baseDiff: SandboxGitBaseDiff | null
+  log: SandboxGitLog | null
+  status: SandboxGitStatus
+}
+
+const BASE_DIFF_MAX_CHARS = 400_000
+const BASE_DIFF_MISSING_MARKER = "__CC_NO_BASE__"
+
+// Shell fragment; assumes `$repo` and `$base` are set (LOG_SCRIPT has already
+// fetched `origin/$base` when it was missing) and the repo exists.
+const BASE_DIFF_SCRIPT = [
+  `if [ -n "$base" ] && git -C "$repo" rev-parse --verify --quiet "origin/$base" >/dev/null 2>&1; then`,
+  `  git -C "$repo" diff --no-color "origin/$base...HEAD" 2>/dev/null | head -c 600000`,
+  `else`,
+  `  printf '%s' ${shellQuote(BASE_DIFF_MISSING_MARKER)}`,
+  `fi`,
+]
+
+function parseBaseDiffOutput(output: string): SandboxGitBaseDiff | null {
+  if (output.includes(BASE_DIFF_MISSING_MARKER)) return null
+  let patch = output.replace(/^\n/, "")
+  let truncated = false
+  if (patch.length > BASE_DIFF_MAX_CHARS) {
+    const boundary = patch.lastIndexOf("\ndiff --git", BASE_DIFF_MAX_CHARS)
+    patch = patch.slice(0, boundary > 0 ? boundary : BASE_DIFF_MAX_CHARS)
+    truncated = true
+  }
+  return { patch, truncated }
+}
+
+export async function readSandboxGitStatus(
+  sandbox: Sandbox,
+  paths: DaytonaSandboxPaths,
+  options: { env?: Record<string, string>; signal?: AbortSignal } = {}
+): Promise<SandboxGitStatus> {
+  const command = [
+    `repo=${shellQuote(paths.repoPath)}`,
+    `if [ ! -d "$repo/.git" ]; then printf '%s\\n' ${shellQuote(NO_REPO_MARKER)}; exit 0; fi`,
+    ...STATUS_SCRIPT,
+  ].join("\n")
+
+  const result = await runDaytonaCommand(sandbox, command, {
+    env: options.env ?? repoCommandEnv(paths),
+    signal: options.signal,
+    timeoutMs: 15_000,
+  })
+
+  if (result.stdout.includes(NO_REPO_MARKER)) {
+    return EMPTY_STATUS
+  }
+
+  return parseStatusOutput(result.stdout)
+}
+
+/**
+ * Status and commit log in a single sandbox command execution. Each remote
+ * exec costs a full round trip, so the panel reads everything at once.
+ */
+export async function readSandboxGitOverview(
+  sandbox: Sandbox,
+  paths: DaytonaSandboxPaths,
+  options: {
+    baseBranch?: string
+    env?: Record<string, string>
+    includeDetails?: boolean
+    signal?: AbortSignal
+  } = {}
+): Promise<SandboxGitOverview> {
+  if (options.includeDetails === false) {
+    return {
+      baseDiff: null,
+      log: null,
+      status: await readSandboxGitStatus(sandbox, paths, options),
+    }
+  }
+
+  const command = [
+    `repo=${shellQuote(paths.repoPath)}`,
+    `base=${shellQuote(options.baseBranch ?? "")}`,
+    `if [ ! -d "$repo/.git" ]; then printf '%s\\n' ${shellQuote(NO_REPO_MARKER)}; exit 0; fi`,
+    ...STATUS_SCRIPT,
+    `printf '\\n__CC_LOG__\\n'`,
+    ...LOG_SCRIPT,
+    `printf '\\n__CC_BASEDIFF__\\n'`,
+    ...BASE_DIFF_SCRIPT,
+  ].join("\n")
+
+  const result = await runDaytonaCommand(sandbox, command, {
+    env: options.env ?? repoCommandEnv(paths),
+    signal: options.signal,
+    timeoutMs: 25_000,
+  })
+
+  if (result.stdout.includes(NO_REPO_MARKER)) {
+    return {
+      baseDiff: null,
+      log: { commits: [], hasRepo: false, scope: "recent" },
+      status: EMPTY_STATUS,
+    }
+  }
+
+  const [statusOutput, rest = ""] = result.stdout.split("__CC_LOG__\n")
+  const [logOutput, baseDiffOutput = ""] = rest.split("__CC_BASEDIFF__\n")
+  return {
+    baseDiff: parseBaseDiffOutput(baseDiffOutput),
+    log: parseLogOutput(logOutput),
+    status: parseStatusOutput(statusOutput),
+  }
+}
+
+export type SandboxCommitDiff = {
+  diff: string
+  hasRepo: boolean
+  truncated: boolean
+}
+
+/** Keeps huge commits from flooding the client; cut on a file boundary. */
+const COMMIT_DIFF_MAX_CHARS = 400_000
+
+export async function readSandboxCommitDiff(
+  sandbox: Sandbox,
+  paths: DaytonaSandboxPaths,
+  sha: string,
+  options: { env?: Record<string, string>; signal?: AbortSignal } = {}
+): Promise<SandboxCommitDiff> {
+  const repo = shellQuote(paths.repoPath)
+  const command = [
+    `repo=${repo}`,
+    `if [ ! -d "$repo/.git" ]; then printf '%s\\n' ${shellQuote(NO_REPO_MARKER)}; exit 0; fi`,
+    `git -C "$repo" show --no-color --format= --patch ${shellQuote(sha)} 2>/dev/null || true`,
+  ].join("\n")
+
+  const result = await runDaytonaCommand(sandbox, command, {
+    env: options.env ?? repoCommandEnv(paths),
+    signal: options.signal,
+    timeoutMs: 30_000,
+  })
+
+  if (result.stdout.includes(NO_REPO_MARKER)) {
+    return { diff: "", hasRepo: false, truncated: false }
+  }
+
+  let diff = result.stdout
+  let truncated = false
+  if (diff.length > COMMIT_DIFF_MAX_CHARS) {
+    const boundary = diff.lastIndexOf("\ndiff --git", COMMIT_DIFF_MAX_CHARS)
+    diff = diff.slice(0, boundary > 0 ? boundary : COMMIT_DIFF_MAX_CHARS)
+    truncated = true
+  }
+
+  return { diff, hasRepo: true, truncated }
 }
 
 export async function getCurrentSandboxBranch(

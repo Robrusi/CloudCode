@@ -16,10 +16,10 @@ export const SandboxTerminalPanel = dynamic(loadSandboxTerminalPanel, {
   ssr: false,
 })
 
-export const GithubPanel = dynamic(
-  () => import("@/components/github/panel").then((mod) => mod.GithubPanel),
-  { ssr: false }
-)
+export const loadGithubPanel = () =>
+  import("@/components/github/panel").then((mod) => mod.GithubPanel)
+
+export const GithubPanel = dynamic(loadGithubPanel, { ssr: false })
 
 export const SandboxDesktopPanel = dynamic(
   () =>

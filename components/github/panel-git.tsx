@@ -1,84 +1,40 @@
 "use client"
 
-import { GitBranch } from "lucide-react"
-
 import type { FileBrowserOpenMode } from "@/components/files/browser"
 import {
   PrimaryButton,
   SecondaryButton,
-  SectionHeading,
 } from "@/components/github/panel-shared"
 import type { GithubPanelBusyKind } from "@/components/github/panel-types"
 import { Textarea } from "@/components/ui/textarea"
 import { cardSurfaceClass } from "@/components/ui/surface"
-import type { DiffFileStat } from "@/lib/diff/metadata"
 import type { SandboxGitFile } from "@/lib/sandbox/git"
 import { cn } from "@/lib/shared/utils"
 
-export function BranchRow({
-  ahead,
-  baseBranch,
-  behind,
-  branch,
-  upstream,
-}: {
-  ahead: number
-  baseBranch: string
-  behind: number
-  branch: string | null
-  upstream: string | null
-}) {
-  return (
-    <div className="flex items-center gap-1.5 px-0.5 pb-3 text-xs">
-      <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="truncate font-medium text-foreground">
-        {branch ?? "detached HEAD"}
-      </span>
-      {baseBranch ? (
-        <>
-          <span className="shrink-0 text-muted-foreground/50">→</span>
-          <span className="truncate text-muted-foreground">{baseBranch}</span>
-        </>
-      ) : null}
-      <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">
-        {!upstream
-          ? "unpushed"
-          : ahead || behind
-            ? `${ahead ? `↑${ahead}` : ""}${behind ? `↓${behind}` : ""}`
-            : "up to date"}
-      </span>
-    </div>
-  )
-}
-
 export function ChangesSection({
-  diffStatByPath,
   files,
   onOpenFile,
 }: {
-  diffStatByPath: Map<string, DiffFileStat>
   files: SandboxGitFile[]
   onOpenFile: (path: string, mode: FileBrowserOpenMode) => void
 }) {
   return (
-    <div>
-      <SectionHeading count={files.length || undefined}>Changes</SectionHeading>
-      <div className={cn("overflow-hidden", cardSurfaceClass)}>
-        {files.length === 0 ? (
-          <p className="px-3 py-3 text-xs text-muted-foreground">No changes.</p>
-        ) : (
-          <ul>
-            {files.map((file) => (
-              <FileRow
-                key={file.path}
-                file={file}
-                stat={diffStatByPath.get(file.path)}
-                onOpen={() => onOpenFile(file.path, "diff")}
-              />
-            ))}
-          </ul>
-        )}
-      </div>
+    <div className={cn("overflow-hidden", cardSurfaceClass)}>
+      {files.length === 0 ? (
+        <p className="px-3 py-3 text-xs text-muted-foreground">
+          No uncommitted changes.
+        </p>
+      ) : (
+        <ul>
+          {files.map((file) => (
+            <FileRow
+              key={file.path}
+              file={file}
+              onOpen={() => onOpenFile(file.path, "diff")}
+            />
+          ))}
+        </ul>
+      )}
     </div>
   )
 }
@@ -94,11 +50,9 @@ function statusCodeColor(code: string) {
 function FileRow({
   file,
   onOpen,
-  stat,
 }: {
   file: SandboxGitFile
   onOpen: () => void
-  stat?: DiffFileStat
 }) {
   const slash = file.path.lastIndexOf("/")
   const dir = slash === -1 ? "" : file.path.slice(0, slash + 1)
@@ -124,12 +78,6 @@ function FileRow({
           {dir ? <span className="text-muted-foreground">{dir}</span> : null}
           {name}
         </span>
-        {stat ? (
-          <span className="shrink-0 font-mono text-[11px] tabular-nums">
-            <span className="text-success">+{stat.additions}</span>{" "}
-            <span className="text-destructive">−{stat.deletions}</span>
-          </span>
-        ) : null}
       </button>
     </li>
   )
@@ -158,37 +106,40 @@ export function CommitSection({
   pushLabel: string | null
   value: string
 }) {
+  if (!hasChanges && !pushLabel) return null
+
   return (
-    <div className="mt-4">
-      <SectionHeading>Commit</SectionHeading>
-      <Textarea
-        aria-label="Commit message"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder="Message"
-        rows={3}
-        spellCheck={false}
-        className="text-[13px]"
-      />
+    <div className="mt-3">
       {hasChanges ? (
-        <div className="mt-2 flex items-center justify-end gap-2">
-          <SecondaryButton
-            onClick={onCommit}
-            disabled={!canCommit}
-            loading={busy === "commit"}
-          >
-            Commit
-          </SecondaryButton>
-          <PrimaryButton
-            onClick={onCommitAndPush}
-            disabled={!canCommit || !connected}
-            loading={busy === "commit-push"}
-          >
-            Commit &amp; Push
-          </PrimaryButton>
-        </div>
+        <>
+          <Textarea
+            aria-label="Commit message"
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            placeholder="Commit message"
+            rows={3}
+            spellCheck={false}
+            className="text-[13px]"
+          />
+          <div className="mt-2 flex items-center justify-end gap-2">
+            <SecondaryButton
+              onClick={onCommit}
+              disabled={!canCommit}
+              loading={busy === "commit"}
+            >
+              Commit
+            </SecondaryButton>
+            <PrimaryButton
+              onClick={onCommitAndPush}
+              disabled={!canCommit || !connected}
+              loading={busy === "commit-push"}
+            >
+              Commit &amp; Push
+            </PrimaryButton>
+          </div>
+        </>
       ) : pushLabel ? (
-        <div className="mt-2 flex justify-end">
+        <div className="flex justify-end">
           <PrimaryButton
             onClick={onPush}
             disabled={busy !== null}

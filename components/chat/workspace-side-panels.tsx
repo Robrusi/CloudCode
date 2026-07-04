@@ -114,7 +114,6 @@ export function ChatWorkspaceSidePanels({
         sandboxId={activeSandboxId}
         repoUrl={repoUrl}
         baseBranch={baseBranch}
-        diff={activeDiff ?? undefined}
         githubConnected={githubConnected}
         onClose={() => onGithubOpenChange(false)}
         onOpenFile={(path, mode) => {

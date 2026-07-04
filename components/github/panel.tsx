@@ -1,26 +1,71 @@
 "use client"
 
-import { Loader2, RefreshCw, X } from "lucide-react"
-import type { CSSProperties } from "react"
+import { GitCompareArrows, RefreshCw } from "lucide-react"
+import dynamic from "next/dynamic"
 
 import type { FileBrowserOpenMode } from "@/components/files/browser"
-import { ErrorBanner, SecondaryButton } from "@/components/github/panel-shared"
-import { useGithubPanelController } from "@/components/github/panel-controller"
 import {
-  BranchRow,
-  ChangesSection,
-  CommitSection,
-} from "@/components/github/panel-git"
-import { PullRequestSection } from "@/components/github/panel-prs"
-import { ResizeHandle } from "@/components/layout/resize-handle"
+  EmptyTabState,
+  ErrorBanner,
+  ListSkeleton,
+  SecondaryButton,
+} from "@/components/github/panel-shared"
+import { useGithubPanelController } from "@/components/github/panel-controller"
+import { ChangesSection, CommitSection } from "@/components/github/panel-git"
+import { ChecksTab } from "@/components/github/panel-checks"
+import { CreatePrForm } from "@/components/github/panel-pr-form"
+import { PrHeader, PrHeaderSkeleton } from "@/components/github/panel-pr-header"
+import type { GithubPrEntry } from "@/components/github/panel-types"
+import { ResizableSidePanel } from "@/components/layout/resizable-side-panel"
+import {
+  SidePanelTabButton,
+  type SidePanelTabDot,
+} from "@/components/layout/side-panel-tabs"
 import { IconButton } from "@/components/ui/icon-button"
+
+const BranchDiffSection = dynamic(
+  () =>
+    import("@/components/github/panel-branch-diff").then(
+      (mod) => mod.BranchDiffSection
+    ),
+  { loading: () => <ListSkeleton />, ssr: false }
+)
+
+const CommitsTab = dynamic(
+  () =>
+    import("@/components/github/panel-commits").then((mod) => mod.CommitsTab),
+  { loading: () => <ListSkeleton />, ssr: false }
+)
+
+const ReviewsTab = dynamic(
+  () =>
+    import("@/components/github/panel-reviews").then((mod) => mod.ReviewsTab),
+  { loading: () => <ListSkeleton />, ssr: false }
+)
+
+function checksDot(pr: GithubPrEntry | null): SidePanelTabDot | undefined {
+  const checks = pr?.checks
+  if (!checks || checks.total === 0) return undefined
+  if (checks.failing > 0) return "danger"
+  if (checks.pending > 0) return "pending"
+  return "success"
+}
+
+function reviewDot(pr: GithubPrEntry | null): SidePanelTabDot | undefined {
+  const reviews = pr?.reviews
+  if (!reviews || reviews.length === 0) return undefined
+  if (reviews.some((review) => review.state === "changes_requested")) {
+    return "danger"
+  }
+  if (reviews.some((review) => review.state === "approved")) return "success"
+  return "muted"
+}
 
 export function GithubPanel({
   open,
   sandboxId,
   repoUrl,
   baseBranch,
-  diff,
   githubConnected,
   onClose,
   onOpenFile,
@@ -29,7 +74,6 @@ export function GithubPanel({
   sandboxId: string | null
   repoUrl: string
   baseBranch: string
-  diff?: string
   githubConnected: boolean
   onClose: () => void
   onOpenFile: (path: string, mode: FileBrowserOpenMode) => void
@@ -37,6 +81,8 @@ export function GithubPanel({
   const {
     actionError,
     ahead,
+    allowedMergeMethods,
+    baseDiff,
     branch,
     busy,
     canCommit,
@@ -45,138 +91,273 @@ export function GithubPanel({
     compareUrl,
     connected,
     createPr,
-    diffStatByPath,
+    deleteBranchOnMerge,
+    effectiveMergeMethod,
     files,
     hasChanges,
     loading,
+    log,
+    merge,
     onCancelCreateForm,
     onChangeBody,
     onChangeCommitMessage,
+    onChangeDeleteBranchOnMerge,
     onChangeDraft,
+    onChangeMergeMethod,
+    onChangeTab,
     onChangeTitle,
-    onResizeStart,
     openCreateForm,
     prBody,
     prDraft,
+    prDetailsReady,
+    prReady,
     prs,
     prTitle,
     push,
     pushLabel,
     refresh,
-    resetWidth,
-    resizing,
     showCreateForm,
     status,
     statusError,
-    upstream,
-    width,
+    tab,
   } = useGithubPanelController({
     baseBranch,
-    diff,
     githubConnected,
     open,
     sandboxId,
   })
 
-  if (!open) return null
+  const currentPr = prs[0] ?? null
+  const hasAnyData = status !== null || currentPr !== null
+
+  const prPatch = baseDiff?.patch.trim() ? baseDiff.patch : null
+  const changedCount = files.length
 
   return (
-    <aside
-      className="fixed inset-0 z-40 flex h-[100dvh] min-h-0 w-full flex-col overflow-hidden border-l border-border/60 bg-sidebar pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-sidebar-foreground md:relative md:inset-auto md:z-auto md:h-full md:w-[var(--panel-width)] md:shrink-0 md:pt-0 md:pb-0"
-      style={{ "--panel-width": `${width}px` } as CSSProperties}
-      data-github-panel
-    >
-      <ResizeHandle
-        edge="left"
-        resizing={resizing}
-        onResizeStart={onResizeStart}
-        onReset={resetWidth}
-        ariaLabel="Resize GitHub panel"
-      />
-      <header className="flex h-[3.25rem] shrink-0 items-center gap-2 border-b border-border/60 px-3">
-        <span className="text-sm font-medium text-foreground/85">GitHub</span>
-        {loading || busy ? (
-          <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
-        ) : null}
+    <ResizableSidePanel
+      open={open}
+      title="GitHub"
+      busy={loading || busy !== null}
+      closeLabel="Close GitHub panel"
+      resizeLabel="Resize GitHub panel"
+      storageKey="cloudcode:githubPanelWidth"
+      defaultWidth={304}
+      minWidth={240}
+      maxWidth={560}
+      onClose={onClose}
+      dataAttributes={{ "data-github-panel": true }}
+      headerActions={
         <IconButton
           onClick={() => void refresh()}
           aria-label="Refresh"
           title="Refresh"
           disabled={!sandboxId || loading || busy !== null}
-          className="ml-auto"
         >
           <RefreshCw className="size-3.5" />
         </IconButton>
-        <IconButton onClick={onClose} aria-label="Close GitHub panel">
-          <X />
-        </IconButton>
-      </header>
-
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {!sandboxId ? (
-          <div className="flex h-full flex-col items-center justify-center px-6 text-center">
-            <p className="text-xs text-muted-foreground">No active sandbox.</p>
-          </div>
-        ) : statusError && !status ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-            <p className="text-xs text-muted-foreground">{statusError}</p>
-            <SecondaryButton onClick={() => void refresh()}>
-              Retry
-            </SecondaryButton>
-          </div>
-        ) : (
-          <div className="px-3 pt-4 pb-4">
-            <BranchRow
-              branch={branch}
-              baseBranch={baseBranch}
+      }
+    >
+      {!sandboxId ? (
+        <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
+          <p className="text-xs text-muted-foreground">No active sandbox.</p>
+        </div>
+      ) : statusError && !hasAnyData ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+          <p className="text-xs text-muted-foreground">{statusError}</p>
+          <SecondaryButton onClick={() => void refresh()}>
+            Retry
+          </SecondaryButton>
+        </div>
+      ) : (
+        <>
+          {hasAnyData ? (
+            <PrHeader
               ahead={ahead}
-              behind={status?.behind ?? 0}
-              upstream={upstream}
-            />
-
-            {actionError ? <ErrorBanner message={actionError} /> : null}
-
-            <ChangesSection
-              files={files}
-              diffStatByPath={diffStatByPath}
-              onOpenFile={onOpenFile}
-            />
-
-            <CommitSection
-              value={commitMessage}
-              onChange={onChangeCommitMessage}
-              canCommit={canCommit}
-              hasChanges={hasChanges}
-              busy={busy}
-              connected={connected}
-              pushLabel={pushLabel}
-              onCommit={() => commit("commit")}
-              onCommitAndPush={() => commit("commit-push")}
-              onPush={push}
-            />
-
-            <PullRequestSection
-              connected={connected}
-              prs={prs}
-              repoUrl={repoUrl}
-              busy={busy}
-              showCreateForm={showCreateForm}
-              compareUrl={compareUrl}
-              prTitle={prTitle}
-              prBody={prBody}
-              prDraft={prDraft}
               baseBranch={baseBranch}
+              behind={status?.behind ?? 0}
               branch={branch}
+              busy={busy}
+              connected={connected}
+              deleteBranchOnMerge={deleteBranchOnMerge}
+              mergeMethod={effectiveMergeMethod}
+              mergeMethods={allowedMergeMethods}
+              morePrs={prs.slice(1)}
+              onChangeDeleteBranchOnMerge={onChangeDeleteBranchOnMerge}
+              onChangeMergeMethod={onChangeMergeMethod}
+              onMerge={merge}
               onOpenCreateForm={openCreateForm}
-              onCancelCreateForm={onCancelCreateForm}
-              onChangeTitle={onChangeTitle}
-              onChangeBody={onChangeBody}
-              onChangeDraft={onChangeDraft}
-              onCreate={createPr}
+              pr={currentPr}
+              prDetailsReady={prDetailsReady}
+              prReady={prReady}
+              repoUrl={repoUrl}
+              showCreateForm={showCreateForm}
+              upstream={status?.upstream ?? null}
             />
-          </div>
-        )}
-      </div>
-    </aside>
+          ) : (
+            <PrHeaderSkeleton />
+          )}
+
+          {showCreateForm ? (
+            <div className="min-h-0 flex-1 overflow-y-auto border-t border-border/60 px-3 pt-3 pb-4">
+              {actionError ? (
+                <div className="pb-3">
+                  <ErrorBanner message={actionError} />
+                </div>
+              ) : null}
+              <CreatePrForm
+                title={prTitle}
+                body={prBody}
+                draft={prDraft}
+                base={baseBranch}
+                head={branch}
+                busy={busy}
+                compareUrl={compareUrl}
+                onChangeTitle={onChangeTitle}
+                onChangeBody={onChangeBody}
+                onChangeDraft={onChangeDraft}
+                onCancel={onCancelCreateForm}
+                onCreate={createPr}
+              />
+            </div>
+          ) : (
+            <>
+              <div className="flex h-10 shrink-0 items-stretch border-y border-border/60">
+                <SidePanelTabButton
+                  active={tab === "changes"}
+                  label="Changes"
+                  count={changedCount || undefined}
+                  onClick={() => onChangeTab("changes")}
+                />
+                <div aria-hidden className="w-px self-stretch bg-border/60" />
+                <SidePanelTabButton
+                  active={tab === "review"}
+                  label="Review"
+                  dot={reviewDot(currentPr)}
+                  onClick={() => onChangeTab("review")}
+                />
+                <div aria-hidden className="w-px self-stretch bg-border/60" />
+                <SidePanelTabButton
+                  active={tab === "checks"}
+                  label="Checks"
+                  dot={checksDot(currentPr)}
+                  onClick={() => onChangeTab("checks")}
+                />
+                <div aria-hidden className="w-px self-stretch bg-border/60" />
+                <SidePanelTabButton
+                  active={tab === "commits"}
+                  label="Commits"
+                  count={
+                    log && log.scope === "branch"
+                      ? log.commits.length || undefined
+                      : undefined
+                  }
+                  onClick={() => onChangeTab("commits")}
+                />
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-3 pb-4">
+                {actionError ? (
+                  <div className="pb-3">
+                    <ErrorBanner message={actionError} />
+                  </div>
+                ) : null}
+
+                {tab === "changes" ? (
+                  status ? (
+                    <>
+                      {hasChanges ? (
+                        <div className="pb-4">
+                          <div className="px-0.5 pb-2 text-xs text-muted-foreground">
+                            Uncommitted changes
+                          </div>
+                          <ChangesSection
+                            files={files}
+                            onOpenFile={onOpenFile}
+                          />
+                          <CommitSection
+                            value={commitMessage}
+                            onChange={onChangeCommitMessage}
+                            canCommit={canCommit}
+                            hasChanges={hasChanges}
+                            busy={busy}
+                            connected={connected}
+                            pushLabel={pushLabel}
+                            onCommit={() => commit("commit")}
+                            onCommitAndPush={() => commit("commit-push")}
+                            onPush={push}
+                          />
+                        </div>
+                      ) : pushLabel ? (
+                        <div className="flex justify-end pb-4">
+                          <CommitSection
+                            value={commitMessage}
+                            onChange={onChangeCommitMessage}
+                            canCommit={canCommit}
+                            hasChanges={hasChanges}
+                            busy={busy}
+                            connected={connected}
+                            pushLabel={pushLabel}
+                            onCommit={() => commit("commit")}
+                            onCommitAndPush={() => commit("commit-push")}
+                            onPush={push}
+                          />
+                        </div>
+                      ) : null}
+
+                      {prPatch ? (
+                        <>
+                          <BranchDiffSection
+                            diff={prPatch}
+                            onOpenDiff={(path) => onOpenFile(path, "diff")}
+                            truncated={baseDiff?.truncated === true}
+                          />
+                        </>
+                      ) : !hasChanges ? (
+                        <EmptyTabState icon={GitCompareArrows}>
+                          No changes on this branch yet.
+                        </EmptyTabState>
+                      ) : null}
+                    </>
+                  ) : (
+                    <ListSkeleton />
+                  )
+                ) : tab === "commits" ? (
+                  log ? (
+                    <CommitsTab
+                      baseBranch={baseBranch}
+                      log={log}
+                      pr={currentPr}
+                      sandboxId={sandboxId}
+                    />
+                  ) : (
+                    <ListSkeleton />
+                  )
+                ) : tab === "checks" ? (
+                  prReady || currentPr ? (
+                    <ChecksTab
+                      connected={connected}
+                      onOpenCreateForm={openCreateForm}
+                      pr={currentPr}
+                    />
+                  ) : (
+                    <ListSkeleton />
+                  )
+                ) : prReady || currentPr ? (
+                  <ReviewsTab
+                    connected={connected}
+                    onOpenCreateForm={openCreateForm}
+                    onOpenFile={onOpenFile}
+                    pr={currentPr}
+                    sandboxId={sandboxId}
+                  />
+                ) : (
+                  <ListSkeleton />
+                )}
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </ResizableSidePanel>
   )
 }

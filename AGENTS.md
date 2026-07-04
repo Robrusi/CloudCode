@@ -5,6 +5,10 @@
 - Always run `pnpm lint`, `pnpm fmt`, `pnpm typecheck`, and `pnpm format:check`.
 - Do not start or restart the dev server unless the user explicitly asks.
 
+## CloudCode
+
+If testing in CloudCode browser, login with email: 'admin@example.com', password: 'admin'
+
 ## Preferences
 
 The user uses speech to text occasionally, so if sentences are weird or words

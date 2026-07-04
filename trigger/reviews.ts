@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import { stripInlineToolMarkers } from "@/lib/codex/run-log"
 import {
   failWorkerRun,
   getWorkerSecret,
@@ -39,6 +40,23 @@ type ReviewRunPayload = {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Review run failed."
+}
+
+const LAST_TOOL_MARKER = "</codex-tool>"
+
+/** The assistant message interleaves progress narration with encoded
+ * <codex-tool> markers the chat UI renders as command chips; GitHub strips
+ * the tags and shows the raw payloads. The PR comment wants only the final
+ * report: the text after the last tool marker, with any markers removed. */
+function reviewReportFromContent(content: string) {
+  const lastMarkerEnd = content.lastIndexOf(LAST_TOOL_MARKER)
+  const tail =
+    lastMarkerEnd === -1
+      ? content
+      : content.slice(lastMarkerEnd + LAST_TOOL_MARKER.length)
+  return (
+    stripInlineToolMarkers(tail) || stripInlineToolMarkers(content)
+  ).trim()
 }
 
 // Fans one verified pull_request webhook event out to every enabled review
@@ -295,7 +313,8 @@ export const reviewRun = task({
         runStatus: outcome?.status,
       }
     }
-    if (!outcome.content.trim() || !outcome.prNumber) {
+    const report = reviewReportFromContent(outcome.content)
+    if (!report || !outcome.prNumber) {
       await client
         .mutation(api.reviews.workerRecordCommentFailure, {
           error: "Review finished without a report to post.",
@@ -314,7 +333,7 @@ export const reviewRun = task({
     const footerLink = appUrl
       ? `[Open the review thread](${appUrl}/?thread=${created.threadId})`
       : "Review thread available in Cloudcode."
-    const commentBody = `${outcome.content.trim()}\n\n---\n_Reviewed by Cloudcode · ${footerLink}_`
+    const commentBody = `${report}\n\n---\n_Reviewed by Cloudcode · ${footerLink}_`
 
     let lastError: unknown
     for (let attempt = 1; attempt <= COMMENT_POST_ATTEMPTS; attempt += 1) {

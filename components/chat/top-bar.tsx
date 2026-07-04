@@ -33,6 +33,7 @@ type TopBarSandbox = {
 
 type TopBarToolControl = {
   canOpen: boolean
+  onPreload?: () => void
   onToggle: () => void
   open: boolean
 }
@@ -85,6 +86,7 @@ export function TopBar({
   const onToggleFiles = files.onToggle
   const githubOpen = github.open
   const canOpenGithub = github.canOpen
+  const onPreloadGithub = github.onPreload
   const onToggleGithub = github.onToggle
   const desktopOpen = desktop.open
   const canOpenDesktop = desktop.canOpen
@@ -188,6 +190,7 @@ export function TopBar({
               onToggleTerminal={onToggleTerminal}
               githubOpen={githubOpen}
               canOpenGithub={canOpenGithub}
+              onPreloadGithub={onPreloadGithub}
               onToggleGithub={onToggleGithub}
               desktopOpen={desktopOpen}
               canOpenDesktop={canOpenDesktop}
