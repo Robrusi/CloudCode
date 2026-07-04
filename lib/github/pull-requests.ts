@@ -746,6 +746,62 @@ export async function mergePullRequest({
   return { merged: result.data.merged === true, message: result.message }
 }
 
+export type ReactionContent =
+  | "+1"
+  | "-1"
+  | "confused"
+  | "eyes"
+  | "heart"
+  | "hooray"
+  | "laugh"
+  | "rocket"
+
+/** Reacts on the PR conversation (pull requests are issues to the reactions
+ * API). Reacting twice with the same content is a no-op on GitHub's side. */
+export async function addPullRequestReaction({
+  content,
+  number,
+  repo,
+  token,
+}: {
+  content: ReactionContent
+  number: number
+  repo: GitHubRepo
+  token?: string
+}): Promise<boolean> {
+  const result = await githubFetch<unknown>(
+    `${githubRepoApiUrl(repo)}/issues/${number}/reactions`,
+    token,
+    {
+      body: JSON.stringify({ content }),
+      method: "POST",
+    }
+  )
+  return result.ok
+}
+
+export async function addIssueCommentReaction({
+  commentId,
+  content,
+  repo,
+  token,
+}: {
+  commentId: string
+  content: ReactionContent
+  repo: GitHubRepo
+  token?: string
+}): Promise<boolean> {
+  const result = await githubFetch<unknown>(
+    `${githubRepoApiUrl(repo)}/issues/comments/${commentId}/reactions`,
+    token,
+    {
+      body: JSON.stringify({ content }),
+      method: "POST",
+    }
+  )
+  return result.ok
+}
+
 // Pull requests are issues to the comments API, so this posts a regular
 // top-of-thread PR comment (not a line-anchored review comment).
 export async function createIssueComment({

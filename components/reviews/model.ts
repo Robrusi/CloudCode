@@ -25,6 +25,7 @@ export type ReviewDraft = {
   prompt: string
   reasoningEffort: Thinking
   repoUrl: string
+  reviewOnPush: boolean
   reviewReadyForReview: boolean
   sandboxPresetId: string
   speed: Speed
@@ -41,6 +42,7 @@ export function emptyReviewDraft(): ReviewDraft {
     prompt: DEFAULT_REVIEW_PROMPT,
     reasoningEffort: "medium",
     repoUrl: "",
+    reviewOnPush: false,
     reviewReadyForReview: false,
     sandboxPresetId: "",
     speed: "standard",
@@ -58,6 +60,7 @@ export function reviewDraftFromRecord(review: ReviewRecord): ReviewDraft {
     prompt: review.prompt ?? DEFAULT_REVIEW_PROMPT,
     reasoningEffort: review.reasoningEffort,
     repoUrl: review.repoUrl,
+    reviewOnPush: review.reviewOnPush ?? false,
     reviewReadyForReview: review.reviewReadyForReview ?? false,
     sandboxPresetId: review.sandboxPresetId ?? "",
     speed: review.speed,
@@ -78,6 +81,7 @@ export function reviewRequestBody(draft: ReviewDraft) {
     prompt: prompt !== DEFAULT_REVIEW_PROMPT ? prompt || undefined : undefined,
     reasoningEffort: draft.reasoningEffort,
     repoUrl: draft.repoUrl,
+    reviewOnPush: draft.reviewOnPush,
     reviewReadyForReview: draft.reviewReadyForReview,
     sandboxPresetId: draft.sandboxPresetId || undefined,
     speed: draft.speed,

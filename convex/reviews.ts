@@ -9,6 +9,10 @@ import {
 } from "./_generated/server"
 import { findCodexAuth } from "./lib/codexRunAuth"
 import {
+  isActiveCodexRunStatus,
+  markRunCanceling,
+} from "./lib/codexRunLifecycle"
+import {
   appendCodexRunLogs,
   upsertCodexRunCheckpoint,
 } from "./lib/codexRunRecords"
@@ -38,6 +42,7 @@ const reviewConfigArgs = {
   prompt: v.optional(v.string()),
   reasoningEffort: thinking,
   repoUrl: v.string(),
+  reviewOnPush: v.optional(v.boolean()),
   reviewReadyForReview: v.optional(v.boolean()),
   sandboxPresetId: v.optional(v.id("sandboxPresets")),
   speed,
@@ -54,6 +59,7 @@ type ReviewConfigArgs = {
   prompt?: string
   reasoningEffort: Doc<"reviews">["reasoningEffort"]
   repoUrl: string
+  reviewOnPush?: boolean
   reviewReadyForReview?: boolean
   sandboxPresetId?: Id<"sandboxPresets">
   speed: Doc<"reviews">["speed"]
@@ -163,6 +169,7 @@ export const create = mutation({
       ...(args.prompt?.trim() ? { prompt: args.prompt.trim() } : {}),
       reasoningEffort: args.reasoningEffort,
       repoUrl,
+      ...(args.reviewOnPush ? { reviewOnPush: true } : {}),
       ...(args.reviewReadyForReview ? { reviewReadyForReview: true } : {}),
       sandboxPresetId,
       speed: args.speed,
@@ -202,6 +209,7 @@ export const update = mutation({
       prompt: args.prompt?.trim() || undefined,
       reasoningEffort: args.reasoningEffort,
       repoUrl,
+      reviewOnPush: args.reviewOnPush || undefined,
       reviewReadyForReview: args.reviewReadyForReview || undefined,
       sandboxPresetId,
       speed: args.speed,
@@ -326,6 +334,7 @@ export const listEnabledForRepoForWorker = query({
       _id: review._id,
       authorFilterMode: review.authorFilterMode,
       authorFilters: review.authorFilters,
+      reviewOnPush: review.reviewOnPush ?? false,
       reviewReadyForReview: review.reviewReadyForReview ?? false,
       userId: review.userId,
     }))
@@ -344,8 +353,40 @@ export const getForWorker = query({
   },
 })
 
+/** The most recent finished review of a PR, for re-review context: the new
+ * run tells the agent what it previously found and at which commit. */
+export const workerGetLatestRunForPr = query({
+  args: {
+    prNumber: v.number(),
+    reviewId: v.id("reviews"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    const runs = await ctx.db
+      .query("codexRuns")
+      .withIndex("by_review_pr", (q) =>
+        q.eq("reviewId", args.reviewId).eq("prNumber", args.prNumber)
+      )
+      .order("desc")
+      .collect()
+    const latest = runs.find((run) => run.status === "succeeded")
+    if (!latest) return null
+
+    const message = await ctx.db.get(latest.assistantMessageId)
+
+    return {
+      content: message?.content ?? "",
+      finishedAt: latest.finishedAt,
+      prHeadSha: latest.prHeadSha,
+    }
+  },
+})
+
 export const workerCreateRun = mutation({
   args: {
+    additionalContext: v.optional(v.string()),
     githubToken: v.optional(v.string()),
     githubUserEmail: v.optional(v.string()),
     githubUserName: v.optional(v.string()),
@@ -383,6 +424,17 @@ export const workerCreateRun = mutation({
       if (duplicate) {
         return { ok: false as const, status: "duplicate" as const }
       }
+
+      // Supersede: a run still reviewing an older head would post a comment
+      // about code that no longer exists. At most one active run per PR,
+      // always on the newest head.
+      const staleRuns = priorRuns.filter(
+        (run) =>
+          isActiveCodexRunStatus(run.status) && run.status !== "canceling"
+      )
+      for (const staleRun of staleRuns) {
+        await markRunCanceling(ctx, staleRun)
+      }
     }
 
     const sandboxPresetId = await resolveOwnedPresetOrAutoDefault(
@@ -414,9 +466,16 @@ export const workerCreateRun = mutation({
 
     const now = Date.now()
     const userId = review.userId
-    const prompt = buildReviewPrompt(review.prompt, review.repoUrl, args.pr, {
-      autofix: review.autofix ?? false,
-    })
+    const basePrompt = buildReviewPrompt(
+      review.prompt,
+      review.repoUrl,
+      args.pr,
+      { autofix: review.autofix ?? false }
+    )
+    const additionalContext = args.additionalContext?.trim()
+    const prompt = additionalContext
+      ? `${basePrompt}\n\n---\n\n${additionalContext}`
+      : basePrompt
     const title = `PR #${args.pr.number}: ${args.pr.title}`
 
     // Each pull request gets its own thread. reviewId keeps it out of the

@@ -141,6 +141,8 @@ export default defineSchema({
     // Always the canonical https://github.com/{owner}/{repo}.git form so the
     // webhook's repository lookup matches exactly.
     repoUrl: v.string(),
+    // Also re-review when new commits are pushed to the PR; unset means false.
+    reviewOnPush: v.optional(v.boolean()),
     // Also review when a draft PR is marked ready; unset means false.
     reviewReadyForReview: v.optional(v.boolean()),
     sandboxPresetId: v.optional(v.id("sandboxPresets")),

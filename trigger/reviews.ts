@@ -10,10 +10,20 @@ import {
   workerConvexClient,
 } from "@/lib/codex/run-worker"
 import { createWorkerGitHubRepoCredential } from "@/lib/github/app-worker"
-import { createIssueComment, getPullRequest } from "@/lib/github/pull-requests"
-import { parseGitHubRepoUrl } from "@/lib/github/repo"
+import {
+  addIssueCommentReaction,
+  addPullRequestReaction,
+  createIssueComment,
+  getPullRequest,
+  getPullRequestCommits,
+  getPullRequestConversation,
+} from "@/lib/github/pull-requests"
+import { parseGitHubRepoUrl, type GitHubRepo } from "@/lib/github/repo"
 import { reviewAllowsAuthor } from "@/lib/reviews/config"
-import type { ReviewPullRequestContext } from "@/lib/reviews/prompt"
+import {
+  buildReviewRerunContext,
+  type ReviewPullRequestContext,
+} from "@/lib/reviews/prompt"
 import { encryptSecret } from "@/lib/security/secret-crypto"
 import type { cloudcodeRun } from "@/trigger/cloudcode-run"
 
@@ -24,14 +34,23 @@ const GITHUB_ACCESS_ERROR =
 
 const COMMENT_POST_ATTEMPTS = 3
 
+type ReviewMentionComment = {
+  authorLogin?: string
+  body: string
+  id: string
+}
+
 type ReviewDispatchPayload = {
   action: string
-  pr: ReviewPullRequestContext
+  comment?: ReviewMentionComment
+  pr?: ReviewPullRequestContext
+  prNumber?: number
   repoUrl: string
 }
 
 type ReviewRunPayload = {
   action?: string
+  comment?: ReviewMentionComment
   manual: boolean
   pr?: ReviewPullRequestContext
   prNumber?: number
@@ -43,6 +62,67 @@ function errorMessage(error: unknown) {
 }
 
 const LAST_TOOL_MARKER = "</codex-tool>"
+
+/** Best-effort context for re-reviews and mentions: the previous report,
+ * the PR discussion, and the commit list. A failure here degrades to a
+ * from-scratch review instead of blocking the run. */
+async function rerunContextForReview({
+  client,
+  comment,
+  number,
+  repo,
+  reviewId,
+  token,
+}: {
+  client: ReturnType<typeof workerConvexClient>
+  comment?: ReviewMentionComment
+  number: number
+  repo: GitHubRepo
+  reviewId: Id<"reviews">
+  token: string
+}): Promise<string | undefined> {
+  try {
+    const [previous, conversation, commits] = await Promise.all([
+      client.query(api.reviews.workerGetLatestRunForPr, {
+        prNumber: number,
+        reviewId,
+        workerSecret: getWorkerSecret(),
+      }),
+      getPullRequestConversation({ number, repo, token }),
+      getPullRequestCommits({ number, repo, token }),
+    ])
+    const previousReport = previous?.content
+      ? reviewReportFromContent(previous.content)
+      : undefined
+
+    const context = buildReviewRerunContext({
+      commits: commits.map((commit) => ({
+        authorLogin: commit.authorLogin,
+        sha: commit.sha,
+        subject: commit.subject,
+      })),
+      // Bot comments (including this app's own posted reports) add noise the
+      // previous-report section already covers.
+      conversation: conversation
+        .filter((item) => !item.authorLogin?.endsWith("[bot]"))
+        .map((item) => ({
+          authorLogin: item.authorLogin,
+          body: item.body,
+          kind: item.kind,
+        })),
+      mention: comment
+        ? { authorLogin: comment.authorLogin, body: comment.body }
+        : undefined,
+      previousHeadSha: previous?.prHeadSha,
+      previousReport: previousReport || undefined,
+    })
+
+    return context || undefined
+  } catch (error) {
+    console.warn("Unable to assemble re-review context.", error)
+    return undefined
+  }
+}
 
 /** The assistant message interleaves progress narration with encoded
  * <codex-tool> markers the chat UI renders as command chips; GitHub strips
@@ -79,6 +159,7 @@ export const reviewDispatch = task({
       }
     )
 
+    const isMention = payload.action === "mention"
     let dispatched = 0
     for (const review of reviews) {
       if (
@@ -87,11 +168,17 @@ export const reviewDispatch = task({
       ) {
         continue
       }
+      if (payload.action === "synchronize" && !review.reviewOnPush) {
+        continue
+      }
+      // A mention is an explicit request by a collaborator, so the author
+      // filter does not apply to it.
       if (
+        !isMention &&
         !reviewAllowsAuthor(
           review.authorFilterMode,
           review.authorFilters,
-          payload.pr.authorLogin
+          payload.pr?.authorLogin
         )
       ) {
         continue
@@ -101,14 +188,21 @@ export const reviewDispatch = task({
           "review-run",
           {
             action: payload.action,
-            manual: false,
+            comment: payload.comment,
+            // Mentions run like manual requests: the PR is loaded by number
+            // and the head-SHA dedup does not apply.
+            manual: isMention,
             pr: payload.pr,
+            prNumber: payload.prNumber,
             reviewId: review._id,
           },
           {
-            // One review per config per head commit, even when GitHub
-            // redelivers the webhook or sends opened + ready_for_review.
-            idempotencyKey: `review:${review._id}:${payload.pr.number}:${payload.pr.headSha}`,
+            // One review per config per head commit (or per mention comment),
+            // even when GitHub redelivers the webhook or sends opened +
+            // ready_for_review back to back.
+            idempotencyKey: isMention
+              ? `review:${review._id}:comment:${payload.comment?.id}`
+              : `review:${review._id}:${payload.pr?.number}:${payload.pr?.headSha}`,
             tags: [`user:${review.userId}`, `review:${review._id}`],
           }
         )
@@ -241,7 +335,22 @@ export const reviewRun = task({
         }
       }
 
+      // Re-reviews (new commits) and mentions carry the PR's history so the
+      // agent can confirm resolved findings and honor the request.
+      const additionalContext =
+        payload.action === "synchronize" || payload.action === "mention"
+          ? await rerunContextForReview({
+              client,
+              comment: payload.comment,
+              number: pr.number,
+              repo,
+              reviewId: payload.reviewId,
+              token: credential.token,
+            })
+          : undefined
+
       const result = await client.mutation(api.reviews.workerCreateRun, {
+        additionalContext,
         githubToken: encryptSecret(credential.token),
         githubUserEmail: credential.gitUserEmail,
         githubUserName: credential.gitUserName,
@@ -274,6 +383,27 @@ export const reviewRun = task({
         return { dispatched: false, reason: result.status }
       }
       created = result
+
+      // 👀 on GitHub the moment the review is actually underway: on the
+      // triggering comment for mentions, on the PR itself otherwise.
+      // Best-effort — a failed reaction never blocks the review.
+      await (
+        payload.comment
+          ? addIssueCommentReaction({
+              commentId: payload.comment.id,
+              content: "eyes",
+              repo,
+              token: credential.token,
+            })
+          : addPullRequestReaction({
+              content: "eyes",
+              number: pr.number,
+              repo,
+              token: credential.token,
+            })
+      ).catch((reactionError) => {
+        console.warn("Unable to add the eyes reaction.", reactionError)
+      })
     } catch (error) {
       await recordDispatchFailure(errorMessage(error))
       throw error

@@ -55,9 +55,10 @@ For every finding include: the concrete attack scenario (who sends what, and wha
 ## Hardening opportunities
 Optional defense-in-depth improvements adjacent to the change (better defaults, missing headers, stricter validation) that are not vulnerabilities themselves. Write "None." if there are none.
 
-End the report with exactly one final line in this form, followed by a one-sentence justification:
+End the report with exactly these two final lines:
 Confidence to merge: X/5
-(1 = do not merge, 5 = safe to merge.)
+Reason: <one or two sentences naming what drives the score — the specific vulnerabilities holding it down, or the checks and evidence supporting it>
+(1 = do not merge, 5 = safe to merge. Never give the score without the Reason line.)
 
 Do not commit, push, modify files, or create pull requests. Your final message is posted verbatim as a comment on the pull request.`
 
@@ -80,9 +81,10 @@ Numbered gaps ordered by risk, each with a file:line reference to the untested c
 ## Proposed tests
 Concrete test cases for each gap, matched by number — name the file they belong in and sketch the test code in the project's existing style and framework.
 
-End the report with exactly one final line in this form, followed by a one-sentence justification:
+End the report with exactly these two final lines:
 Confidence to merge: X/5
-(1 = do not merge, 5 = safe to merge.)
+Reason: <one or two sentences naming what drives the score — the riskiest untested behavior holding it down, or the coverage evidence supporting it>
+(1 = do not merge, 5 = safe to merge. Never give the score without the Reason line.)
 
 Do not commit, push, modify files, or create pull requests. Your final message is posted verbatim as a comment on the pull request.`
 

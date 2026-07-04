@@ -15,6 +15,7 @@ import {
   parseReviewAutoEnvironment,
   parseReviewAutofix,
   parseReviewName,
+  parseReviewOnPush,
   parseReviewPrompt,
   parseReviewReadyForReview,
   type ReviewAuthorFilterMode,
@@ -31,6 +32,7 @@ export type ReviewRequestConfig = {
   prompt?: string
   reasoningEffort: ReasoningEffort
   repoUrl: string
+  reviewOnPush: boolean
   reviewReadyForReview: boolean
   sandboxPresetId?: string
   speed: CodexSpeed
@@ -72,6 +74,7 @@ export function parseReviewRequestConfig(
     prompt: parseReviewPrompt(body.prompt),
     reasoningEffort,
     repoUrl,
+    reviewOnPush: parseReviewOnPush(body.reviewOnPush),
     reviewReadyForReview: parseReviewReadyForReview(body.reviewReadyForReview),
     sandboxPresetId: jsonRawStringField(body, "sandboxPresetId"),
     speed,

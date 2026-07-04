@@ -53,6 +53,16 @@ export function parseReviewAutofix(value: unknown): boolean {
   throw new Error(REVIEW_AUTOFIX_ERROR)
 }
 
+export const REVIEW_ON_PUSH_ERROR = "reviewOnPush must be a boolean."
+
+/** Whether new commits pushed to a PR trigger a re-review; defaults to
+ * false. */
+export function parseReviewOnPush(value: unknown): boolean {
+  if (value === undefined || value === null) return false
+  if (typeof value === "boolean") return value
+  throw new Error(REVIEW_ON_PUSH_ERROR)
+}
+
 /** Which PR authors a config reviews: everyone (unset), only the listed
  * logins ("allow"), or everyone except the listed logins ("block"). */
 export const REVIEW_AUTHOR_FILTER_MODES = ["allow", "block"] as const

@@ -59,6 +59,99 @@ function requiredString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
 }
 
+export type IssueCommentWebhookEvent = {
+  action: string
+  authorAssociation: string
+  authorLogin?: string
+  body: string
+  commentId: string
+  prNumber: number
+  repoFullName: string
+  repoUrl: string
+}
+
+type IssueCommentWebhookPayload = {
+  action?: unknown
+  comment?: {
+    author_association?: unknown
+    body?: unknown
+    id?: unknown
+    user?: { login?: unknown } | null
+  } | null
+  issue?: { number?: unknown; pull_request?: unknown } | null
+  repository?: { full_name?: unknown } | null
+}
+
+/** Comment authors who may trigger a review by mentioning the app; anyone
+ * else with a GitHub account can comment on a public PR. */
+const MENTION_TRUSTED_ASSOCIATIONS = new Set([
+  "COLLABORATOR",
+  "MEMBER",
+  "OWNER",
+])
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+/** Whether a comment mentions the GitHub App (`@<slug>`); requires
+ * GITHUB_APP_SLUG. Bot-authored comments never count, so the app's own
+ * replies cannot re-trigger reviews. */
+export function commentMentionsCloudcode(event: IssueCommentWebhookEvent) {
+  const slug = process.env.GITHUB_APP_SLUG?.trim()
+  if (!slug) return false
+  if (event.authorLogin?.endsWith("[bot]")) return false
+  return new RegExp(`(^|\\W)@${escapeRegExp(slug)}\\b`, "i").test(event.body)
+}
+
+export function isTrustedMentionAuthor(event: IssueCommentWebhookEvent) {
+  return MENTION_TRUSTED_ASSOCIATIONS.has(event.authorAssociation)
+}
+
+/** Parses issue_comment payloads, returning null for comments that are not
+ * on a pull request. */
+export function parseIssueCommentWebhookEvent(
+  payload: unknown
+): IssueCommentWebhookEvent | null {
+  if (!payload || typeof payload !== "object") return null
+  const { action, comment, issue, repository } =
+    payload as IssueCommentWebhookPayload
+
+  const parsedAction = requiredString(action)
+  const repoFullName = requiredString(repository?.full_name)
+  const prNumber = typeof issue?.number === "number" ? issue.number : undefined
+  if (!comment) return null
+  const commentId =
+    typeof comment.id === "number" || typeof comment.id === "string"
+      ? String(comment.id)
+      : undefined
+  const body = typeof comment.body === "string" ? comment.body : ""
+  if (
+    !parsedAction ||
+    !repoFullName ||
+    !prNumber ||
+    !commentId ||
+    !body.trim() ||
+    !issue?.pull_request
+  ) {
+    return null
+  }
+
+  const repoUrl = canonicalGitHubRepoUrl(repoFullName)
+  if (!repoUrl) return null
+
+  return {
+    action: parsedAction,
+    authorAssociation: requiredString(comment.author_association) ?? "NONE",
+    authorLogin: requiredString(comment.user?.login),
+    body,
+    commentId,
+    prNumber,
+    repoFullName,
+    repoUrl,
+  }
+}
+
 export function parsePullRequestWebhookEvent(
   payload: unknown
 ): PullRequestWebhookEvent | null {

@@ -228,8 +228,8 @@ export function useChatController(): ChatShellProps {
     optimisticRuns,
     runningRunKeys,
   })
-  const terminalCanOpen = activeRunPending || activeSandboxState === "running"
-  const terminalVisible = terminalOpen && terminalCanOpen
+  const terminalVisible =
+    terminalOpen && (Boolean(activeSandboxId) || activeRunPending)
   const repoUrl = active ? active.repoUrl : draftRepo
   const baseBranch = active ? (active.baseBranch ?? "") : draftBaseBranch
   const model = active ? active.model : draftModel
@@ -543,7 +543,6 @@ export function useChatController(): ChatShellProps {
     openFileDiff,
     openFileFromToolPanel,
     openNotesFullscreen,
-    preloadGithubPanel,
     preloadTerminalPanel,
     toggleTerminal,
   } = useChatPanelActions({
@@ -876,11 +875,7 @@ export function useChatController(): ChatShellProps {
         },
         github: {
           canOpen: view === "chat" && Boolean(activeSandboxId),
-          onPreload: preloadGithubPanel,
-          onToggle: () => {
-            preloadGithubPanel()
-            toggleToolPanel("github")
-          },
+          onToggle: () => toggleToolPanel("github"),
           open: githubOpen,
         },
         ssh: {
@@ -889,7 +884,7 @@ export function useChatController(): ChatShellProps {
           open: sshOpen,
         },
         terminal: {
-          canOpen: terminalCanOpen,
+          canOpen: view === "chat" && Boolean(activeSandboxId),
           onPreload: preloadTerminalPanel,
           onToggle: toggleTerminal,
           open: terminalVisible,

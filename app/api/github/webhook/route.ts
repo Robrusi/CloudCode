@@ -2,7 +2,10 @@ import { tasks } from "@trigger.dev/sdk"
 import { NextResponse } from "next/server"
 
 import {
+  commentMentionsCloudcode,
   isGitHubWebhookConfigured,
+  isTrustedMentionAuthor,
+  parseIssueCommentWebhookEvent,
   parsePullRequestWebhookEvent,
   verifyGitHubWebhookSignature,
 } from "@/lib/github/webhook"
@@ -10,6 +13,58 @@ import { jsonError } from "@/lib/http/api-route"
 import type { reviewDispatch } from "@/trigger/reviews"
 
 export const runtime = "nodejs"
+
+type ReviewDispatchPayload = Parameters<(typeof reviewDispatch)["trigger"]>[0]
+
+function dispatchPayloadForEvent(
+  event: string | null,
+  payload: unknown
+): ReviewDispatchPayload | null {
+  if (event === "pull_request") {
+    const parsed = parsePullRequestWebhookEvent(payload)
+    if (!parsed) return null
+
+    // "opened" and "synchronize" skip drafts; drafts get their review from
+    // "ready_for_review". Which configs react to ready_for_review and
+    // synchronize is enforced in the dispatch task, which has config data.
+    const shouldDispatch =
+      ((parsed.action === "opened" || parsed.action === "synchronize") &&
+        !parsed.pr.draft) ||
+      parsed.action === "ready_for_review"
+    if (!shouldDispatch) return null
+
+    return {
+      action: parsed.action,
+      pr: parsed.pr,
+      repoUrl: parsed.repoUrl,
+    }
+  }
+
+  if (event === "issue_comment") {
+    const parsed = parseIssueCommentWebhookEvent(payload)
+    if (
+      !parsed ||
+      parsed.action !== "created" ||
+      !commentMentionsCloudcode(parsed) ||
+      !isTrustedMentionAuthor(parsed)
+    ) {
+      return null
+    }
+
+    return {
+      action: "mention",
+      comment: {
+        authorLogin: parsed.authorLogin,
+        body: parsed.body,
+        id: parsed.commentId,
+      },
+      prNumber: parsed.prNumber,
+      repoUrl: parsed.repoUrl,
+    }
+  }
+
+  return null
+}
 
 // GitHub is the caller, so there is no session and no same-origin check: the
 // HMAC signature over the raw body is the authentication. GitHub times out
@@ -31,9 +86,6 @@ export async function POST(request: Request) {
 
   const event = request.headers.get("x-github-event")
   if (event === "ping") return NextResponse.json({ ok: true })
-  if (event !== "pull_request") {
-    return NextResponse.json({ ignored: true })
-  }
 
   let payload: unknown
   try {
@@ -42,29 +94,17 @@ export async function POST(request: Request) {
     return jsonError("Invalid JSON payload.", 400)
   }
 
-  const parsed = parsePullRequestWebhookEvent(payload)
-  if (!parsed) return NextResponse.json({ ignored: true })
-
-  // "opened" skips drafts; drafts get their review from "ready_for_review",
-  // which each config opts into (enforced in the dispatch task, which has
-  // the config data).
-  const shouldDispatch =
-    (parsed.action === "opened" && !parsed.pr.draft) ||
-    parsed.action === "ready_for_review"
-  if (!shouldDispatch) return NextResponse.json({ ignored: true })
+  const dispatchPayload = dispatchPayloadForEvent(event, payload)
+  if (!dispatchPayload) return NextResponse.json({ ignored: true })
 
   const deliveryId = request.headers.get("x-github-delivery")
   try {
     await tasks.trigger<typeof reviewDispatch>(
       "review-dispatch",
-      {
-        action: parsed.action,
-        pr: parsed.pr,
-        repoUrl: parsed.repoUrl,
-      },
+      dispatchPayload,
       {
         ...(deliveryId ? { idempotencyKey: `ghd:${deliveryId}` } : {}),
-        tags: [`repo:${parsed.repoFullName}`],
+        tags: [`repo:${dispatchPayload.repoUrl}`],
       }
     )
   } catch (error) {

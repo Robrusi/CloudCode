@@ -185,6 +185,17 @@ export function ReviewComposer({
                 ]}
               />
             </DetailRow>
+            <DetailRow label="New commits">
+              <OptionChip
+                ariaLabel="Whether new commits trigger a re-review"
+                value={draft.reviewOnPush ? "rereview" : "ignore"}
+                onChange={(value) => set("reviewOnPush", value === "rereview")}
+                options={[
+                  { label: "Ignore", value: "ignore" },
+                  { label: "Re-review", value: "rereview" },
+                ]}
+              />
+            </DetailRow>
             <DetailRow label="Autofix">
               <OptionChip
                 ariaLabel="Whether findings get fixed automatically"

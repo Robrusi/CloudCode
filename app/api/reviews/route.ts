@@ -29,6 +29,7 @@ export async function POST(request: Request) {
       prompt: config.prompt,
       reasoningEffort: config.reasoningEffort,
       repoUrl: config.repoUrl,
+      reviewOnPush: config.reviewOnPush,
       reviewReadyForReview: config.reviewReadyForReview,
       sandboxPresetId: config.sandboxPresetId as
         | Id<"sandboxPresets">
