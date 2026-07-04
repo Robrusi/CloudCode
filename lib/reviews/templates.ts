@@ -1,5 +1,8 @@
 import type { Model, Speed, Thinking } from "@/lib/chat/options"
-import { DEFAULT_REVIEW_PROMPT } from "@/lib/reviews/prompt"
+import {
+  DEFAULT_REVIEW_AUTOFIX_PROMPT,
+  DEFAULT_REVIEW_PROMPT,
+} from "@/lib/reviews/prompt"
 
 /** Config presets a template applies to the composer draft alongside its
  * prompt — e.g. "Review & fix" switches autofix on, audits raise thinking. */
@@ -7,6 +10,7 @@ export type ReviewTemplateConfig = {
   autofix?: boolean
   model?: Model
   reasoningEffort?: Thinking
+  reviewOnPush?: boolean
   reviewReadyForReview?: boolean
   speed?: Speed
 }
@@ -58,9 +62,7 @@ Optional defense-in-depth improvements adjacent to the change (better defaults, 
 End the report with exactly these two final lines:
 Confidence to merge: X/5
 Reason: <one or two sentences naming what drives the score — the specific vulnerabilities holding it down, or the checks and evidence supporting it>
-(1 = do not merge, 5 = safe to merge. Never give the score without the Reason line.)
-
-Do not commit, push, modify files, or create pull requests. Your final message is posted verbatim as a comment on the pull request.`
+(1 = do not merge, 5 = safe to merge. Never give the score without the Reason line.)`
 
 const TEST_GAPS_PROMPT = `You are reviewing the test coverage of a pull request. The PR head is already checked out on the current branch; the base branch is available as origin/<base> (see the pull request context below). Inspect the change with \`git diff origin/<base>...HEAD\`, find the project's existing test setup, and run the tests that cover the changed code to see what actually executes.
 
@@ -84,28 +86,26 @@ Concrete test cases for each gap, matched by number — name the file they belon
 End the report with exactly these two final lines:
 Confidence to merge: X/5
 Reason: <one or two sentences naming what drives the score — the riskiest untested behavior holding it down, or the coverage evidence supporting it>
-(1 = do not merge, 5 = safe to merge. Never give the score without the Reason line.)
-
-Do not commit, push, modify files, or create pull requests. Your final message is posted verbatim as a comment on the pull request.`
+(1 = do not merge, 5 = safe to merge. Never give the score without the Reason line.)`
 
 export const REVIEW_TEMPLATES: ReviewTemplate[] = [
   {
-    config: {},
+    config: { reviewOnPush: true },
     description: "Findings, flags, security scan, and a confidence score.",
     id: "review",
     name: "Review only",
     prompt: DEFAULT_REVIEW_PROMPT,
   },
   {
-    config: { autofix: true },
+    config: { autofix: true, reviewOnPush: true },
     description:
       "Standard review with autofix on: clear bugs get fixed, committed, and pushed to the PR branch.",
     id: "review-fix",
     name: "Review & fix",
-    prompt: DEFAULT_REVIEW_PROMPT,
+    prompt: DEFAULT_REVIEW_AUTOFIX_PROMPT,
   },
   {
-    config: { reasoningEffort: "high" },
+    config: { reasoningEffort: "high", reviewOnPush: true },
     description:
       "Deep vulnerability audit with attack scenarios; high thinking effort.",
     id: "security-audit",
@@ -113,7 +113,7 @@ export const REVIEW_TEMPLATES: ReviewTemplate[] = [
     prompt: SECURITY_AUDIT_PROMPT,
   },
   {
-    config: { autofix: true, reasoningEffort: "high" },
+    config: { autofix: true, reasoningEffort: "high", reviewOnPush: true },
     description:
       "Security audit with autofix on: clear vulnerabilities get patched and pushed.",
     id: "security-fix",
@@ -121,7 +121,7 @@ export const REVIEW_TEMPLATES: ReviewTemplate[] = [
     prompt: SECURITY_AUDIT_PROMPT,
   },
   {
-    config: {},
+    config: { reviewOnPush: true },
     description: "Find untested behavior and propose concrete tests.",
     id: "test-gaps",
     name: "Test gaps",

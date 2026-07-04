@@ -3,6 +3,7 @@ import { NextResponse } from "next/server"
 
 import {
   commentMentionsCloudcode,
+  isCloudcodeSelfPush,
   isGitHubWebhookConfigured,
   isTrustedMentionAuthor,
   parseIssueCommentWebhookEvent,
@@ -32,6 +33,12 @@ function dispatchPayloadForEvent(
         !parsed.pr.draft) ||
       parsed.action === "ready_for_review"
     if (!shouldDispatch) return null
+
+    // Our own autofix push fires a synchronize; re-reviewing it would loop
+    // (fix → push → synchronize → fix …), so drop the app's self-pushes.
+    if (parsed.action === "synchronize" && isCloudcodeSelfPush(parsed)) {
+      return null
+    }
 
     return {
       action: parsed.action,

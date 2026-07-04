@@ -13,7 +13,7 @@ export type ReviewPullRequestContext = {
 
 export const PR_BODY_CONTEXT_MAX_LENGTH = 4000
 
-export const DEFAULT_REVIEW_PROMPT = `You are reviewing a pull request. The PR head is already checked out on the current branch; the base branch is available as origin/<base> (see the pull request context below). Inspect the change with \`git diff origin/<base>...HEAD\` and read the surrounding code as needed to judge correctness.
+const DEFAULT_REVIEW_PROMPT_BODY = `You are reviewing a pull request. The PR head is already checked out on the current branch; the base branch is available as origin/<base> (see the pull request context below). Inspect the change with \`git diff origin/<base>...HEAD\` and read the surrounding code as needed to judge correctness.
 
 Produce one Markdown report with exactly these sections:
 
@@ -46,28 +46,48 @@ Scan the change for vulnerabilities in these categories:
 Number each finding, give it a file:line reference, and label it with one severity:
 - **Critical** — high-confidence vulnerabilities that should be fixed before merging.
 - **Warning** — potential security weaknesses worth investigating.
-Write "No security findings." if there are none.
+Write "No security findings." if there are none.`
 
-## Proposed fixes
-Concrete suggestions or small diffs for each bug and security finding, matched by section and number.
-
-End the report with exactly these two final lines:
+const DEFAULT_REVIEW_PROMPT_CLOSE = `End the report with exactly these two final lines:
 Confidence to merge: X/5
 Reason: <one or two sentences naming what drives the score — the specific findings holding it down, or the checks and evidence supporting it>
-(1 = do not merge, 5 = safe to merge. Never give the score without the Reason line.)
+(1 = do not merge, 5 = safe to merge. Never give the score without the Reason line.)`
 
-Do not commit, push, modify files, or create pull requests. Your final message is posted verbatim as a comment on the pull request.`
+export const DEFAULT_REVIEW_PROMPT = `${DEFAULT_REVIEW_PROMPT_BODY}
 
-/** Appended when the config has autofix on; deliberately overrides the
- * report-only rule the default template (or a custom prompt) may carry. */
-export const REVIEW_AUTOFIX_INSTRUCTIONS = `Autofix is enabled for this review. This overrides any earlier instruction not to modify files, commit, or push:
+## Proposed fixes
+For each bug and security finding, provide a structured fix prompt matched by section and number. Each prompt must include:
+- Objective: the behavior to change.
+- Files: the files or areas likely involved.
+- Changes: the concrete implementation steps to take.
+- Constraints: edge cases, compatibility concerns, and what not to change.
+- Verification: the narrowest useful checks to prove the fix.
 
-1. After identifying your findings, fix the clear-cut bugs and security vulnerabilities directly in the code. Keep each fix minimal and in the spirit of the PR; leave judgment calls and larger rework as findings.
+Also include a structured promt to fix all the findings in one promt
+
+${DEFAULT_REVIEW_PROMPT_CLOSE}`
+
+export const DEFAULT_REVIEW_AUTOFIX_PROMPT = `${DEFAULT_REVIEW_PROMPT_BODY}
+
+${DEFAULT_REVIEW_PROMPT_CLOSE}`
+
+/** The closing rule appended to every report-only run (autofix off). Kept out
+ * of the prompt templates themselves so an autofix run never contains a
+ * contradictory "do not push" line — see buildReviewPrompt. */
+export const REVIEW_REPORT_ONLY_INSTRUCTIONS = `Do not commit, push, modify files, or create pull requests. Your final message is posted verbatim as a comment on the pull request.`
+
+/** The closing rule appended instead of the report-only one when autofix is
+ * on. The built-in templates carry no "do not push" line, but a custom prompt
+ * still might, so this opens by explicitly overriding any such earlier
+ * instruction. */
+export const REVIEW_AUTOFIX_INSTRUCTIONS = `Autofix is enabled for this review; this overrides any earlier instruction not to modify files, commit, or push. After reporting your findings, fix what you safely can and push it to the PR branch:
+
+1. Fix the clear-cut bugs and security vulnerabilities directly in the code. Keep each fix minimal and in the spirit of the PR; leave judgment calls and larger rework as findings.
 2. Verify your fixes with the narrowest useful check available (tests, typecheck, lint).
 3. Commit each fix with a clear message, then push the commits to the PR branch with \`git push origin HEAD:<head branch>\` (the head branch name is in the pull request context). If the PR comes from a fork, do not push — include each fix as a diff in the report instead.
 4. Add a "## Fixed" section to your report listing each fix with file:line references and its commit (or diff). Score the confidence to merge for the PR as it stands after your fixes, and make the Reason line reflect both what you fixed and what remains open.
 
-Still do not create pull requests.`
+Do not create pull requests. Your final message is posted verbatim as a comment on the pull request.`
 
 function truncate(value: string, maxLength: number) {
   return value.length > maxLength ? `${value.slice(0, maxLength)}…` : value
@@ -171,10 +191,17 @@ export function buildReviewPrompt(
   pr: ReviewPullRequestContext,
   options?: { autofix?: boolean }
 ): string {
-  let prompt = customPrompt?.trim() || DEFAULT_REVIEW_PROMPT
-  if (options?.autofix) {
-    prompt = `${prompt}\n\n---\n\n${REVIEW_AUTOFIX_INSTRUCTIONS}`
-  }
+  // The closing push rule is appended here rather than baked into the prompt
+  // templates so the two never contradict: an autofix run gets only the
+  // autofix closer, a report-only run (default or custom) gets only the
+  // report-only one.
+  const closer = options?.autofix
+    ? REVIEW_AUTOFIX_INSTRUCTIONS
+    : REVIEW_REPORT_ONLY_INSTRUCTIONS
+  const basePrompt =
+    customPrompt?.trim() ||
+    (options?.autofix ? DEFAULT_REVIEW_AUTOFIX_PROMPT : DEFAULT_REVIEW_PROMPT)
+  const prompt = `${basePrompt}\n\n---\n\n${closer}`
 
   const lines = [
     `Repository: ${repoUrl}`,

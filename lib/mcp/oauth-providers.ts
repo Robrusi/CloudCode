@@ -5,6 +5,7 @@ export type McpOauthProviderId =
   | "atlassian"
   | "attio"
   | "cloudflare"
+  | "datadog"
   | "gmail"
   | "granola"
   | "hubspot"
@@ -96,6 +97,14 @@ export const MCP_OAUTH_PROVIDERS: McpOauthProvider[] = [
     tagline: "Workers & storage",
     name: "Cloudflare",
     url: "https://bindings.mcp.cloudflare.com/mcp",
+  },
+  {
+    description:
+      "Query Datadog logs, metrics, traces, dashboards, and monitors.",
+    id: "datadog",
+    tagline: "Core observability",
+    name: "Datadog",
+    url: "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp",
   },
   {
     description: "Search Gmail threads and create drafts from your mailbox.",

@@ -1,6 +1,9 @@
 import type { Doc } from "@/convex/_generated/dataModel"
 import type { Model, Speed, Thinking } from "@/lib/chat/options"
-import { DEFAULT_REVIEW_PROMPT } from "@/lib/reviews/prompt"
+import {
+  DEFAULT_REVIEW_AUTOFIX_PROMPT,
+  DEFAULT_REVIEW_PROMPT,
+} from "@/lib/reviews/prompt"
 
 export type ReviewRecord = Doc<"reviews">
 
@@ -57,7 +60,9 @@ export function reviewDraftFromRecord(review: ReviewRecord): ReviewDraft {
     autofix: review.autofix ?? false,
     model: review.model,
     name: review.name,
-    prompt: review.prompt ?? DEFAULT_REVIEW_PROMPT,
+    prompt:
+      review.prompt ??
+      (review.autofix ? DEFAULT_REVIEW_AUTOFIX_PROMPT : DEFAULT_REVIEW_PROMPT),
     reasoningEffort: review.reasoningEffort,
     repoUrl: review.repoUrl,
     reviewOnPush: review.reviewOnPush ?? false,
@@ -67,9 +72,32 @@ export function reviewDraftFromRecord(review: ReviewRecord): ReviewDraft {
   }
 }
 
+function isBuiltInReviewPrompt(prompt: string) {
+  return (
+    prompt === DEFAULT_REVIEW_PROMPT || prompt === DEFAULT_REVIEW_AUTOFIX_PROMPT
+  )
+}
+
+function defaultReviewPromptForAutofix(autofix: boolean) {
+  return autofix ? DEFAULT_REVIEW_AUTOFIX_PROMPT : DEFAULT_REVIEW_PROMPT
+}
+
+export function reviewDraftWithAutofix(
+  draft: ReviewDraft,
+  autofix: boolean
+): ReviewDraft {
+  return {
+    ...draft,
+    autofix,
+    prompt: isBuiltInReviewPrompt(draft.prompt)
+      ? defaultReviewPromptForAutofix(autofix)
+      : draft.prompt,
+  }
+}
+
 export function reviewRequestBody(draft: ReviewDraft) {
-  // An unedited (or cleared) prompt is stored as unset so the config keeps
-  // tracking the built-in template when it improves.
+  // An unedited (or cleared) prompt is stored as unset so runtime can choose
+  // the current report-only/autofix built-in template for the config.
   const prompt = draft.prompt.trim()
   return {
     authorFilterMode: draft.authorFilterMode || undefined,
@@ -78,7 +106,7 @@ export function reviewRequestBody(draft: ReviewDraft) {
     autofix: draft.autofix,
     model: draft.model,
     name: draft.name,
-    prompt: prompt !== DEFAULT_REVIEW_PROMPT ? prompt || undefined : undefined,
+    prompt: isBuiltInReviewPrompt(prompt) ? undefined : prompt || undefined,
     reasoningEffort: draft.reasoningEffort,
     repoUrl: draft.repoUrl,
     reviewOnPush: draft.reviewOnPush,

@@ -18,6 +18,7 @@ import { useState } from "react"
 import {
   McpIntegrationsGrid,
   mcpProviderIcon,
+  mcpServerPresetIcon,
 } from "@/components/settings/mcp-connections"
 import { McpServerForm } from "@/components/settings/mcp-form"
 import { mcpServerSubtitle } from "@/components/settings/mcp-model"
@@ -139,7 +140,11 @@ export function McpSettings({
         </div>
       ) : null}
 
-      <McpIntegrationsGrid />
+      <McpIntegrationsGrid
+        loading={loading}
+        onReload={onReload}
+        servers={servers}
+      />
 
       <div className="space-y-2">
         {loading ? (
@@ -178,6 +183,7 @@ export function McpSettings({
               const active = selected?.id === server.id
               const RowIcon =
                 mcpProviderIcon(server.oauthProvider) ??
+                mcpServerPresetIcon(server.serverName) ??
                 (server.transport === "http" ? Globe : Terminal)
               const subtitle = mcpServerSubtitle(server)
               return (

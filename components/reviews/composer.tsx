@@ -15,6 +15,7 @@ import { AuthorFilterChip } from "@/components/reviews/author-filter-chip"
 import {
   emptyReviewDraft,
   reviewDraftFromRecord,
+  reviewDraftWithAutofix,
   reviewRequestBody,
   type ReviewDraft,
   type ReviewRecord,
@@ -200,7 +201,11 @@ export function ReviewComposer({
               <OptionChip
                 ariaLabel="Whether findings get fixed automatically"
                 value={draft.autofix ? "on" : "off"}
-                onChange={(value) => set("autofix", value === "on")}
+                onChange={(value) =>
+                  setDraft((current) =>
+                    reviewDraftWithAutofix(current, value === "on")
+                  )
+                }
                 options={[
                   { label: "Report only", value: "off" },
                   { label: "Fix and push", value: "on" },

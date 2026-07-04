@@ -34,6 +34,9 @@ export type PullRequestWebhookEvent = {
   pr: ReviewPullRequestContext & { draft: boolean }
   repoFullName: string
   repoUrl: string
+  // The account that triggered the event. For a `synchronize` this is the
+  // pusher, so it is how we recognize (and skip) the app's own autofix pushes.
+  senderLogin?: string
 }
 
 type PullRequestWebhookPayload = {
@@ -53,6 +56,28 @@ type PullRequestWebhookPayload = {
     user?: { login?: unknown } | null
   } | null
   repository?: { full_name?: unknown } | null
+  sender?: { login?: unknown } | null
+}
+
+/** The GitHub App's own bot login (`<slug>[bot]`), or undefined when the slug
+ * is not configured. Autofix commits are pushed with an installation token and
+ * attributed to this account. */
+export function cloudcodeBotLogin() {
+  const slug = process.env.GITHUB_APP_SLUG?.trim()
+  return slug ? `${slug}[bot]` : undefined
+}
+
+/** Whether a pull_request event was triggered by the app itself. A
+ * `synchronize` from our own autofix push must not re-review — that would loop
+ * (fix → push → synchronize → fix …). Requires GITHUB_APP_SLUG; without it the
+ * guard is a no-op. */
+export function isCloudcodeSelfPush(event: PullRequestWebhookEvent) {
+  const bot = cloudcodeBotLogin()
+  return Boolean(
+    bot &&
+    event.senderLogin &&
+    event.senderLogin.toLowerCase() === bot.toLowerCase()
+  )
 }
 
 function requiredString(value: unknown) {
@@ -160,6 +185,7 @@ export function parsePullRequestWebhookEvent(
     action,
     pull_request: pr,
     repository,
+    sender,
   } = payload as PullRequestWebhookPayload
 
   const parsedAction = requiredString(action)
@@ -208,5 +234,6 @@ export function parsePullRequestWebhookEvent(
     },
     repoFullName,
     repoUrl,
+    senderLogin: requiredString(sender?.login),
   }
 }
