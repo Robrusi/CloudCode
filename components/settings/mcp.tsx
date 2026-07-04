@@ -18,17 +18,12 @@ import { useState } from "react"
 import {
   McpIntegrationsGrid,
   mcpProviderIcon,
-  mcpServerPresetIcon,
 } from "@/components/settings/mcp-connections"
 import { McpServerForm } from "@/components/settings/mcp-form"
 import { mcpServerSubtitle } from "@/components/settings/mcp-model"
-import {
-  fieldHint,
-  iconBtn,
-  metaPill,
-  navAction,
-  SettingsPage,
-} from "@/components/settings/shared"
+import { fieldHint, metaPill, SettingsPage } from "@/components/settings/shared"
+import { Button } from "@/components/ui/button"
+import { IconButton } from "@/components/ui/icon-button"
 import { Switch } from "@/components/ui/switch"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -102,10 +97,10 @@ export function McpSettings({
       title="MCP Connections"
       description="Connect integrations in one click, or give Codex extra tools over STDIO or streamable HTTP."
       action={
-        <button type="button" onClick={openCreate} className={navAction}>
-          <Plus className="size-3.5" />
+        <Button size="sm" onClick={openCreate} className="gap-1.5">
+          <Plus className="size-4" />
           Custom MCP
-        </button>
+        </Button>
       }
     >
       {creatingCustom ? (
@@ -119,14 +114,13 @@ export function McpSettings({
                 Run over STDIO or streamable HTTP
               </div>
             </div>
-            <button
-              type="button"
+            <IconButton
+              size="sm"
               onClick={() => setCreatingCustom(false)}
               aria-label="Close custom MCP editor"
-              className={iconBtn}
             >
               <X className="size-3.5" />
-            </button>
+            </IconButton>
           </div>
 
           <McpServerForm
@@ -140,11 +134,7 @@ export function McpSettings({
         </div>
       ) : null}
 
-      <McpIntegrationsGrid
-        loading={loading}
-        onReload={onReload}
-        servers={servers}
-      />
+      <McpIntegrationsGrid />
 
       <div className="space-y-2">
         {loading ? (
@@ -165,14 +155,15 @@ export function McpSettings({
                 {loadError}
               </div>
             </div>
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => void onReload()}
-              className={navAction}
+              className="gap-1.5"
             >
               <RefreshCw className="size-3.5" />
               Retry
-            </button>
+            </Button>
           </div>
         ) : servers.length ? (
           <>
@@ -183,7 +174,6 @@ export function McpSettings({
               const active = selected?.id === server.id
               const RowIcon =
                 mcpProviderIcon(server.oauthProvider) ??
-                mcpServerPresetIcon(server.serverName) ??
                 (server.transport === "http" ? Globe : Terminal)
               const subtitle = mcpServerSubtitle(server)
               return (
@@ -322,10 +312,10 @@ export function McpSettings({
                 server over STDIO or HTTP.
               </p>
             </div>
-            <button type="button" onClick={openCreate} className={navAction}>
-              <Plus className="size-3.5" />
+            <Button size="sm" onClick={openCreate} className="gap-1.5">
+              <Plus className="size-4" />
               Custom MCP
-            </button>
+            </Button>
           </div>
         )}
       </div>

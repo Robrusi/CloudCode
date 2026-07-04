@@ -4,7 +4,7 @@ import type { ReactNode } from "react"
 import { ChevronRight, Layers3, Plus } from "lucide-react"
 
 import { sandboxPresetSubtitle } from "@/components/settings/presets-model"
-import { navAction } from "@/components/settings/shared"
+import { Button } from "@/components/ui/button"
 import type { SandboxPresetRecord } from "@/lib/sandbox/preset-types"
 import { cn } from "@/lib/shared/utils"
 
@@ -60,10 +60,10 @@ function PresetEmptyState({
           Create one to set up tools, install scripts, and secrets.
         </p>
       </div>
-      <button type="button" onClick={onStartNewPreset} className={navAction}>
-        <Plus className="size-3.5" />
+      <Button size="sm" onClick={onStartNewPreset} className="gap-1.5">
+        <Plus className="size-4" />
         New preset
-      </button>
+      </Button>
     </div>
   )
 }

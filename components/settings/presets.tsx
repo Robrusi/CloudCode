@@ -5,7 +5,9 @@ import { Plus, X } from "lucide-react"
 import { usePresetSettingsController } from "@/components/settings/presets-controller"
 import { PresetEditorFields } from "@/components/settings/presets-form"
 import { PresetList } from "@/components/settings/presets-list"
-import { iconBtn, navAction, SettingsPage } from "@/components/settings/shared"
+import { SettingsPage } from "@/components/settings/shared"
+import { Button } from "@/components/ui/button"
+import { IconButton } from "@/components/ui/icon-button"
 import type { SandboxPresetRecord } from "@/lib/sandbox/preset-types"
 
 export function PresetSettings({
@@ -20,14 +22,14 @@ export function PresetSettings({
       title="Presets"
       description="Configure sandbox environments, install scripts, and secrets."
       action={
-        <button
-          type="button"
+        <Button
+          size="sm"
           onClick={controller.startNewPreset}
-          className={navAction}
+          className="gap-1.5"
         >
-          <Plus className="size-3.5" />
+          <Plus className="size-4" />
           New preset
-        </button>
+        </Button>
       }
     >
       {controller.creating ? (
@@ -41,14 +43,13 @@ export function PresetSettings({
                 Configure a sandbox preset
               </div>
             </div>
-            <button
-              type="button"
+            <IconButton
+              size="sm"
               onClick={controller.resetEditor}
               aria-label="Close editor"
-              className={iconBtn}
             >
               <X className="size-3.5" />
-            </button>
+            </IconButton>
           </div>
           <PresetEditorFields {...controller} />
         </div>

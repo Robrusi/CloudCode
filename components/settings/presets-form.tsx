@@ -9,11 +9,9 @@ import {
   fieldHint,
   fieldLabel,
   inputClass,
-  navAction,
-  navDestructive,
-  navPrimary,
   textareaClass,
 } from "@/components/settings/shared"
+import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/shared/utils"
 
@@ -270,14 +268,16 @@ function PresetEditorActions({
   if (selectedIsDefault) {
     return (
       <div className="mt-4 flex items-center justify-end gap-2 border-t border-border/60 pt-4">
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           onClick={resetEditor}
           disabled={saving}
-          className={navAction}
+          className="text-muted-foreground"
         >
           Close
-        </button>
+        </Button>
       </div>
     )
   }
@@ -285,35 +285,39 @@ function PresetEditorActions({
   return (
     <div className="mt-4 flex items-center justify-between gap-2 border-t border-border/60 pt-4">
       {!selectedIsAuto ? (
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           onClick={deletePreset}
           disabled={!selected || saving}
-          className={navDestructive}
+          className="gap-1.5 text-muted-foreground hover:text-destructive"
         >
           <Trash2 className="size-3.5" />
           Delete
-        </button>
+        </Button>
       ) : (
         <div />
       )}
       <div className="flex items-center gap-1">
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           onClick={resetEditor}
           disabled={saving}
-          className={navAction}
+          className="text-muted-foreground"
         >
           Cancel
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          size="sm"
           onClick={savePreset}
           disabled={saving || !name.trim()}
-          className={navPrimary}
         >
           {saving ? "Saving" : selected ? "Save preset" : "Create preset"}
-        </button>
+        </Button>
       </div>
     </div>
   )

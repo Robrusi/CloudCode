@@ -4,13 +4,12 @@ import { ClipboardPaste, KeyRound, Trash2 } from "lucide-react"
 
 import {
   fieldHint,
-  iconBtn,
   inputClass,
   metaPill,
-  navAction,
-  navPrimary,
   textareaClass,
 } from "@/components/settings/shared"
+import { Button } from "@/components/ui/button"
+import { IconButton } from "@/components/ui/icon-button"
 import { dotenvImportSummary } from "@/components/settings/presets-model"
 import type { Id } from "@/convex/_generated/dataModel"
 import type { DotenvParseResult, ParsedEnvVar } from "@/lib/env/dotenv-parse"
@@ -58,14 +57,16 @@ export function PresetSecretsSection({
         {selected?.secrets.length ? (
           <span className={metaPill}>{selected.secrets.length}</span>
         ) : null}
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           onClick={onToggleImportMode}
-          className={cn(navAction, "ml-auto h-7 px-2.5")}
+          className="ml-auto gap-1.5 text-muted-foreground"
         >
           <ClipboardPaste className="size-3.5" />
           {importMode ? "Add manually" : "Paste .env"}
-        </button>
+        </Button>
       </div>
 
       {selected?.secrets.length ? (
@@ -78,16 +79,16 @@ export function PresetSecretsSection({
               <span className="min-w-0 flex-1 truncate font-[family-name:var(--font-mono)] text-xs text-foreground/85">
                 {secret.name}
               </span>
-              <button
-                type="button"
+              <IconButton
+                size="sm"
                 onClick={() => onDeleteSecret(secret.id)}
                 disabled={saving}
                 aria-label={`Delete ${secret.name}`}
                 title={`Delete ${secret.name}`}
-                className={cn(iconBtn, "hover:text-destructive")}
+                className="hover:text-destructive"
               >
                 <Trash2 className="size-3.5" />
-              </button>
+              </IconButton>
             </div>
           ))}
         </div>
@@ -111,18 +112,18 @@ export function PresetSecretsSection({
             <span className={fieldHint}>
               {dotenvImportSummary({ importText, importVars, parsedImport })}
             </span>
-            <button
+            <Button
               type="button"
+              size="sm"
               onClick={onImportSecrets}
               disabled={saving || importVars.length === 0}
-              className={cn(navPrimary, "h-9 shrink-0 justify-center px-4")}
             >
               {saving
                 ? "Importing"
                 : importVars.length > 0
                   ? `Import ${importVars.length}`
                   : "Import"}
-            </button>
+            </Button>
           </div>
         </div>
       ) : (
@@ -146,14 +147,15 @@ export function PresetSecretsSection({
             type="password"
             className={cn(inputClass, "text-xs")}
           />
-          <button
+          <Button
             type="button"
+            size="sm"
             onClick={onSaveSecret}
             disabled={saving || !secretName || !secretValue}
-            className={cn(navPrimary, "h-9 justify-center px-4")}
+            className="self-center"
           >
             Add
-          </button>
+          </Button>
         </div>
       )}
     </div>

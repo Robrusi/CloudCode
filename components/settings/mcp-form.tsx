@@ -6,11 +6,7 @@ import { McpHttpFields } from "@/components/settings/mcp-http-fields"
 import { MCP_TRANSPORT_OPTIONS } from "@/components/settings/mcp-model"
 import { McpStdioFields } from "@/components/settings/mcp-stdio-fields"
 import { McpTextField } from "@/components/settings/mcp-text-field"
-import {
-  navAction,
-  navDestructive,
-  navPrimary,
-} from "@/components/settings/shared"
+import { Button } from "@/components/ui/button"
 import { SegmentedControl } from "@/components/ui/segmented-control"
 import type { Id } from "@/convex/_generated/dataModel"
 import { useMcpServerFormController } from "@/hooks/use-mcp-server-form-controller"
@@ -87,35 +83,39 @@ export function McpServerForm({
 
       <div className="flex items-center justify-between gap-2">
         {form.editing && onRemove ? (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             onClick={form.remove}
             disabled={form.saving || form.removing}
-            className={navDestructive}
+            className="gap-1.5 text-muted-foreground hover:text-destructive"
           >
             <Trash2 className="size-3.5" />
             {form.removing ? "Removing" : "Remove"}
-          </button>
+          </Button>
         ) : (
           <span />
         )}
         <div className="flex items-center gap-2">
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             onClick={onCancel}
             disabled={form.saving || form.removing}
-            className={navAction}
+            className="text-muted-foreground"
           >
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            size="sm"
             onClick={form.save}
             disabled={!form.canSave}
-            className={navPrimary}
           >
             {form.saving ? "Saving" : form.editing ? "Save changes" : "Save"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

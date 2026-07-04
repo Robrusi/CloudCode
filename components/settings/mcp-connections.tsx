@@ -6,7 +6,6 @@ import {
   Check,
   Copy,
   KeyRound,
-  Loader2,
   Plug,
   Plus,
   X,
@@ -14,48 +13,21 @@ import {
 import NextImage from "next/image"
 import { useEffect, useState, type ComponentType } from "react"
 
-import { fieldHint, iconBtn, navPrimary } from "@/components/settings/shared"
+import { fieldHint } from "@/components/settings/shared"
+import { Button } from "@/components/ui/button"
+import { IconButton } from "@/components/ui/icon-button"
 import { cardSurfaceClass, popoverSurfaceClass } from "@/components/ui/surface"
 import { api } from "@/convex/_generated/api"
-import type { Id } from "@/convex/_generated/dataModel"
-import { fetchJson, requestJson } from "@/lib/http/client-json"
+import { fetchJson } from "@/lib/http/client-json"
 import {
   MCP_OAUTH_PROVIDERS,
   type McpOauthProvider,
   type McpOauthProviderId,
 } from "@/lib/mcp/oauth-providers"
-import type { McpServerRecord } from "@/lib/mcp/server-types"
 import { cn } from "@/lib/shared/utils"
 
 type McpProviderIconProps = { className?: string }
-type McpPresetProviderId = "x"
-type McpProviderIconId = McpOauthProviderId | McpPresetProviderId
 type SvglRoute = string | { dark: string; light: string }
-
-export const X_API_MCP_SERVER_NAME = "xapi"
-export const X_DOCS_MCP_SERVER_NAME = "x-docs"
-
-const X_API_MCP_PRESET = {
-  args: ["-y", "@xdevplatform/xurl", "mcp", "https://api.x.com/mcp"],
-  consoleUrl: "https://developer.x.com",
-  description:
-    "Call X API tools for posts, users, bookmarks, trends, news, and Articles.",
-  id: "x" as const,
-  name: "X API",
-  redirectUrl: "http://localhost:8080/callback",
-  serverName: X_API_MCP_SERVER_NAME,
-  setupHint:
-    "Create or open an app, enable OAuth 2.0, add the redirect URL below, and copy the OAuth client ID and secret from the app settings.",
-  tagline: "Posts & users",
-}
-
-const X_DOCS_MCP_PRESET = {
-  description: "Search and read X API documentation pages.",
-  name: "X Docs",
-  serverName: X_DOCS_MCP_SERVER_NAME,
-  tagline: "API docs",
-  url: "https://docs.x.com/mcp",
-}
 
 const MCP_PROVIDER_ICON_ROUTES = {
   airtable: "/icons/mcp/airtable.svg",
@@ -83,8 +55,11 @@ const MCP_PROVIDER_ICON_ROUTES = {
     dark: "https://svgl.app/library/vercel_dark.svg",
     light: "https://svgl.app/library/vercel.svg",
   },
-  x: "https://svgl.app/library/x.svg",
-} satisfies Partial<Record<McpProviderIconId, SvglRoute>>
+  x: {
+    dark: "https://svgl.app/library/x_dark.svg",
+    light: "https://svgl.app/library/x.svg",
+  },
+} satisfies Partial<Record<McpOauthProviderId, SvglRoute>>
 
 function createSvglIcon(route: SvglRoute): ComponentType<McpProviderIconProps> {
   function SvglIcon({ className }: McpProviderIconProps) {
@@ -132,7 +107,7 @@ function createSvglIcon(route: SvglRoute): ComponentType<McpProviderIconProps> {
 }
 
 export const MCP_PROVIDER_ICONS: Partial<
-  Record<McpProviderIconId, ComponentType<McpProviderIconProps>>
+  Record<McpOauthProviderId, ComponentType<McpProviderIconProps>>
 > = Object.fromEntries(
   Object.entries(MCP_PROVIDER_ICON_ROUTES).map(([provider, route]) => [
     provider,
@@ -142,14 +117,7 @@ export const MCP_PROVIDER_ICONS: Partial<
 
 export function mcpProviderIcon(provider: string | undefined) {
   return provider && provider in MCP_PROVIDER_ICONS
-    ? MCP_PROVIDER_ICONS[provider as McpProviderIconId]
-    : undefined
-}
-
-export function mcpServerPresetIcon(serverName: string | undefined) {
-  return serverName === X_API_MCP_SERVER_NAME ||
-    serverName === X_DOCS_MCP_SERVER_NAME
-    ? mcpProviderIcon("x")
+    ? MCP_PROVIDER_ICONS[provider as McpOauthProviderId]
     : undefined
 }
 
@@ -161,11 +129,10 @@ function CopyField({ label, value }: { label: string; value: string }) {
       <code className="min-w-0 flex-1 truncate font-[family-name:var(--font-mono)] text-xs text-foreground/80">
         {value}
       </code>
-      <button
-        type="button"
+      <IconButton
+        size="sm"
         aria-label={copied ? `${label} copied` : `Copy ${label}`}
         title={copied ? "Copied" : "Copy"}
-        className={iconBtn}
         onClick={() => {
           void navigator.clipboard.writeText(value).then(() => {
             setCopied(true)
@@ -178,7 +145,7 @@ function CopyField({ label, value }: { label: string; value: string }) {
         ) : (
           <Copy className="size-3.5" />
         )}
-      </button>
+      </IconButton>
     </div>
   )
 }
@@ -276,14 +243,13 @@ function McpProviderSetupDialog({
               credentials, and you are done — no configuration files.
             </p>
           </div>
-          <button
-            type="button"
+          <IconButton
+            size="sm"
             onClick={onClose}
             aria-label="Close setup dialog"
-            className={iconBtn}
           >
             <X className="size-3.5" />
-          </button>
+          </IconButton>
         </div>
 
         <ol className="mt-5 space-y-4">
@@ -335,209 +301,12 @@ function McpProviderSetupDialog({
         </ol>
 
         <div className="mt-5 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg border border-border px-3 py-2 text-sm text-foreground/80 transition-colors hover:bg-muted"
-          >
+          <Button type="button" variant="outline" onClick={onClose}>
             Close
-          </button>
-          <button
-            type="submit"
-            disabled={!ready}
-            className={cn(
-              navPrimary,
-              "disabled:pointer-events-none disabled:opacity-50"
-            )}
-          >
+          </Button>
+          <Button type="submit" disabled={!ready}>
             Connect {provider.name}
-          </button>
-        </div>
-      </form>
-    </dialog>
-  )
-}
-
-function XApiMcpSetupDialog({
-  existingServer,
-  onClose,
-  onSaved,
-}: {
-  existingServer?: McpServerRecord
-  onClose: () => void
-  onSaved: () => Promise<void>
-}) {
-  const Icon = mcpProviderIcon(X_API_MCP_PRESET.id) ?? Plug
-  const [clientId, setClientId] = useState("")
-  const [clientSecret, setClientSecret] = useState("")
-  const [error, setError] = useState("")
-  const [saving, setSaving] = useState(false)
-  const ready = Boolean(clientId.trim() && clientSecret.trim())
-
-  useEffect(() => {
-    function handleKeyDown(event: globalThis.KeyboardEvent) {
-      if (event.key === "Escape") onClose()
-    }
-
-    window.addEventListener("keydown", handleKeyDown)
-    return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [onClose])
-
-  async function savePreset(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!ready || saving) return
-
-    setError("")
-    setSaving(true)
-    try {
-      await requestJson<{ serverId?: Id<"mcpServers"> }>(
-        "/api/mcp/custom",
-        "POST",
-        {
-          args: X_API_MCP_PRESET.args,
-          command: "npx",
-          name: X_API_MCP_PRESET.serverName,
-          secrets: [
-            { name: "CLIENT_ID", value: clientId.trim() },
-            { name: "CLIENT_SECRET", value: clientSecret.trim() },
-          ],
-          serverId: existingServer?.id,
-          startupTimeoutSec: 300,
-          toolTimeoutSec: 60,
-          transport: "stdio",
-        },
-        { fallbackError: "Unable to save X MCP server." }
-      )
-      await onSaved()
-      onClose()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to save X MCP.")
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <dialog
-      open
-      className="fixed inset-0 z-50 m-0 flex h-dvh max-h-none w-screen max-w-none items-center justify-center border-0 bg-black/40 p-4 backdrop-blur-sm"
-      onCancel={(event) => {
-        event.preventDefault()
-        onClose()
-      }}
-      aria-modal="true"
-      aria-label="Set up X API"
-      tabIndex={-1}
-    >
-      <button
-        type="button"
-        aria-label="Close setup dialog"
-        tabIndex={-1}
-        className="absolute inset-0 cursor-default border-0 bg-transparent p-0"
-        onClick={onClose}
-      />
-      <form
-        onSubmit={savePreset}
-        className={cn(
-          "relative z-10 w-full max-w-md overflow-hidden p-5",
-          popoverSurfaceClass
-        )}
-      >
-        <div className="flex items-start gap-3">
-          <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-muted">
-            <Icon className="size-5" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="text-base font-medium text-foreground">
-              Set up X API
-            </div>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              X API runs through the official xurl MCP bridge. Create an X app,
-              paste its credentials, and Cloudcode will save the bridge as the
-              xapi STDIO MCP server.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close setup dialog"
-            className={iconBtn}
-          >
-            <X className="size-3.5" />
-          </button>
-        </div>
-
-        <ol className="mt-5 space-y-4">
-          <SetupStep step={1} title="Create an app in the X developer portal.">
-            <a
-              href={X_API_MCP_PRESET.consoleUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 text-xs font-medium text-foreground/80 underline underline-offset-2 transition-colors hover:text-foreground"
-            >
-              Open X developer portal
-              <ArrowUpRight className="size-3" />
-            </a>
-            <p className={fieldHint}>{X_API_MCP_PRESET.setupHint}</p>
-          </SetupStep>
-          <SetupStep step={2} title="Add this redirect URL to the app.">
-            <CopyField
-              label="redirect URL"
-              value={X_API_MCP_PRESET.redirectUrl}
-            />
-          </SetupStep>
-          <SetupStep step={3} title="Paste the app's credentials here.">
-            <input
-              aria-label="Client ID"
-              value={clientId}
-              onChange={(event) => setClientId(event.target.value)}
-              placeholder="Client ID"
-              autoComplete="off"
-              spellCheck={false}
-              className={setupInput}
-            />
-            <input
-              type="password"
-              aria-label="Client secret"
-              value={clientSecret}
-              onChange={(event) => setClientSecret(event.target.value)}
-              placeholder="Client secret"
-              autoComplete="off"
-              spellCheck={false}
-              className={setupInput}
-            />
-            <p className={fieldHint}>
-              Stored encrypted with your account as CLIENT_ID and CLIENT_SECRET
-              for the xurl bridge.
-            </p>
-          </SetupStep>
-        </ol>
-
-        {error ? (
-          <div className="mt-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-            {error}
-          </div>
-        ) : null}
-
-        <div className="mt-5 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg border border-border px-3 py-2 text-sm text-foreground/80 transition-colors hover:bg-muted"
-          >
-            Close
-          </button>
-          <button
-            type="submit"
-            disabled={!ready || saving}
-            className={cn(
-              navPrimary,
-              "disabled:pointer-events-none disabled:opacity-50"
-            )}
-          >
-            {saving ? <Loader2 className="size-3.5 animate-spin" /> : null}
-            {existingServer ? "Reconnect X API" : "Connect X API"}
-          </button>
+          </Button>
         </div>
       </form>
     </dialog>
@@ -550,62 +319,17 @@ function XApiMcpSetupDialog({
  * reconnect the account. Providers that need a pre-registered OAuth app and
  * are missing their credentials open a guided setup dialog instead.
  */
-export function McpIntegrationsGrid({
-  loading,
-  onReload,
-  servers,
-}: {
-  loading: boolean
-  onReload: () => Promise<void>
-  servers: McpServerRecord[]
-}) {
+export function McpIntegrationsGrid() {
   const connections = useQuery(api.mcpOauthConnections.list)
   const [setupRequired, setSetupRequired] = useState<Set<string> | null>(null)
   const [setupProvider, setSetupProvider] = useState<McpOauthProvider | null>(
     null
   )
-  const [presetError, setPresetError] = useState("")
-  const [savingPreset, setSavingPreset] = useState<string | null>(null)
-  const [xSetupOpen, setXSetupOpen] = useState(false)
   const connectedProviders = new Set(
     (connections ?? [])
       .filter((connection) => connection.connected)
       .map((connection) => connection.provider)
   )
-  const xServer = servers.find(
-    (server) => server.serverName === X_API_MCP_SERVER_NAME
-  )
-  const xDocsServer = servers.find(
-    (server) => server.serverName === X_DOCS_MCP_SERVER_NAME
-  )
-  const presetDisabled = loading || Boolean(savingPreset)
-
-  async function saveXDocsPreset() {
-    if (presetDisabled) return
-
-    setPresetError("")
-    setSavingPreset(X_DOCS_MCP_PRESET.serverName)
-    try {
-      await requestJson<{ serverId?: Id<"mcpServers"> }>(
-        "/api/mcp/custom",
-        "POST",
-        {
-          name: X_DOCS_MCP_PRESET.serverName,
-          serverId: xDocsServer?.id,
-          transport: "http",
-          url: X_DOCS_MCP_PRESET.url,
-        },
-        { fallbackError: "Unable to save X Docs MCP server." }
-      )
-      await onReload()
-    } catch (err) {
-      setPresetError(
-        err instanceof Error ? err.message : "Unable to save X Docs MCP."
-      )
-    } finally {
-      setSavingPreset(null)
-    }
-  }
 
   useEffect(() => {
     let cancelled = false
@@ -631,93 +355,6 @@ export function McpIntegrationsGrid({
         Integrations
       </div>
       <div className="grid grid-cols-2 gap-2.5">
-        {(() => {
-          const Icon = mcpProviderIcon(X_API_MCP_PRESET.id) ?? Plug
-          const connected = Boolean(xServer)
-          return (
-            <button
-              type="button"
-              disabled={presetDisabled}
-              onClick={() => setXSetupOpen(true)}
-              title={
-                connected
-                  ? "X API is connected. Click to reconnect."
-                  : X_API_MCP_PRESET.description
-              }
-              className={cn(
-                "group flex w-full items-center gap-3 p-3 text-left transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50",
-                cardSurfaceClass
-              )}
-            >
-              <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-muted text-foreground/70 transition-colors group-hover:bg-background group-hover:text-foreground/90">
-                <Icon className="size-5" />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium text-foreground/90">
-                  {X_API_MCP_PRESET.name}
-                </span>
-                <span
-                  className={cn(
-                    "block truncate text-xs leading-4",
-                    connected ? "text-success" : "text-muted-foreground"
-                  )}
-                >
-                  {connected ? "Connected" : X_API_MCP_PRESET.tagline}
-                </span>
-              </span>
-              {connected ? (
-                <Check className="size-4 shrink-0 text-success" />
-              ) : (
-                <Plus className="size-4 shrink-0 text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100" />
-              )}
-            </button>
-          )
-        })()}
-        {(() => {
-          const Icon = mcpProviderIcon(X_API_MCP_PRESET.id) ?? Plug
-          const connected = Boolean(xDocsServer)
-          const saving = savingPreset === X_DOCS_MCP_PRESET.serverName
-          return (
-            <button
-              type="button"
-              disabled={presetDisabled}
-              onClick={() => void saveXDocsPreset()}
-              title={
-                connected
-                  ? "X Docs is connected. Click to reconnect."
-                  : X_DOCS_MCP_PRESET.description
-              }
-              className={cn(
-                "group flex w-full items-center gap-3 p-3 text-left transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50",
-                cardSurfaceClass
-              )}
-            >
-              <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-muted text-foreground/70 transition-colors group-hover:bg-background group-hover:text-foreground/90">
-                <Icon className="size-5" />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium text-foreground/90">
-                  {X_DOCS_MCP_PRESET.name}
-                </span>
-                <span
-                  className={cn(
-                    "block truncate text-xs leading-4",
-                    connected ? "text-success" : "text-muted-foreground"
-                  )}
-                >
-                  {connected ? "Connected" : X_DOCS_MCP_PRESET.tagline}
-                </span>
-              </span>
-              {saving ? (
-                <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
-              ) : connected ? (
-                <Check className="size-4 shrink-0 text-success" />
-              ) : (
-                <Plus className="size-4 shrink-0 text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100" />
-              )}
-            </button>
-          )
-        })()}
         {MCP_OAUTH_PROVIDERS.map((provider) => {
           const Icon = mcpProviderIcon(provider.id) ?? Plug
           const connected = connectedProviders.has(provider.id)
@@ -788,23 +425,10 @@ export function McpIntegrationsGrid({
         })}
       </div>
 
-      {presetError ? (
-        <div className="mt-3 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-          {presetError}
-        </div>
-      ) : null}
-
       {setupProvider ? (
         <McpProviderSetupDialog
           provider={setupProvider}
           onClose={() => setSetupProvider(null)}
-        />
-      ) : null}
-      {xSetupOpen ? (
-        <XApiMcpSetupDialog
-          existingServer={xServer}
-          onClose={() => setXSetupOpen(false)}
-          onSaved={onReload}
         />
       ) : null}
     </div>

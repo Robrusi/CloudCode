@@ -18,6 +18,7 @@ export type McpOauthProviderId =
   | "stripe"
   | "supabase"
   | "vercel"
+  | "x"
 
 export type McpClientSecretAuthMethod =
   | "client_secret_basic"
@@ -28,6 +29,15 @@ export type McpOauthProvider = {
   description: string
   id: McpOauthProviderId
   name: string
+  // Set for providers whose MCP server does not publish OAuth discovery
+  // metadata (RFC 9728); the OAuth endpoints are pinned here instead of
+  // being discovered from the server.
+  staticAuthorizationServer?: {
+    authorizationEndpoint: string
+    revocationEndpoint?: string
+    scope?: string
+    tokenEndpoint: string
+  }
   // Set for providers whose authorization server does not support dynamic
   // client registration. The OAuth client must be registered manually with
   // the provider; its credentials are pasted in the setup dialog (stored
@@ -212,6 +222,28 @@ export const MCP_OAUTH_PROVIDERS: McpOauthProvider[] = [
     tagline: "Deployments & logs",
     name: "Vercel",
     url: "https://mcp.vercel.com",
+  },
+  {
+    description: "Search, read, and post on X (Twitter).",
+    id: "x",
+    tagline: "Posts & timelines",
+    name: "X",
+    // X's hosted MCP does not publish OAuth discovery metadata; it uses the
+    // regular X API OAuth 2.0 endpoints with a manually registered app.
+    staticAuthorizationServer: {
+      authorizationEndpoint: "https://x.com/i/oauth2/authorize",
+      revocationEndpoint: "https://api.x.com/2/oauth2/revoke",
+      scope: "tweet.read tweet.write users.read bookmark.read offline.access",
+      tokenEndpoint: "https://api.x.com/2/oauth2/token",
+    },
+    staticClientEnv: {
+      clientIdVar: "X_MCP_CLIENT_ID",
+      clientSecretVar: "X_MCP_CLIENT_SECRET",
+      consoleUrl: "https://developer.x.com/en/portal/dashboard",
+      setupHint:
+        "Create a project and app, open the app's 'User authentication settings' → 'Set up', pick OAuth 2.0 with app type 'Web App', add the redirect URL, then copy the OAuth 2.0 client ID and secret.",
+    },
+    url: "https://api.x.com/mcp",
   },
 ]
 

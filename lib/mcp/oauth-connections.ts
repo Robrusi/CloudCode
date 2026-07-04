@@ -120,7 +120,11 @@ export async function startMcpOauthConnection({
   redirectUri: string
   suppliedClient?: McpSuppliedOauthClient
 }) {
-  const metadata = await discoverMcpAuthorizationServer(provider.url)
+  // Providers without RFC 9728 discovery metadata pin their OAuth endpoints
+  // in the provider config; everything else is discovered from the server.
+  const metadata = provider.staticAuthorizationServer
+    ? { ...provider.staticAuthorizationServer, registrationEndpoint: undefined }
+    : await discoverMcpAuthorizationServer(provider.url)
   const registered = await resolveOauthClient(
     provider,
     metadata.registrationEndpoint,

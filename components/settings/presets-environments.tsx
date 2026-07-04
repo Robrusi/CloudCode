@@ -2,11 +2,11 @@
 
 import { Trash2 } from "lucide-react"
 
-import { iconBtn, metaPill } from "@/components/settings/shared"
+import { metaPill } from "@/components/settings/shared"
 import { presetRepoLabel } from "@/components/settings/presets-model"
+import { IconButton } from "@/components/ui/icon-button"
 import type { Id } from "@/convex/_generated/dataModel"
 import type { SandboxPresetEnvironmentRecord } from "@/lib/sandbox/preset-types"
-import { cn } from "@/lib/shared/utils"
 
 export function PresetEnvironmentList({
   environments,
@@ -30,16 +30,16 @@ export function PresetEnvironmentList({
             {presetRepoLabel(environment.repoUrl)}
           </span>
           <span className={metaPill}>{environment.status}</span>
-          <button
-            type="button"
+          <IconButton
+            size="sm"
             onClick={() => onDelete(environment.id)}
             disabled={saving}
             aria-label={`Delete cloudcode.yaml for ${environment.repoUrl}`}
             title="Delete saved cloudcode.yaml"
-            className={cn(iconBtn, "hover:text-destructive")}
+            className="hover:text-destructive"
           >
             <Trash2 className="size-3.5" />
-          </button>
+          </IconButton>
         </div>
       ))}
     </div>

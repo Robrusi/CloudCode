@@ -4,8 +4,7 @@ import { Trash2 } from "lucide-react"
 
 import type { McpVisibleSecret } from "@/components/settings/mcp-model"
 import type { McpSecretRemover } from "@/components/settings/mcp-form-types"
-import { iconBtn } from "@/components/settings/shared"
-import { cn } from "@/lib/shared/utils"
+import { IconButton } from "@/components/ui/icon-button"
 
 export function McpSavedSecretList({
   label,
@@ -32,14 +31,14 @@ export function McpSavedSecretList({
             <span className="shrink-0 text-[11px] text-muted-foreground">
               Saved
             </span>
-            <button
-              type="button"
+            <IconButton
+              size="sm"
               onClick={() => onRemove(secret.id)}
               aria-label={`Remove ${secret.name}`}
-              className={cn(iconBtn, "hover:text-destructive")}
+              className="hover:text-destructive"
             >
               <Trash2 className="size-3.5" />
-            </button>
+            </IconButton>
           </div>
         ))}
       </div>

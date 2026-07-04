@@ -8,7 +8,8 @@ import {
   appendMcpRowKey,
   useMcpRowKeys,
 } from "@/components/settings/mcp-row-keys"
-import { inputClass, navAction } from "@/components/settings/shared"
+import { inputClass } from "@/components/settings/shared"
+import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/shared/utils"
 
 export function McpPairListEditor({
@@ -92,10 +93,16 @@ export function McpPairListEditor({
           </div>
         )
       })}
-      <button type="button" onClick={addRow} className={navAction}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={addRow}
+        className="w-fit gap-1.5 text-muted-foreground"
+      >
         <Plus className="size-3.5" />
         {addLabel}
-      </button>
+      </Button>
     </div>
   )
 }
