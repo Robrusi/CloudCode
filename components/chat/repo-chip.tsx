@@ -10,15 +10,9 @@ import {
 } from "@/components/chat/control-styles"
 import { repoLabel } from "@/components/chat/format"
 import { Input } from "@/components/ui/input"
-import { fetchJson } from "@/lib/http/client-json"
+import { useGitHubRepos } from "@/hooks/use-github-repos"
 import { canonicalGitHubRepoUrl } from "@/lib/github/repo"
 import { cn } from "@/lib/shared/utils"
-
-type GitHubRepoOption = {
-  cloneUrl: string
-  fullName: string
-  private: boolean
-}
 
 export function RepoChip({
   editing,
@@ -34,68 +28,40 @@ export function RepoChip({
   value: string
 }) {
   const [draft, setDraft] = useState("")
-  const [repoOptions, setRepoOptions] = useState<GitHubRepoOption[]>([])
-  const [reposError, setReposError] = useState("")
-  const [reposLoading, setReposLoading] = useState(false)
-  const inputRef = useRef<HTMLInputElement>(null)
-  const reposControllerRef = useRef<AbortController | null>(null)
+  const [dirty, setDirty] = useState(false)
+  const { repos, loading, error, ensureLoaded } = useGitHubRepos()
+  const cancelledRef = useRef(false)
+
   const setFocusedInputRef = useCallback((node: HTMLInputElement | null) => {
-    inputRef.current = node
     node?.focus()
+    node?.select()
   }, [])
 
-  const abortReposLoad = useCallback(() => {
-    reposControllerRef.current?.abort()
-    reposControllerRef.current = null
-  }, [])
-
-  const loadRepos = useCallback(async () => {
-    abortReposLoad()
-    const controller = new AbortController()
-    reposControllerRef.current = controller
-    setReposLoading(true)
-    setReposError("")
-    try {
-      const data = await fetchJson<{
-        repositories?: GitHubRepoOption[]
-      }>(
-        "/api/github/repos",
-        { signal: controller.signal },
-        { fallbackError: "Unable to load repositories." }
-      )
-
-      if (!controller.signal.aborted) {
-        setRepoOptions(data.repositories ?? [])
-      }
-    } catch (error) {
-      if (!controller.signal.aborted) {
-        setReposError(
-          error instanceof Error
-            ? error.message
-            : "Unable to load repositories."
-        )
-        setRepoOptions([])
-      }
-    } finally {
-      if (!controller.signal.aborted) {
-        setReposLoading(false)
-        if (reposControllerRef.current === controller) {
-          reposControllerRef.current = null
-        }
-      }
-    }
-  }, [abortReposLoad])
-
-  useEffect(() => abortReposLoad, [abortReposLoad])
+  // Seed the field and load the list whenever the picker opens. Keeping this in
+  // an effect (rather than the click handler) also covers opens triggered by the
+  // parent, and resets the "dirty" guard that decides commit/filter behavior.
+  useEffect(() => {
+    if (!editing) return
+    cancelledRef.current = false
+    setDraft(value ? repoLabel(value) : "")
+    setDirty(false)
+    ensureLoaded()
+  }, [editing, value, ensureLoaded])
 
   function commit() {
-    const trimmed = draft.trim()
-    if (!trimmed) {
-      onChange("")
+    // Escape cancels; a blur fired while unmounting must not re-commit it.
+    if (cancelledRef.current) {
       setEditing(false)
       return
     }
-    onChange(canonicalGitHubRepoUrl(trimmed) ?? trimmed)
+    // Untouched field: close without touching the value so a stray blur can
+    // never clobber the current repo.
+    if (!dirty) {
+      setEditing(false)
+      return
+    }
+    const trimmed = draft.trim()
+    onChange(trimmed ? (canonicalGitHubRepoUrl(trimmed) ?? trimmed) : "")
     setEditing(false)
   }
 
@@ -104,8 +70,13 @@ export function RepoChip({
       .replace(/^https?:\/\/(www\.)?github\.com\//, "")
       .replace(/\.git$/, "")
       .toLowerCase()
-    const visibleRepos = repoOptions
-      .filter((repo) => !needle || repo.fullName.toLowerCase().includes(needle))
+    // Show the full list until the user types, so opening never hides the other
+    // repos behind the currently-selected one.
+    const visibleRepos = repos
+      .filter(
+        (repo) =>
+          !dirty || !needle || repo.fullName.toLowerCase().includes(needle)
+      )
       .slice(0, 8)
 
     return (
@@ -117,7 +88,10 @@ export function RepoChip({
             variant="bare"
             aria-label="Repository"
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              setDraft(e.target.value)
+              setDirty(true)
+            }}
             onBlur={commit}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
@@ -125,7 +99,8 @@ export function RepoChip({
                 commit()
               }
               if (e.key === "Escape") {
-                setDraft(value)
+                e.preventDefault()
+                cancelledRef.current = true
                 setEditing(false)
               }
             }}
@@ -133,11 +108,11 @@ export function RepoChip({
             className="w-36 text-xs sm:w-40"
             spellCheck={false}
           />
-          {reposLoading ? (
+          {loading ? (
             <LoaderCircle className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
           ) : null}
         </div>
-        {visibleRepos.length || reposError ? (
+        {visibleRepos.length || error ? (
           <div
             className={cn(
               popoverPanel,
@@ -151,7 +126,6 @@ export function RepoChip({
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => {
                   onChange(repo.cloneUrl)
-                  setDraft(repo.cloneUrl)
                   setEditing(false)
                 }}
                 className={popoverItem}
@@ -164,9 +138,9 @@ export function RepoChip({
                 ) : null}
               </button>
             ))}
-            {reposError ? (
+            {error ? (
               <div className="px-3 py-2 text-xs leading-4 text-destructive">
-                {reposError}
+                {error}
               </div>
             ) : null}
           </div>
@@ -181,11 +155,7 @@ export function RepoChip({
     <button
       type="button"
       onClick={() => {
-        if (!locked) {
-          setDraft(value ? repoLabel(value) : "")
-          setEditing(true)
-          void loadRepos()
-        }
+        if (!locked) setEditing(true)
       }}
       disabled={locked}
       aria-haspopup="dialog"

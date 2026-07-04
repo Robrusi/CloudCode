@@ -119,6 +119,7 @@ function SidebarItem({
   const [draft, setDraft] = useState(chat.title || "")
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const cancelledRef = useRef(false)
 
   useEffect(() => {
     if (!editing) return
@@ -129,10 +130,16 @@ function SidebarItem({
   function startRename() {
     setDraft(chat.title || "")
     setEditing(true)
+    cancelledRef.current = false
     setMenu(null)
   }
 
   function commit(value: string) {
+    // Escape cancels; a blur fired while the input unmounts must not re-commit.
+    if (cancelledRef.current) {
+      setEditing(false)
+      return
+    }
     const next = value.trim()
     if (next && next !== chat.title) onRename(next)
     setEditing(false)
@@ -151,25 +158,41 @@ function SidebarItem({
       )}
     >
       {editing ? (
-        <input
-          ref={inputRef}
-          aria-label="Chat title"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={(event) => commit(event.target.value)}
-          onFocus={(event) => event.currentTarget.select()}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault()
-              commit(event.currentTarget.value)
-            } else if (event.key === "Escape") {
-              event.preventDefault()
-              setEditing(false)
-            }
-          }}
-          onClick={(event) => event.stopPropagation()}
-          className="min-w-0 flex-1 truncate rounded-md bg-background px-2 py-1 text-[0.8125rem] text-foreground ring-1 ring-border outline-none focus:ring-foreground/40"
-        />
+        <div className="flex min-w-0 flex-1 items-center gap-2 py-2 pr-1 pl-2.5 md:pr-2.5">
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <span className="flex min-w-0 items-center gap-1.5">
+              {chat.automationId ? (
+                <Clock
+                  aria-label="Automation"
+                  className="size-3 shrink-0 text-muted-foreground"
+                />
+              ) : null}
+              <input
+                ref={inputRef}
+                aria-label="Chat title"
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onBlur={(event) => commit(event.target.value)}
+                onFocus={(event) => event.currentTarget.select()}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault()
+                    commit(event.currentTarget.value)
+                  } else if (event.key === "Escape") {
+                    event.preventDefault()
+                    cancelledRef.current = true
+                    setEditing(false)
+                  }
+                }}
+                onClick={(event) => event.stopPropagation()}
+                className="-my-px min-w-0 flex-1 rounded-[0.3125rem] border border-border bg-background px-1 py-px text-[0.8125rem] text-foreground outline-none focus:border-foreground/40"
+              />
+            </span>
+            <span className="min-w-0 truncate pl-1 text-[0.6875rem] text-muted-foreground">
+              {relativeTime(chat.lastUserMessageAt)}
+            </span>
+          </div>
+        </div>
       ) : (
         <>
           <button

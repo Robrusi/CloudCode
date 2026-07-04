@@ -1,7 +1,7 @@
 "use client"
 
 import { GitBranch, LoaderCircle } from "lucide-react"
-import { useCallback, useEffect, useMemo, useReducer, useRef } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import {
   chipTrigger,
@@ -9,71 +9,8 @@ import {
   popoverPanel,
 } from "@/components/chat/control-styles"
 import { Input } from "@/components/ui/input"
-import { fetchJson } from "@/lib/http/client-json"
+import { useGitHubBranches } from "@/hooks/use-github-branches"
 import { cn } from "@/lib/shared/utils"
-
-type BranchChipState = {
-  branches: string[]
-  defaultBranch?: string
-  draft: string
-  editing: boolean
-  error: string
-  loading: boolean
-}
-
-type BranchChipAction =
-  | { type: "cancel"; value: string }
-  | { type: "close" }
-  | { type: "draft"; value: string }
-  | { type: "load-error"; error: string }
-  | { type: "load-start" }
-  | { type: "load-success"; branches: string[]; defaultBranch?: string }
-  | { type: "open"; value: string }
-  | { type: "select"; value: string }
-
-const initialBranchChipState: BranchChipState = {
-  branches: [],
-  defaultBranch: undefined,
-  draft: "",
-  editing: false,
-  error: "",
-  loading: false,
-}
-
-function branchChipReducer(
-  state: BranchChipState,
-  action: BranchChipAction
-): BranchChipState {
-  switch (action.type) {
-    case "cancel":
-      return { ...state, draft: action.value, editing: false }
-    case "close":
-      return { ...state, editing: false }
-    case "draft":
-      return { ...state, draft: action.value }
-    case "load-error":
-      return {
-        ...state,
-        branches: [],
-        defaultBranch: undefined,
-        error: action.error,
-        loading: false,
-      }
-    case "load-start":
-      return { ...state, error: "", loading: true }
-    case "load-success":
-      return {
-        ...state,
-        branches: action.branches,
-        defaultBranch: action.defaultBranch,
-        loading: false,
-      }
-    case "open":
-      return { ...state, draft: action.value, editing: true }
-    case "select":
-      return { ...state, draft: action.value, editing: false }
-  }
-}
 
 export function BranchChip({
   locked,
@@ -86,83 +23,57 @@ export function BranchChip({
   repoUrl?: string
   value: string
 }) {
-  const [state, dispatch] = useReducer(
-    branchChipReducer,
-    initialBranchChipState
-  )
-  const inputRef = useRef<HTMLInputElement>(null)
-  const branchesControllerRef = useRef<AbortController | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState("")
+  const [dirty, setDirty] = useState(false)
+  const { branches, defaultBranch, loading, error, ensureLoaded } =
+    useGitHubBranches(repoUrl)
+  const cancelledRef = useRef(false)
+
   const setFocusedInputRef = useCallback((node: HTMLInputElement | null) => {
-    inputRef.current = node
     node?.focus()
+    node?.select()
   }, [])
 
-  const abortBranchesLoad = useCallback(() => {
-    branchesControllerRef.current?.abort()
-    branchesControllerRef.current = null
-  }, [])
-
-  const loadBranches = useCallback(async () => {
-    const repo = repoUrl?.trim()
-    if (!repo) return
-
-    abortBranchesLoad()
-    const controller = new AbortController()
-    branchesControllerRef.current = controller
-    dispatch({ type: "load-start" })
-    try {
-      const data = await fetchJson<{
-        branches?: string[]
-        defaultBranch?: string
-      }>(
-        `/api/github/branches?repoUrl=${encodeURIComponent(repo)}`,
-        { signal: controller.signal },
-        { fallbackError: "Unable to load branches." }
-      )
-      if (!controller.signal.aborted) {
-        dispatch({
-          branches: data.branches ?? [],
-          defaultBranch: data.defaultBranch,
-          type: "load-success",
-        })
-      }
-    } catch (error) {
-      if (!controller.signal.aborted) {
-        dispatch({
-          error:
-            error instanceof Error ? error.message : "Unable to load branches.",
-          type: "load-error",
-        })
-      }
-    } finally {
-      if (!controller.signal.aborted) {
-        if (branchesControllerRef.current === controller) {
-          branchesControllerRef.current = null
-        }
-      }
-    }
-  }, [abortBranchesLoad, repoUrl])
-
-  useEffect(() => abortBranchesLoad, [abortBranchesLoad])
+  // Seed and load whenever the picker opens, and reset the "dirty" guard that
+  // decides commit/filter behavior.
+  useEffect(() => {
+    if (!editing) return
+    cancelledRef.current = false
+    setDraft(value)
+    setDirty(false)
+    ensureLoaded()
+  }, [editing, value, ensureLoaded])
 
   function commit() {
-    onChange(state.draft.trim())
-    dispatch({ type: "close" })
+    // Escape cancels; a blur fired while unmounting must not re-commit it.
+    if (cancelledRef.current) {
+      setEditing(false)
+      return
+    }
+    // Untouched field: close without touching the value.
+    if (!dirty) {
+      setEditing(false)
+      return
+    }
+    onChange(draft.trim())
+    setEditing(false)
   }
 
-  const visibleBranches = useMemo(() => {
-    const needle = state.draft.trim().toLowerCase()
-    const sorted = state.branches.toSorted((a, b) => {
-      if (a === state.defaultBranch) return -1
-      if (b === state.defaultBranch) return 1
+  if (editing) {
+    const needle = draft.trim().toLowerCase()
+    const sorted = branches.toSorted((a, b) => {
+      if (a === defaultBranch) return -1
+      if (b === defaultBranch) return 1
       return a.localeCompare(b)
     })
-    return sorted
-      .filter((branch) => !needle || branch.toLowerCase().includes(needle))
+    // Show the full list until the user types.
+    const visibleBranches = sorted
+      .filter(
+        (branch) => !dirty || !needle || branch.toLowerCase().includes(needle)
+      )
       .slice(0, 8)
-  }, [state.branches, state.defaultBranch, state.draft])
 
-  if (state.editing) {
     return (
       <div className="relative">
         <div className="flex h-8 items-center gap-1.5 rounded-lg border border-field bg-background pr-1 pl-2.5 text-xs focus-within:ring-3 focus-within:ring-ring/30">
@@ -171,8 +82,11 @@ export function BranchChip({
             ref={setFocusedInputRef}
             variant="bare"
             aria-label="Branch name"
-            value={state.draft}
-            onChange={(e) => dispatch({ type: "draft", value: e.target.value })}
+            value={draft}
+            onChange={(e) => {
+              setDraft(e.target.value)
+              setDirty(true)
+            }}
             onBlur={commit}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
@@ -180,18 +94,20 @@ export function BranchChip({
                 commit()
               }
               if (e.key === "Escape") {
-                dispatch({ type: "cancel", value })
+                e.preventDefault()
+                cancelledRef.current = true
+                setEditing(false)
               }
             }}
-            placeholder={state.defaultBranch ?? "default branch"}
+            placeholder={defaultBranch ?? "default branch"}
             className="w-32 text-xs"
             spellCheck={false}
           />
-          {state.loading ? (
+          {loading ? (
             <LoaderCircle className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
           ) : null}
         </div>
-        {visibleBranches.length || state.error ? (
+        {visibleBranches.length || error ? (
           <div
             className={cn(
               popoverPanel,
@@ -205,21 +121,21 @@ export function BranchChip({
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => {
                   onChange(branch)
-                  dispatch({ type: "select", value: branch })
+                  setEditing(false)
                 }}
                 className={popoverItem}
               >
                 <span className="min-w-0 truncate">{branch}</span>
-                {branch === state.defaultBranch ? (
+                {branch === defaultBranch ? (
                   <span className="shrink-0 text-xs text-muted-foreground">
                     default
                   </span>
                 ) : null}
               </button>
             ))}
-            {state.error ? (
+            {error ? (
               <div className="px-3 py-2 text-xs leading-4 text-destructive">
-                {state.error}
+                {error}
               </div>
             ) : null}
           </div>
@@ -234,10 +150,7 @@ export function BranchChip({
     <button
       type="button"
       onClick={() => {
-        if (!locked) {
-          dispatch({ type: "open", value })
-          void loadBranches()
-        }
+        if (!locked) setEditing(true)
       }}
       disabled={locked}
       aria-haspopup="dialog"
