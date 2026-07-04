@@ -4,7 +4,10 @@ import type { GitHubRepo } from "@/lib/github/repo"
 export type PullRequestState = "open" | "closed"
 
 export type PullRequestSummary = {
+  authorLogin?: string
   baseRef: string
+  body?: string
+  crossFork: boolean
   draft: boolean
   headRef: string
   headSha: string
@@ -59,9 +62,14 @@ const FAILING_CONCLUSIONS = new Set<CheckConclusion>([
 ])
 
 type GitHubPullResponse = {
-  base?: { ref?: unknown } | null
+  base?: { ref?: unknown; repo?: { full_name?: unknown } | null } | null
+  body?: unknown
   draft?: unknown
-  head?: { ref?: unknown; sha?: unknown } | null
+  head?: {
+    ref?: unknown
+    repo?: { full_name?: unknown } | null
+    sha?: unknown
+  } | null
   html_url?: unknown
   mergeable?: unknown
   mergeable_state?: unknown
@@ -70,6 +78,7 @@ type GitHubPullResponse = {
   number?: unknown
   state?: unknown
   title?: unknown
+  user?: { login?: unknown } | null
 }
 
 type GitHubCheckRunsResponse = {
@@ -143,8 +152,16 @@ function normalizePullRequest(
 
   if (!number || !htmlUrl || !headRef || !headSha || !baseRef) return null
 
+  // A missing head repo means the fork was deleted; treat it as cross-fork so
+  // callers never assume the head branch lives on the base repository.
+  const headRepoName = optionalString(data.head?.repo?.full_name)
+  const baseRepoName = optionalString(data.base?.repo?.full_name)
+
   return {
+    authorLogin: optionalString(data.user?.login),
     baseRef,
+    body: typeof data.body === "string" ? data.body : undefined,
+    crossFork: !headRepoName || headRepoName !== baseRepoName,
     draft: data.draft === true,
     headRef,
     headSha,
@@ -425,6 +442,33 @@ export async function mergePullRequest({
   if (!result.ok) throw new Error(result.message)
 
   return { merged: result.data.merged === true, message: result.message }
+}
+
+// Pull requests are issues to the comments API, so this posts a regular
+// top-of-thread PR comment (not a line-anchored review comment).
+export async function createIssueComment({
+  body,
+  number,
+  repo,
+  token,
+}: {
+  body: string
+  number: number
+  repo: GitHubRepo
+  token?: string
+}): Promise<{ htmlUrl?: string }> {
+  const result = await githubFetch<{ html_url?: unknown }>(
+    `${githubRepoApiUrl(repo)}/issues/${number}/comments`,
+    token,
+    {
+      body: JSON.stringify({ body }),
+      method: "POST",
+    }
+  )
+
+  if (!result.ok) throw new Error(result.message)
+
+  return { htmlUrl: optionalString(result.data.html_url) }
 }
 
 export async function deleteBranchRef({

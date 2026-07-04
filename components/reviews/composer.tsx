@@ -4,23 +4,20 @@ import { useQuery } from "convex/react"
 import { useState } from "react"
 
 import {
-  automationDraftFromRecord,
-  automationRequestBody,
-  deriveAutomationName,
-  emptyAutomationDraft,
-  type AutomationDraft,
-  type AutomationRecord,
-} from "@/components/automations/model"
-import { ScheduleChip } from "@/components/automations/schedule-chip"
-import { BranchChip } from "@/components/chat/branch-chip"
-import { BranchTargetChip } from "@/components/chat/branch-target-chip"
-import {
   DetailRow,
   ModelChip,
   OptionChip,
 } from "@/components/chat/composer-chips"
 import { PresetPill } from "@/components/chat/controls"
+import { repoLabel } from "@/components/chat/format"
 import { RepoChip } from "@/components/chat/repo-chip"
+import {
+  emptyReviewDraft,
+  reviewDraftFromRecord,
+  reviewRequestBody,
+  type ReviewDraft,
+  type ReviewRecord,
+} from "@/components/reviews/model"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -30,51 +27,46 @@ import type { SandboxPresetRecord } from "@/lib/sandbox/preset-types"
 import { useAutoGrowTextarea } from "@/hooks/use-auto-grow-textarea"
 import { postJson } from "@/lib/http/client-json"
 
-type CreatedAutomation = { automationId: Id<"automations"> }
+type CreatedReview = { reviewId: Id<"reviews"> }
 
 const EMPTY_SANDBOX_PRESETS: SandboxPresetRecord[] = []
 
-export function AutomationComposer({
-  automation,
+export function ReviewComposer({
   defaultRepoUrl,
   onCancel,
   onSaved,
+  review,
 }: {
-  automation: AutomationRecord | null
   defaultRepoUrl: string
   onCancel?: () => void
-  onSaved: (automationId: Id<"automations">) => void
+  onSaved: (reviewId: Id<"reviews">) => void
+  review: ReviewRecord | null
 }) {
-  const [draft, setDraft] = useState<AutomationDraft>(() =>
-    automation
-      ? automationDraftFromRecord(automation)
-      : { ...emptyAutomationDraft(), repoUrl: defaultRepoUrl }
+  const [draft, setDraft] = useState<ReviewDraft>(() =>
+    review
+      ? reviewDraftFromRecord(review)
+      : { ...emptyReviewDraft(), repoUrl: defaultRepoUrl }
   )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   const promptRef = useAutoGrowTextarea(draft.prompt)
 
-  const [branchTargetOpen, setBranchTargetOpen] = useState(false)
   const [editingRepo, setEditingRepo] = useState(false)
   const [modelOpen, setModelOpen] = useState(false)
   const [presetOpen, setPresetOpen] = useState(false)
-  const [scheduleOpen, setScheduleOpen] = useState(false)
 
   const rawPresets = useQuery(api.sandboxPresets.list)
   const sandboxPresets = rawPresets
     ? (rawPresets as SandboxPresetRecord[])
     : EMPTY_SANDBOX_PRESETS
 
-  const set = <K extends keyof AutomationDraft>(
-    key: K,
-    value: AutomationDraft[K]
-  ) => setDraft((current) => ({ ...current, [key]: value }))
+  const set = <K extends keyof ReviewDraft>(key: K, value: ReviewDraft[K]) =>
+    setDraft((current) => ({ ...current, [key]: value }))
 
   async function submit() {
     if (busy) return
-    const prompt = draft.prompt.trim()
-    if (!prompt) return
-    if (!draft.repoUrl.trim()) {
+    const repoUrl = draft.repoUrl.trim()
+    if (!repoUrl) {
       setError("Pick a repository.")
       setEditingRepo(true)
       return
@@ -83,34 +75,33 @@ export function AutomationComposer({
     setBusy(true)
     setError("")
     try {
-      const body = automationRequestBody({
+      const body = reviewRequestBody({
         ...draft,
-        name: draft.name.trim() || deriveAutomationName(prompt),
-        prompt,
+        name: draft.name.trim() || `Review ${repoLabel(repoUrl)}`,
       })
-      if (automation) {
+      if (review) {
         await postJson(
-          "/api/automations/update",
-          { automationId: automation._id, ...body },
+          "/api/reviews/update",
+          { reviewId: review._id, ...body },
           {},
-          { fallbackError: "Unable to update automation." }
+          { fallbackError: "Unable to update review." }
         )
-        onSaved(automation._id)
+        onSaved(review._id)
       } else {
-        const created = await postJson<CreatedAutomation>(
-          "/api/automations",
+        const created = await postJson<CreatedReview>(
+          "/api/reviews",
           body,
           {},
-          { fallbackError: "Unable to create automation." }
+          { fallbackError: "Unable to create review." }
         )
         setDraft((current) => ({ ...current, name: "", prompt: "" }))
-        onSaved(created.automationId)
+        onSaved(created.reviewId)
       }
     } catch (submitError) {
       setError(
         submitError instanceof Error
           ? submitError.message
-          : "Unable to save automation."
+          : "Unable to save review."
       )
     } finally {
       setBusy(false)
@@ -127,17 +118,17 @@ export function AutomationComposer({
     >
       <Input
         variant="bare"
-        aria-label="Automation title"
+        aria-label="Review title"
         value={draft.name}
         onChange={(event) => set("name", event.target.value)}
-        placeholder="Scheduled task title"
+        placeholder="Pull request review title"
         className="text-2xl tracking-tight placeholder:text-muted-foreground/50"
       />
 
       <Textarea
         ref={promptRef}
         variant="bare"
-        aria-label="Automation prompt"
+        aria-label="Review prompt"
         rows={2}
         value={draft.prompt}
         onChange={(event) => set("prompt", event.target.value)}
@@ -147,7 +138,7 @@ export function AutomationComposer({
             void submit()
           }
         }}
-        placeholder="Add prompt e.g. check Linear and work on my top issue"
+        placeholder="Empty uses the default review prompt: findings, proposed fixes, and a confidence-to-merge score"
         className="mt-5 min-h-12 overflow-hidden text-[15px] leading-6 placeholder:text-muted-foreground/50"
       />
 
@@ -163,33 +154,15 @@ export function AutomationComposer({
             locked={false}
           />
         </DetailRow>
-        <DetailRow label="Base branch">
-          <BranchChip
-            value={draft.baseBranch}
-            repoUrl={draft.repoUrl}
-            onChange={(baseBranch) => set("baseBranch", baseBranch)}
-            locked={false}
-          />
-        </DetailRow>
-        <DetailRow label="Branch target">
-          <BranchTargetChip
-            mode={draft.branchMode}
-            branchName={draft.branchName}
-            baseBranch={draft.baseBranch}
-            open={branchTargetOpen}
-            setOpen={setBranchTargetOpen}
-            onChangeMode={(branchMode) => set("branchMode", branchMode)}
-            onChangeBranchName={(branchName) => set("branchName", branchName)}
-          />
-        </DetailRow>
-        <DetailRow label="Repeats">
-          <ScheduleChip
-            schedule={draft.schedule}
-            timezone={draft.timezone}
-            open={scheduleOpen}
-            setOpen={setScheduleOpen}
-            onScheduleChange={(schedule) => set("schedule", schedule)}
-            onTimezoneChange={(timezone) => set("timezone", timezone)}
+        <DetailRow label="Reviews">
+          <OptionChip
+            ariaLabel="Which pull requests get reviewed"
+            value={draft.reviewReadyForReview ? "ready" : "opened"}
+            onChange={(value) => set("reviewReadyForReview", value === "ready")}
+            options={[
+              { label: "Opened PRs", value: "opened" },
+              { label: "Opened + marked ready", value: "ready" },
+            ]}
           />
         </DetailRow>
         <DetailRow label="Model">
@@ -214,30 +187,6 @@ export function AutomationComposer({
             }
           />
         </DetailRow>
-        <DetailRow label="Sandbox">
-          <OptionChip
-            ariaLabel="Sandbox after run"
-            value={draft.sandboxRetention}
-            onChange={(sandboxRetention) =>
-              set("sandboxRetention", sandboxRetention)
-            }
-            options={[
-              { label: "Delete after run", value: "delete" },
-              { label: "Keep idle", value: "idle" },
-            ]}
-          />
-        </DetailRow>
-        <DetailRow label="Chat">
-          <OptionChip
-            ariaLabel="Chat per run"
-            value={draft.threadMode}
-            onChange={(threadMode) => set("threadMode", threadMode)}
-            options={[
-              { label: "Same chat", value: "single" },
-              { label: "New chat per run", value: "per-run" },
-            ]}
-          />
-        </DetailRow>
       </div>
 
       {error ? <p className="mt-3 text-xs text-destructive">{error}</p> : null}
@@ -254,8 +203,12 @@ export function AutomationComposer({
             Cancel
           </Button>
         ) : null}
-        <Button type="submit" size="sm" disabled={busy || !draft.prompt.trim()}>
-          {automation ? "Save" : "Create"}
+        <Button
+          type="submit"
+          size="sm"
+          disabled={busy || !draft.repoUrl.trim()}
+        >
+          {review ? "Save" : "Create"}
         </Button>
       </div>
     </form>

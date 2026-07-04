@@ -309,11 +309,54 @@ export async function readRepoState(
   return { exists, branch, remoteUrl }
 }
 
+/**
+ * Checks out the pull request head via `refs/pull/<n>/head`, which lives on
+ * the base repository for same-repo and fork PRs alike — no fork remote or
+ * head-branch name needed. Assumes the base branch was fetched by the
+ * clone/refresh so `origin/<base>` is available as the diff baseline.
+ */
+async function checkoutPullRequestHead(
+  sandbox: Sandbox,
+  input: DaytonaCodexRepoInput,
+  paths: DaytonaSandboxPaths,
+  gitAuth: SandboxGitHubAuth | null | undefined,
+  prNumber: number
+): Promise<string> {
+  const branchName = `pr-${prNumber}`
+  await emitRepoLog(input, {
+    kind: "command",
+    message: `git fetch origin pull/${prNumber}/head`,
+  })
+  const result = await runDaytonaCommand(
+    sandbox,
+    [
+      "set -eo pipefail",
+      `cd ${shellQuote(paths.repoPath)}`,
+      `git fetch origin ${shellQuote(`pull/${prNumber}/head`)}`,
+      `git checkout -B ${shellQuote(branchName)} FETCH_HEAD`,
+    ].join("\n"),
+    {
+      env: repoCommandEnv(paths, gitAuth?.env),
+      signal: input.signal,
+      timeoutMs: 60_000,
+    }
+  )
+  if (result.exitCode !== 0) {
+    throw new Error(
+      compactLine(result.stderr || result.stdout) ||
+        `Unable to check out pull request #${prNumber}.`
+    )
+  }
+
+  return branchName
+}
+
 export async function cloneRepo({
   baseBranch,
   branchName,
   githubToken,
   input,
+  prNumber,
   requestedBranchName,
   repoUrl,
   sandbox,
@@ -326,6 +369,7 @@ export async function cloneRepo({
   gitAuth?: SandboxGitHubAuth | null
   githubToken?: string
   input: DaytonaCodexRepoInput
+  prNumber?: number
   requestedBranchName?: string
   repoUrl: string
   sandbox: Sandbox
@@ -352,6 +396,9 @@ export async function cloneRepo({
 
   await cloneRepository()
 
+  if (prNumber) {
+    return checkoutPullRequestHead(sandbox, input, paths, gitAuth, prNumber)
+  }
   if (useBaseBranch) {
     return resolveBaseModeBranch(sandbox, input, paths, baseBranch)
   }
@@ -368,6 +415,7 @@ export async function prepareExistingRepoForFreshRun({
   gitAuth,
   input,
   paths,
+  prNumber,
   requestedBranchName,
   sandbox,
   useBaseBranch,
@@ -377,6 +425,7 @@ export async function prepareExistingRepoForFreshRun({
   gitAuth?: SandboxGitHubAuth | null
   input: DaytonaCodexRepoInput
   paths: DaytonaSandboxPaths
+  prNumber?: number
   requestedBranchName?: string
   sandbox: Sandbox
   useBaseBranch: boolean
@@ -426,6 +475,15 @@ export async function prepareExistingRepoForFreshRun({
     })
   }
 
+  if (prNumber) {
+    return await checkoutPullRequestHead(
+      sandbox,
+      input,
+      paths,
+      gitAuth,
+      prNumber
+    )
+  }
   if (useBaseBranch) {
     return await resolveBaseModeBranch(sandbox, input, paths, baseBranch)
   }

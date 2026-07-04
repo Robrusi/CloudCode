@@ -1,6 +1,7 @@
 import type { Doc, Id } from "../_generated/dataModel"
 import type { MutationCtx, QueryCtx } from "../_generated/server"
 import { recordAutomationRunOutcome } from "./automationRecords"
+import { recordReviewRunOutcome } from "./reviewRecords"
 import {
   compactMessageMeta,
   compactRunLogs,
@@ -142,6 +143,7 @@ export async function markRunCanceled(
 
   if (becameCanceled) {
     await recordAutomationRunOutcome(ctx, run, "canceled")
+    await recordReviewRunOutcome(ctx, run, "canceled")
   }
 
   return {

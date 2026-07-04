@@ -1,7 +1,14 @@
 "use client"
 
 import { useClerk } from "@clerk/nextjs"
-import { Clock, Settings, SquarePen, User, X } from "lucide-react"
+import {
+  Clock,
+  GitPullRequest,
+  Settings,
+  SquarePen,
+  User,
+  X,
+} from "lucide-react"
 import { type CSSProperties, useMemo } from "react"
 
 import { ResizeHandle } from "@/components/layout/resize-handle"
@@ -28,6 +35,7 @@ export function Sidebar({
   onDelete,
   onRename,
   onShowAutomations,
+  onShowReviews,
   onShowSettings,
   onExitSettings,
   settingsSection,
@@ -37,13 +45,14 @@ export function Sidebar({
 }: {
   chats: SidebarChat[]
   activeId: Id<"threads"> | null
-  currentView: "chat" | "settings" | "automations"
+  currentView: "chat" | "settings" | "automations" | "reviews"
   onNewChat: () => void
   onNewChatInRepo: (repoUrl: string) => void
   onSelect: (id: Id<"threads">) => void
   onDelete: (id: Id<"threads">) => void
   onRename: (id: Id<"threads">, title: string) => void
   onShowAutomations: () => void
+  onShowReviews: () => void
   onShowSettings: () => void
   onExitSettings: () => void
   settingsSection: SettingsSectionId
@@ -123,6 +132,20 @@ export function Sidebar({
             >
               <Clock className="size-3 shrink-0" />
               <span>Automations</span>
+            </button>
+            <button
+              type="button"
+              onClick={onShowReviews}
+              aria-current={currentView === "reviews" ? "page" : undefined}
+              className={cn(
+                "flex w-full items-center gap-2 rounded-xl px-[0.625rem] py-2 text-[0.8125rem] transition-colors",
+                currentView === "reviews"
+                  ? "bg-muted text-foreground"
+                  : "text-foreground/80 hover:bg-muted"
+              )}
+            >
+              <GitPullRequest className="size-3 shrink-0" />
+              <span>Review</span>
             </button>
           </div>
 

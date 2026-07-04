@@ -67,6 +67,7 @@ type WorkerRunRecord = {
   model: string
   notesAccessToken?: string
   previousDiff?: string
+  prNumber?: number
   profile?: string
   prompt: string
   reasoningEffort: RunCodexInSandboxInput["reasoningEffort"]
@@ -522,6 +523,7 @@ export async function startAndLoadWorkerRun(
       mcpServers,
       notesAccessToken: response.run.notesAccessToken,
       previousDiff: response.run.previousDiff,
+      prNumber: response.run.prNumber,
       prompt: response.run.prompt,
       reasoningEffort: response.run.reasoningEffort,
       repoUrl: response.run.repoUrl,

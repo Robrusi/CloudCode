@@ -5,9 +5,9 @@ import { useCallback, useMemo, useRef, useState } from "react"
 
 import {
   formatInstantShort,
-  formatRelative,
   timezoneOptions,
 } from "@/components/automations/model"
+import { formatRelative } from "@/components/chat/format"
 import {
   chipTrigger,
   popoverItem,

@@ -54,6 +54,7 @@ const automationRunStatus = v.union(
   v.literal("skipped"),
   v.literal("dispatch_failed")
 )
+const reviewRunStatus = automationRunStatus
 const billingPlanId = v.union(
   v.literal("free"),
   v.literal("hobby"),
@@ -113,6 +114,35 @@ export default defineSchema({
     .index("by_enabled_next", ["enabled", "nextRunAt"])
     .index("by_thread", ["threadId"]),
 
+  reviews: defineTable({
+    // Unset means true: runs use the built-in auto environment preset.
+    autoEnvironment: v.optional(v.boolean()),
+    createdAt: v.number(),
+    disabledReason: v.optional(v.string()),
+    enabled: v.boolean(),
+    failureCount: v.number(),
+    lastRunAt: v.optional(v.number()),
+    lastRunError: v.optional(v.string()),
+    lastRunStatus: v.optional(reviewRunStatus),
+    model,
+    name: v.string(),
+    profile: v.optional(v.string()),
+    // Unset/empty means the built-in review prompt template.
+    prompt: v.optional(v.string()),
+    reasoningEffort: thinking,
+    // Always the canonical https://github.com/{owner}/{repo}.git form so the
+    // webhook's repository lookup matches exactly.
+    repoUrl: v.string(),
+    // Also review when a draft PR is marked ready; unset means false.
+    reviewReadyForReview: v.optional(v.boolean()),
+    sandboxPresetId: v.optional(v.id("sandboxPresets")),
+    speed,
+    updatedAt: v.number(),
+    userId: v.id("users"),
+  })
+    .index("by_user_updated", ["userId", "updatedAt"])
+    .index("by_repo_enabled", ["repoUrl", "enabled"]),
+
   codexAuth: defineTable({
     // OAuth ("chatgpt") records populate accessToken/idToken/refreshToken;
     // API-key ("apikey") records leave them unset and store the encrypted key in
@@ -162,11 +192,17 @@ export default defineSchema({
     model,
     previousDiff: v.optional(v.string()),
     notesAccessToken: v.optional(v.string()),
+    prHeadSha: v.optional(v.string()),
+    prNumber: v.optional(v.number()),
+    prTitle: v.optional(v.string()),
+    prUrl: v.optional(v.string()),
     profile: v.optional(v.string()),
     prompt: v.optional(v.string()),
     reasoningEffort: thinking,
     repoUrl: v.string(),
     resumeContext: v.optional(v.string()),
+    reviewCommentUrl: v.optional(v.string()),
+    reviewId: v.optional(v.id("reviews")),
     sandboxId: v.optional(v.string()),
     sandboxPresetId: v.optional(v.id("sandboxPresets")),
     sandboxState: v.optional(sandboxState),
@@ -179,6 +215,8 @@ export default defineSchema({
     userId: v.id("users"),
   })
     .index("by_automation_created", ["automationId", "createdAt"])
+    .index("by_review_created", ["reviewId", "createdAt"])
+    .index("by_review_pr", ["reviewId", "prNumber", "createdAt"])
     .index("by_thread_updated", ["threadId", "updatedAt"])
     .index("by_thread_status_updated", ["threadId", "status", "updatedAt"])
     .index("by_ephemeral_sandbox_state", [

@@ -178,34 +178,3 @@ export function formatInstantShort(ms: number, timezone: string) {
     return new Intl.DateTimeFormat(undefined, options).format(ms)
   }
 }
-
-const RUN_TIME_FORMAT = new Intl.DateTimeFormat(undefined, {
-  day: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-  month: "short",
-})
-
-/** "Jul 3, 14:32" style local timestamp for run history rows. */
-export function formatRunTime(ms: number) {
-  return RUN_TIME_FORMAT.format(ms)
-}
-
-const RELATIVE_FORMAT = new Intl.RelativeTimeFormat(undefined, {
-  numeric: "always",
-  style: "narrow",
-})
-
-/** "in 3 hr" / "5 min ago" style compact relative time. */
-export function formatRelative(ms: number, nowMs: number) {
-  const deltaSeconds = Math.round((ms - nowMs) / 1000)
-  const abs = Math.abs(deltaSeconds)
-  if (abs < 60) return RELATIVE_FORMAT.format(deltaSeconds, "second")
-  if (abs < 3600) {
-    return RELATIVE_FORMAT.format(Math.round(deltaSeconds / 60), "minute")
-  }
-  if (abs < 86_400) {
-    return RELATIVE_FORMAT.format(Math.round(deltaSeconds / 3600), "hour")
-  }
-  return RELATIVE_FORMAT.format(Math.round(deltaSeconds / 86_400), "day")
-}

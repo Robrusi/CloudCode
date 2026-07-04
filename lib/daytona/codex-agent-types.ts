@@ -45,6 +45,8 @@ export type RunCodexInSandboxInput = {
     servers: McpDiscoveredServer[]
   ) => void | Promise<void>
   previousDiff?: string
+  // Review runs check out refs/pull/<n>/head instead of a work branch.
+  prNumber?: number
   prompt: string
   reasoningEffort?: ReasoningEffort
   resumeContext?: string

@@ -3,8 +3,10 @@
 import { useQuery } from "convex/react"
 import {
   ChevronRight,
-  Clock,
+  ExternalLink,
+  GitPullRequest,
   Loader2,
+  MessageSquare,
   Pencil,
   Play,
   Plus,
@@ -12,34 +14,33 @@ import {
 } from "lucide-react"
 import { useRef, useState } from "react"
 
-import { AutomationComposer } from "@/components/automations/composer"
-import { type AutomationRecord } from "@/components/automations/model"
 import {
   formatRelative,
   formatRunTime,
   repoLabel,
 } from "@/components/chat/format"
+import { popoverPanel } from "@/components/chat/control-styles"
 import {
   RUN_STATUS_LABEL,
   runDotClass,
   type RunStatus,
 } from "@/components/chat/run-status"
+import { ReviewComposer } from "@/components/reviews/composer"
+import { type ReviewRecord } from "@/components/reviews/model"
 import { SettingsConfirmDialog } from "@/components/settings/shared"
 import { Button } from "@/components/ui/button"
 import { IconButton } from "@/components/ui/icon-button"
+import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import {
-  scheduleDraftFromCron,
-  shortScheduleLabel,
-} from "@/lib/automations/schedule-draft"
+import { useClickOutside } from "@/hooks/use-click-outside"
 import { postJson } from "@/lib/http/client-json"
 import { cn } from "@/lib/shared/utils"
 
-function statusDotClass(automation: AutomationRecord) {
-  if (!automation.enabled) return "bg-muted-foreground/30"
-  switch (automation.lastRunStatus) {
+function statusDotClass(review: ReviewRecord) {
+  if (!review.enabled) return "bg-muted-foreground/30"
+  switch (review.lastRunStatus) {
     case "running":
       return "animate-pulse bg-foreground"
     case "succeeded":
@@ -58,21 +59,20 @@ const RECENT_RUNS_PAGE = 10
 /** Lazy-loaded run history shown when a row is expanded. Starts with the
  * last 5 runs; each "Show more" loads 10 further back. */
 function RecentRuns({
-  automationId,
   onOpenThread,
+  reviewId,
 }: {
-  automationId: Id<"automations">
   onOpenThread: (threadId: Id<"threads">) => void
+  reviewId: Id<"reviews">
 }) {
   const [limit, setLimit] = useState(RECENT_RUNS_FIRST_PAGE)
-  const result = useQuery(api.automations.recentRuns, { automationId, limit })
+  const result = useQuery(api.reviews.recentRuns, { limit, reviewId })
   // Hold the previous page while a larger one loads so "Show more" appends
   // instead of collapsing the list to a skeleton.
   const lastResultRef = useRef(result)
   if (result !== undefined) lastResultRef.current = result
   const view = result ?? lastResultRef.current
   const loading = result === undefined
-  const now = Date.now()
 
   if (view === undefined) {
     return (
@@ -87,18 +87,20 @@ function RecentRuns({
     )
   }
   if (view.runs.length === 0) {
-    return <p className="py-2 text-xs text-muted-foreground/70">No runs yet.</p>
+    return (
+      <p className="py-2 text-xs text-muted-foreground/70">No reviews yet.</p>
+    )
   }
 
   return (
     <ol className="py-1">
       {view.runs.map((run) => (
-        <li key={run.id}>
+        <li key={run.id} className="flex items-center gap-1">
           <button
             type="button"
             onClick={() => onOpenThread(run.threadId)}
-            title="Open chat"
-            className="group/run -ml-1.5 flex w-fit items-center gap-2 rounded-md py-1 pr-2 pl-1.5 text-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/30"
+            title="Open review thread"
+            className="group/run -ml-1.5 flex w-fit min-w-0 items-center gap-2 rounded-md py-1 pr-2 pl-1.5 text-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/30"
           >
             <span
               aria-hidden
@@ -107,16 +109,43 @@ function RecentRuns({
                 runDotClass(run.status as RunStatus)
               )}
             />
-            <span className="text-foreground/80">
+            <span className="shrink-0 text-foreground/80">
+              {run.prNumber ? `PR #${run.prNumber}` : "PR"}
+            </span>
+            {run.prTitle ? (
+              <span className="truncate text-muted-foreground">
+                {run.prTitle}
+              </span>
+            ) : null}
+            <span className="shrink-0 text-muted-foreground/80">
               {RUN_STATUS_LABEL[run.status as RunStatus] ?? run.status}
             </span>
-            <span className="text-muted-foreground/80 tabular-nums">
+            <span className="shrink-0 text-muted-foreground/60 tabular-nums">
               {formatRunTime(run.createdAt)}
             </span>
-            <span className="text-muted-foreground/60 tabular-nums">
-              {formatRelative(run.createdAt, now)}
-            </span>
           </button>
+          {run.prUrl ? (
+            <a
+              href={run.prUrl}
+              target="_blank"
+              rel="noreferrer"
+              title="Open pull request on GitHub"
+              className="rounded-md p-1 text-muted-foreground/60 outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30"
+            >
+              <ExternalLink className="size-3" />
+            </a>
+          ) : null}
+          {run.reviewCommentUrl ? (
+            <a
+              href={run.reviewCommentUrl}
+              target="_blank"
+              rel="noreferrer"
+              title="Open posted review comment"
+              className="rounded-md p-1 text-muted-foreground/60 outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30"
+            >
+              <MessageSquare className="size-3" />
+            </a>
+          ) : null}
         </li>
       ))}
       {view.hasMore ? (
@@ -135,32 +164,104 @@ function RecentRuns({
   )
 }
 
-function AutomationRow({
-  automation,
+/** "Run on PR…" chip: a small popover asking for the PR number, since manual
+ * runs target one specific pull request. */
+function RunOnPrButton({
+  busy,
+  onRun,
+}: {
+  busy: boolean
+  onRun: (prNumber: number) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [value, setValue] = useState("")
+  const ref = useRef<HTMLDivElement>(null)
+  useClickOutside(ref, open, () => setOpen(false))
+
+  const submit = () => {
+    const prNumber = Number.parseInt(value, 10)
+    if (!Number.isInteger(prNumber) || prNumber <= 0) return
+    setOpen(false)
+    setValue("")
+    onRun(prNumber)
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <IconButton
+        aria-label="Review a pull request now"
+        title="Review a pull request now"
+        disabled={busy}
+        onClick={() => setOpen(!open)}
+      >
+        {busy ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <Play className="size-3.5" />
+        )}
+      </IconButton>
+      {open ? (
+        <div className={cn(popoverPanel, "top-8 right-0 w-44 p-2")}>
+          <Input
+            ref={(element) => element?.focus()}
+            inputMode="numeric"
+            aria-label="Pull request number"
+            value={value}
+            onChange={(event) =>
+              setValue(event.target.value.replace(/[^\d]/g, ""))
+            }
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault()
+                submit()
+              }
+            }}
+            placeholder="PR number"
+            className="h-8 text-sm"
+          />
+          <Button
+            type="button"
+            size="sm"
+            onClick={submit}
+            disabled={!value}
+            className="mt-2 w-full"
+          >
+            Review PR
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function ReviewRow({
   busy,
   expanded,
   onDelete,
   onEdit,
   onOpenThread,
-  onRunNow,
+  onRunOnPr,
   onToggle,
   onToggleExpanded,
+  review,
 }: {
-  automation: AutomationRecord
   busy: boolean
   expanded: boolean
   onDelete: () => void
   onEdit: () => void
   onOpenThread: (threadId: Id<"threads">) => void
-  onRunNow: () => void
+  onRunOnPr: (prNumber: number) => void
   onToggle: (enabled: boolean) => void
   onToggleExpanded: () => void
+  review: ReviewRecord
 }) {
   const now = Date.now()
-  const schedule = shortScheduleLabel(scheduleDraftFromCron(automation.cron))
   const statusFailed =
-    automation.lastRunStatus === "failed" ||
-    automation.lastRunStatus === "dispatch_failed"
+    review.lastRunStatus === "failed" ||
+    review.lastRunStatus === "dispatch_failed"
+  const triggerLabel = review.reviewReadyForReview
+    ? "Reviews opened + ready PRs"
+    : "Reviews opened PRs"
 
   return (
     <li className="group flex items-start gap-3 py-3.5">
@@ -168,13 +269,11 @@ function AutomationRow({
         aria-hidden
         className={cn(
           "mt-[7px] size-1.5 shrink-0 rounded-full",
-          statusDotClass(automation)
+          statusDotClass(review)
         )}
       />
 
-      <div
-        className={cn("min-w-0 flex-1", !automation.enabled && "opacity-60")}
-      >
+      <div className={cn("min-w-0 flex-1", !review.enabled && "opacity-60")}>
         <button
           type="button"
           onClick={onToggleExpanded}
@@ -183,10 +282,10 @@ function AutomationRow({
         >
           <span className="flex items-baseline gap-2">
             <span className="truncate text-sm font-medium text-foreground">
-              {automation.name}
+              {review.name}
             </span>
             <span className="shrink-0 truncate text-sm text-muted-foreground">
-              {repoLabel(automation.repoUrl)}
+              {repoLabel(review.repoUrl)}
             </span>
             <ChevronRight
               className={cn(
@@ -196,47 +295,31 @@ function AutomationRow({
             />
           </span>
           <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-            {automation.enabled && automation.nextRunAt
-              ? `Next run ${formatRelative(automation.nextRunAt, now)} · ${schedule}`
-              : schedule}
-            {statusFailed && automation.lastRunAt ? (
+            {triggerLabel}
+            {statusFailed && review.lastRunAt ? (
               <span className="text-destructive">
                 {" "}
-                · failed {formatRelative(automation.lastRunAt, now)}
+                · failed {formatRelative(review.lastRunAt, now)}
               </span>
             ) : null}
           </span>
         </button>
 
-        {automation.disabledReason ? (
+        {review.disabledReason ? (
           <p className="mt-1 text-xs text-destructive">
-            {automation.disabledReason}
+            {review.disabledReason}
           </p>
         ) : null}
 
         {expanded ? (
           <div className="mt-1">
-            <RecentRuns
-              automationId={automation._id}
-              onOpenThread={onOpenThread}
-            />
+            <RecentRuns onOpenThread={onOpenThread} reviewId={review._id} />
           </div>
         ) : null}
       </div>
 
       <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 max-md:opacity-100">
-        <IconButton
-          aria-label="Run now"
-          title="Run now"
-          disabled={busy}
-          onClick={onRunNow}
-        >
-          {busy ? (
-            <Loader2 className="size-3.5 animate-spin" />
-          ) : (
-            <Play className="size-3.5" />
-          )}
-        </IconButton>
+        <RunOnPrButton busy={busy} onRun={onRunOnPr} />
         <IconButton aria-label="Edit" title="Edit" onClick={onEdit}>
           <Pencil className="size-3.5" />
         </IconButton>
@@ -250,12 +333,10 @@ function AutomationRow({
         </IconButton>
       </div>
       <Switch
-        checked={automation.enabled}
+        checked={review.enabled}
         disabled={busy}
         onCheckedChange={onToggle}
-        aria-label={
-          automation.enabled ? "Disable automation" : "Enable automation"
-        }
+        aria-label={review.enabled ? "Disable review" : "Enable review"}
         className="mt-0.5"
       />
     </li>
@@ -283,144 +364,139 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
   return (
     <div className="flex flex-col items-center pt-16 text-center">
       <div className="grid size-11 place-items-center rounded-2xl bg-muted text-muted-foreground">
-        <Clock className="size-5" />
+        <GitPullRequest className="size-5" />
       </div>
-      <p className="mt-4 text-sm font-medium text-foreground">
-        No automations yet
-      </p>
+      <p className="mt-4 text-sm font-medium text-foreground">No reviews yet</p>
       <p className="mt-1 max-w-xs text-xs leading-5 text-muted-foreground">
-        Automations run a prompt on a schedule in a fresh sandbox and report
-        back to their own chat.
+        Reviews run on every new pull request in a fresh sandbox and post the
+        findings, proposed fixes, and a confidence score as a PR comment.
       </p>
       <Button size="sm" onClick={onCreate} className="mt-5 gap-1.5">
         <Plus className="size-4" />
-        Create automation
+        Create review
       </Button>
     </div>
   )
 }
 
-export function AutomationsScreen({
+export function ReviewsScreen({
   defaultRepoUrl,
   onOpenThread,
 }: {
   defaultRepoUrl: string
   onOpenThread: (threadId: Id<"threads">) => void
 }) {
-  const automations = useQuery(api.automations.list)
-  const [active, setActive] = useState<AutomationRecord | "new" | null>(null)
-  const [expandedId, setExpandedId] = useState<Id<"automations"> | null>(null)
-  const [pendingDelete, setPendingDelete] = useState<AutomationRecord | null>(
-    null
-  )
-  const [busyId, setBusyId] = useState<Id<"automations"> | null>(null)
+  const reviews = useQuery(api.reviews.list)
+  const [active, setActive] = useState<ReviewRecord | "new" | null>(null)
+  const [expandedId, setExpandedId] = useState<Id<"reviews"> | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<ReviewRecord | null>(null)
+  const [busyId, setBusyId] = useState<Id<"reviews"> | null>(null)
   const [actionError, setActionError] = useState("")
 
   const editingId = active && active !== "new" ? active._id : null
 
   async function runAction(
-    automation: AutomationRecord,
+    review: ReviewRecord,
     action: () => Promise<unknown>
   ) {
     if (busyId) return
-    setBusyId(automation._id)
+    setBusyId(review._id)
     setActionError("")
     try {
       await action()
     } catch (error) {
       setActionError(
-        error instanceof Error ? error.message : "Automation action failed."
+        error instanceof Error ? error.message : "Review action failed."
       )
     } finally {
       setBusyId(null)
     }
   }
 
-  const toggle = (automation: AutomationRecord, enabled: boolean) =>
-    runAction(automation, () =>
+  const toggle = (review: ReviewRecord, enabled: boolean) =>
+    runAction(review, () =>
       postJson(
-        "/api/automations/toggle",
-        { automationId: automation._id, enabled },
+        "/api/reviews/toggle",
+        { enabled, reviewId: review._id },
         {},
-        { fallbackError: "Unable to update automation." }
+        { fallbackError: "Unable to update review." }
       )
     )
 
-  const runNow = (automation: AutomationRecord) =>
-    runAction(automation, () =>
+  const runOnPr = (review: ReviewRecord, prNumber: number) =>
+    runAction(review, () =>
       postJson(
-        "/api/automations/run-now",
-        { automationId: automation._id },
+        "/api/reviews/run-now",
+        { prNumber, reviewId: review._id },
         {},
-        { fallbackError: "Unable to run automation." }
+        { fallbackError: "Unable to run review." }
       )
     )
 
   const confirmDelete = async () => {
-    const automation = pendingDelete
+    const review = pendingDelete
     setPendingDelete(null)
-    if (!automation) return
-    if (editingId === automation._id) setActive(null)
-    await runAction(automation, () =>
+    if (!review) return
+    if (editingId === review._id) setActive(null)
+    await runAction(review, () =>
       postJson(
-        "/api/automations/delete",
-        { automationId: automation._id },
+        "/api/reviews/delete",
+        { reviewId: review._id },
         {},
-        { fallbackError: "Unable to delete automation." }
+        { fallbackError: "Unable to delete review." }
       )
     )
   }
 
-  const rowProps = (automation: AutomationRecord) => ({
-    automation,
-    busy: busyId === automation._id,
-    expanded: expandedId === automation._id,
-    onDelete: () => setPendingDelete(automation),
-    onEdit: () => setActive(automation),
+  const rowProps = (review: ReviewRecord) => ({
+    busy: busyId === review._id,
+    expanded: expandedId === review._id,
+    onDelete: () => setPendingDelete(review),
+    onEdit: () => setActive(review),
     onOpenThread,
-    onRunNow: () => void runNow(automation),
-    onToggle: (enabled: boolean) => void toggle(automation, enabled),
+    onRunOnPr: (prNumber: number) => void runOnPr(review, prNumber),
+    onToggle: (enabled: boolean) => void toggle(review, enabled),
     onToggleExpanded: () =>
-      setExpandedId((current) =>
-        current === automation._id ? null : automation._id
-      ),
+      setExpandedId((current) => (current === review._id ? null : review._id)),
+    review,
   })
 
-  const current = automations?.filter((automation) => automation.enabled) ?? []
-  const paused = automations?.filter((automation) => !automation.enabled) ?? []
+  const current = reviews?.filter((review) => review.enabled) ?? []
+  const paused = reviews?.filter((review) => !review.enabled) ?? []
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         <div className="mx-auto w-full max-w-2xl px-4 pt-8 pb-[calc(5rem+env(safe-area-inset-bottom))] md:px-8 md:pt-12">
           {active !== null ? (
-            <AutomationComposer
+            <ReviewComposer
               key={active === "new" ? "new" : active._id}
-              automation={active === "new" ? null : active}
+              review={active === "new" ? null : active}
               defaultRepoUrl={defaultRepoUrl}
               onCancel={() => setActive(null)}
-              onSaved={(automationId) => {
+              onSaved={(reviewId) => {
                 setActive(null)
-                setExpandedId(automationId)
+                setExpandedId(reviewId)
               }}
             />
           ) : (
             <>
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <h1 className="text-2xl tracking-tight">Automations</h1>
+                  <h1 className="text-2xl tracking-tight">Review</h1>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Run prompts on a schedule in fresh sandboxes.
+                    Review new pull requests in fresh sandboxes and comment on
+                    GitHub.
                   </p>
                 </div>
-                {automations?.length ? (
+                {reviews?.length ? (
                   <Button
                     size="sm"
                     onClick={() => setActive("new")}
                     className="shrink-0 gap-1.5"
                   >
                     <Plus className="size-4" />
-                    New automation
+                    New review
                   </Button>
                 ) : null}
               </div>
@@ -429,7 +505,7 @@ export function AutomationsScreen({
                 <p className="mt-4 text-sm text-destructive">{actionError}</p>
               ) : null}
 
-              {automations === undefined ? (
+              {reviews === undefined ? (
                 <div className="mt-10 space-y-6">
                   {[0, 1].map((index) => (
                     <div key={index}>
@@ -438,27 +514,21 @@ export function AutomationsScreen({
                     </div>
                   ))}
                 </div>
-              ) : automations.length === 0 ? (
+              ) : reviews.length === 0 ? (
                 <EmptyState onCreate={() => setActive("new")} />
               ) : (
                 <>
                   {current.length ? (
                     <Section title="Current">
-                      {current.map((automation) => (
-                        <AutomationRow
-                          key={automation._id}
-                          {...rowProps(automation)}
-                        />
+                      {current.map((review) => (
+                        <ReviewRow key={review._id} {...rowProps(review)} />
                       ))}
                     </Section>
                   ) : null}
                   {paused.length ? (
                     <Section title="Paused">
-                      {paused.map((automation) => (
-                        <AutomationRow
-                          key={automation._id}
-                          {...rowProps(automation)}
-                        />
+                      {paused.map((review) => (
+                        <ReviewRow key={review._id} {...rowProps(review)} />
                       ))}
                     </Section>
                   ) : null}
@@ -471,8 +541,8 @@ export function AutomationsScreen({
 
       {pendingDelete ? (
         <SettingsConfirmDialog
-          title="Delete automation?"
-          description={`"${pendingDelete.name}" will stop running. Its chat and run history are kept.`}
+          title="Delete review?"
+          description={`"${pendingDelete.name}" will stop reviewing pull requests. Its review threads are kept.`}
           confirmLabel="Delete"
           destructive
           onConfirm={() => void confirmDelete()}

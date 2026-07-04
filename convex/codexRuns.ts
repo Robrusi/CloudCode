@@ -3,6 +3,7 @@ import { v, type Infer } from "convex/values"
 import type { Id } from "./_generated/dataModel"
 import { mutation, query, type MutationCtx } from "./_generated/server"
 import { recordAutomationRunOutcome } from "./lib/automationRecords"
+import { recordReviewRunOutcome } from "./lib/reviewRecords"
 import { compactMessageMeta, compactRunLogs } from "./lib/codexRunLogs"
 import {
   activeRunForThread,
@@ -763,14 +764,12 @@ export const workerComplete = mutation({
       updatedAt: now,
     })
 
-    await recordAutomationRunOutcome(
-      ctx,
-      run,
-      nextStatus,
+    const outcomeError =
       nextStatus === "failed"
         ? (args.statusText ?? `Run exited with code ${args.exitCode}.`)
         : undefined
-    )
+    await recordAutomationRunOutcome(ctx, run, nextStatus, outcomeError)
+    await recordReviewRunOutcome(ctx, run, nextStatus, outcomeError)
 
     return { canceled: false }
   },
@@ -821,6 +820,7 @@ export const workerFail = mutation({
     ])
 
     await recordAutomationRunOutcome(ctx, run, "failed", args.error)
+    await recordReviewRunOutcome(ctx, run, "failed", args.error)
 
     return { canceled: false }
   },

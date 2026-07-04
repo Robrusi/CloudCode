@@ -187,6 +187,7 @@ function hotContinuationFingerprint({
           repoPath: paths.repoPath,
           runtimeHome: paths.runtimeHome,
         },
+        prNumber: input.prNumber ?? null,
         requestedBranchName,
         sandboxPreset: input.sandboxPreset ?? null,
         useBaseBranch,
@@ -397,6 +398,15 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
   const repoUrl = parseRequiredGitRepoUrl(input.repoUrl)
   const baseBranch = parseGitRef(input.baseBranch, "baseBranch")
   const useBaseBranch = parseBranchMode(input.branchMode) === "base"
+  const prNumber =
+    input.prNumber !== undefined &&
+    Number.isInteger(input.prNumber) &&
+    input.prNumber > 0
+      ? input.prNumber
+      : undefined
+  if (input.prNumber !== undefined && !prNumber) {
+    throw new Error("prNumber must be a positive integer.")
+  }
   const requestedBranchName = useBaseBranch
     ? undefined
     : parseGitRef(input.branchName, "branchName")
@@ -737,6 +747,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         gitAuth,
         githubToken,
         input,
+        prNumber,
         requestedBranchName,
         repoUrl,
         sandbox,
@@ -763,6 +774,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
           gitAuth,
           input,
           paths,
+          prNumber,
           requestedBranchName,
           sandbox,
           useBaseBranch,

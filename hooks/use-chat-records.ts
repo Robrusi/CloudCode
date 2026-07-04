@@ -56,9 +56,17 @@ export function useChatRecords() {
   )
   const updateThread = useMutation(api.chats.updateThread)
   const setThreadNotes = useMutation(api.chats.setThreadNotes)
-  const [activeId, setActiveIdState] = useState<Id<"threads"> | null>(
-    () => readBrowserStorage(ACTIVE_KEY) as Id<"threads"> | null
-  )
+  const [activeId, setActiveIdState] = useState<Id<"threads"> | null>(() => {
+    // ?thread= deep-links open a specific conversation (e.g. from the review
+    // comment a run posted on GitHub) and win over the remembered thread.
+    if (typeof window !== "undefined") {
+      const requested = new URLSearchParams(window.location.search).get(
+        "thread"
+      )
+      if (requested) return requested as Id<"threads">
+    }
+    return readBrowserStorage(ACTIVE_KEY) as Id<"threads"> | null
+  })
   const activeRunKey = activeId ? (activeId as string) : DRAFT_RUN_KEY
   // Identity for the scroll container and per-thread render keys. It follows
   // the active thread for ordinary navigation, but is held stable while a draft

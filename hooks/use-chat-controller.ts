@@ -159,10 +159,14 @@ export function useChatController(): ChatShellProps {
       : !window.matchMedia(MOBILE_MEDIA_QUERY).matches
   )
   const isMobile = useIsMobile()
-  const [view, setView] = useState<"chat" | "settings" | "automations">(() => {
+  const [view, setView] = useState<
+    "chat" | "settings" | "automations" | "reviews"
+  >(() => {
     if (typeof window === "undefined") return "chat"
     const requested = new URLSearchParams(window.location.search).get("view")
-    return requested === "settings" || requested === "automations"
+    return requested === "settings" ||
+      requested === "automations" ||
+      requested === "reviews"
       ? requested
       : "chat"
   })
@@ -317,6 +321,7 @@ export function useChatController(): ChatShellProps {
     selectChat,
     selectSettingsSection,
     showAutomations,
+    showReviews,
     showSettings,
     startNewChat,
     startNewChatInRepo,
@@ -664,6 +669,10 @@ export function useChatController(): ChatShellProps {
         defaultRepoUrl: draftRepo,
         onOpenThread: selectChat,
       },
+      reviews: {
+        defaultRepoUrl: draftRepo,
+        onOpenThread: selectChat,
+      },
       composer: {
         enabled: composerEnabled,
         props: composerProps,
@@ -750,6 +759,7 @@ export function useChatController(): ChatShellProps {
         onSelect: selectChat,
         onSelectSettingsSection: selectSettingsSection,
         onShowAutomations: showAutomations,
+        onShowReviews: showReviews,
         onShowSettings: () => showSettings(),
         settingsSection,
       },
@@ -798,7 +808,9 @@ export function useChatController(): ChatShellProps {
             ? "Settings"
             : view === "automations"
               ? "Automations"
-              : (active?.title ?? null),
+              : view === "reviews"
+                ? "Review"
+                : (active?.title ?? null),
       },
       sandbox: {
         action: sandboxAction,

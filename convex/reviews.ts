@@ -1,0 +1,596 @@
+import { v } from "convex/values"
+
+import type { Doc, Id } from "./_generated/dataModel"
+import { mutation, query, type MutationCtx } from "./_generated/server"
+import { findCodexAuth } from "./lib/codexRunAuth"
+import {
+  appendCodexRunLogs,
+  upsertCodexRunCheckpoint,
+} from "./lib/codexRunRecords"
+import { model, speed, thinking } from "./lib/codexRunValidators"
+import { disableReview, recordReviewFailure } from "./lib/reviewRecords"
+import { resolveOwnedPresetOrAutoDefault } from "./lib/sandboxPresets"
+import { ensureCurrentUser, getCurrentUser } from "./lib/users"
+import { requireWorkerSecret } from "./lib/workerAuth"
+import {
+  codexAuthMissingMessage,
+  codexAuthReconnectMessage,
+} from "@/lib/codex/auth-errors"
+import { canonicalGitHubRepoUrl } from "@/lib/github/repo"
+import { buildReviewPrompt } from "@/lib/reviews/prompt"
+
+const THREAD_TITLE_MAX_LENGTH = 120
+
+const reviewConfigArgs = {
+  autoEnvironment: v.optional(v.boolean()),
+  model,
+  name: v.string(),
+  profile: v.optional(v.string()),
+  prompt: v.optional(v.string()),
+  reasoningEffort: thinking,
+  repoUrl: v.string(),
+  reviewReadyForReview: v.optional(v.boolean()),
+  sandboxPresetId: v.optional(v.id("sandboxPresets")),
+  speed,
+}
+
+type ReviewConfigArgs = {
+  autoEnvironment?: boolean
+  model: Doc<"reviews">["model"]
+  name: string
+  profile?: string
+  prompt?: string
+  reasoningEffort: Doc<"reviews">["reasoningEffort"]
+  repoUrl: string
+  reviewReadyForReview?: boolean
+  sandboxPresetId?: Id<"sandboxPresets">
+  speed: Doc<"reviews">["speed"]
+}
+
+const reviewPullRequestArgs = v.object({
+  authorLogin: v.optional(v.string()),
+  baseRef: v.string(),
+  body: v.optional(v.string()),
+  crossFork: v.boolean(),
+  headRef: v.string(),
+  headSha: v.string(),
+  htmlUrl: v.string(),
+  number: v.number(),
+  title: v.string(),
+})
+
+// Reviews are triggered by GitHub webhooks, so the repo must be a GitHub URL
+// stored in canonical form for the webhook's repository lookup to match.
+function validateReviewConfig(args: ReviewConfigArgs) {
+  if (!args.name.trim()) throw new Error("name is required.")
+  const repoUrl = canonicalGitHubRepoUrl(args.repoUrl)
+  if (!repoUrl) throw new Error("repoUrl must be a GitHub repository URL.")
+
+  return { repoUrl }
+}
+
+async function requireOwnedReview(
+  ctx: MutationCtx,
+  reviewId: Id<"reviews">,
+  userId: Id<"users">
+) {
+  const review = await ctx.db.get(reviewId)
+  if (!review || review.userId !== userId) {
+    throw new Error("Review not found.")
+  }
+
+  return review
+}
+
+export const list = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUser(ctx)
+    if (!user) return []
+
+    const reviews = await ctx.db
+      .query("reviews")
+      .withIndex("by_user_updated", (q) => q.eq("userId", user._id))
+      .order("desc")
+      .collect()
+
+    return reviews
+  },
+})
+
+export const get = query({
+  args: {
+    reviewId: v.id("reviews"),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx)
+    if (!user) return null
+
+    const review = await ctx.db.get(args.reviewId)
+    if (!review || review.userId !== user._id) return null
+
+    return review
+  },
+})
+
+export const create = mutation({
+  args: reviewConfigArgs,
+  handler: async (ctx, args) => {
+    const userId = await ensureCurrentUser(ctx)
+    const { repoUrl } = validateReviewConfig(args)
+    const sandboxPresetId = await resolveOwnedPresetOrAutoDefault(
+      ctx,
+      args.sandboxPresetId,
+      userId,
+      { autoEnvironment: args.autoEnvironment }
+    )
+
+    const now = Date.now()
+    const reviewId = await ctx.db.insert("reviews", {
+      autoEnvironment: args.autoEnvironment,
+      createdAt: now,
+      enabled: true,
+      failureCount: 0,
+      model: args.model,
+      name: args.name.trim(),
+      ...(args.profile ? { profile: args.profile } : {}),
+      ...(args.prompt?.trim() ? { prompt: args.prompt.trim() } : {}),
+      reasoningEffort: args.reasoningEffort,
+      repoUrl,
+      ...(args.reviewReadyForReview ? { reviewReadyForReview: true } : {}),
+      sandboxPresetId,
+      speed: args.speed,
+      updatedAt: now,
+      userId,
+    })
+
+    return { reviewId }
+  },
+})
+
+export const update = mutation({
+  args: {
+    ...reviewConfigArgs,
+    reviewId: v.id("reviews"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await ensureCurrentUser(ctx)
+    const { repoUrl } = validateReviewConfig(args)
+    const review = await requireOwnedReview(ctx, args.reviewId, userId)
+    const sandboxPresetId = await resolveOwnedPresetOrAutoDefault(
+      ctx,
+      args.sandboxPresetId,
+      userId,
+      { autoEnvironment: args.autoEnvironment }
+    )
+
+    await ctx.db.patch(review._id, {
+      autoEnvironment: args.autoEnvironment,
+      model: args.model,
+      name: args.name.trim(),
+      profile: args.profile,
+      prompt: args.prompt?.trim() || undefined,
+      reasoningEffort: args.reasoningEffort,
+      repoUrl,
+      reviewReadyForReview: args.reviewReadyForReview || undefined,
+      sandboxPresetId,
+      speed: args.speed,
+      updatedAt: Date.now(),
+    })
+
+    return { reviewId: review._id }
+  },
+})
+
+export const setEnabled = mutation({
+  args: {
+    enabled: v.boolean(),
+    reviewId: v.id("reviews"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await ensureCurrentUser(ctx)
+    const review = await requireOwnedReview(ctx, args.reviewId, userId)
+
+    await ctx.db.patch(review._id, {
+      disabledReason: undefined,
+      enabled: args.enabled,
+      ...(args.enabled ? { failureCount: 0 } : {}),
+      updatedAt: Date.now(),
+    })
+  },
+})
+
+export const remove = mutation({
+  args: {
+    reviewId: v.id("reviews"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await ensureCurrentUser(ctx)
+    const review = await requireOwnedReview(ctx, args.reviewId, userId)
+
+    // Run threads carry real conversation history and survive as normal
+    // chats; only the config is dropped.
+    await ctx.db.delete(review._id)
+  },
+})
+
+const RECENT_RUNS_MAX_LIMIT = 100
+
+/** Latest runs of one review, for the expandable row on the screen. Fetches
+ * one row past `limit` so the client knows whether to offer more. */
+export const recentRuns = query({
+  args: {
+    limit: v.number(),
+    reviewId: v.id("reviews"),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx)
+    if (!user) return { hasMore: false, runs: [] }
+
+    const review = await ctx.db.get(args.reviewId)
+    if (!review || review.userId !== user._id) {
+      return { hasMore: false, runs: [] }
+    }
+
+    const limit = Math.min(
+      Math.max(Math.floor(args.limit), 1),
+      RECENT_RUNS_MAX_LIMIT
+    )
+    const runs = await ctx.db
+      .query("codexRuns")
+      .withIndex("by_review_created", (q) => q.eq("reviewId", args.reviewId))
+      .order("desc")
+      .take(limit + 1)
+
+    return {
+      hasMore: runs.length > limit,
+      runs: runs.slice(0, limit).map((run) => ({
+        createdAt: run.createdAt,
+        finishedAt: run.finishedAt,
+        id: run._id,
+        prNumber: run.prNumber,
+        prTitle: run.prTitle,
+        prUrl: run.prUrl,
+        reviewCommentUrl: run.reviewCommentUrl,
+        status: run.status,
+        threadId: run.threadId,
+      })),
+    }
+  },
+})
+
+// The webhook fires for a repository, not a user: signature verification
+// authenticates the event, and per-user authorization happens downstream at
+// GitHub token mint and codex auth lookup.
+export const listEnabledForRepoForWorker = query({
+  args: {
+    repoUrl: v.string(),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    const reviews = await ctx.db
+      .query("reviews")
+      .withIndex("by_repo_enabled", (q) =>
+        q.eq("repoUrl", args.repoUrl).eq("enabled", true)
+      )
+      .collect()
+
+    return reviews.map((review) => ({
+      _id: review._id,
+      reviewReadyForReview: review.reviewReadyForReview ?? false,
+      userId: review.userId,
+    }))
+  },
+})
+
+export const getForWorker = query({
+  args: {
+    reviewId: v.id("reviews"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    return await ctx.db.get(args.reviewId)
+  },
+})
+
+export const workerCreateRun = mutation({
+  args: {
+    githubToken: v.optional(v.string()),
+    githubUserEmail: v.optional(v.string()),
+    githubUserName: v.optional(v.string()),
+    githubUsername: v.optional(v.string()),
+    manual: v.boolean(),
+    notesAccessToken: v.string(),
+    pr: reviewPullRequestArgs,
+    reviewId: v.id("reviews"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    const review = await ctx.db.get(args.reviewId)
+    if (!review) {
+      return { ok: false as const, status: "not_found" as const }
+    }
+    if (!review.enabled && !args.manual) {
+      return { ok: false as const, status: "disabled" as const }
+    }
+
+    // Duplicate webhook deliveries (and opened + ready_for_review with an
+    // unchanged head) must not review the same commit twice. Manual runs are
+    // an explicit request, so they always go through.
+    if (!args.manual) {
+      const priorRuns = await ctx.db
+        .query("codexRuns")
+        .withIndex("by_review_pr", (q) =>
+          q.eq("reviewId", args.reviewId).eq("prNumber", args.pr.number)
+        )
+        .collect()
+      const duplicate = priorRuns.some(
+        (run) => run.prHeadSha === args.pr.headSha && run.status !== "canceled"
+      )
+      if (duplicate) {
+        return { ok: false as const, status: "duplicate" as const }
+      }
+    }
+
+    const sandboxPresetId = await resolveOwnedPresetOrAutoDefault(
+      ctx,
+      review.sandboxPresetId,
+      review.userId,
+      { autoEnvironment: review.autoEnvironment }
+    )
+    const { auth, profile: authProfile } = await findCodexAuth(
+      ctx,
+      review.userId,
+      review.profile,
+      { fallbackToActive: true }
+    )
+    if (!auth) {
+      return {
+        ok: false as const,
+        message: codexAuthMissingMessage(authProfile),
+        status: "missing_auth" as const,
+      }
+    }
+    if (auth.invalidatedAt) {
+      return {
+        ok: false as const,
+        message: codexAuthReconnectMessage(authProfile),
+        status: "auth_reconnect_required" as const,
+      }
+    }
+
+    const now = Date.now()
+    const userId = review.userId
+    const prompt = buildReviewPrompt(review.prompt, review.repoUrl, args.pr)
+    const title = `PR #${args.pr.number}: ${args.pr.title}`
+
+    // Each pull request gets its own thread; the first message gives it real
+    // content, so it shows up in the chat list like any other conversation.
+    const threadId = await ctx.db.insert("threads", {
+      baseBranch: args.pr.baseRef,
+      branchMode: "base",
+      createdAt: now,
+      model: review.model,
+      repoUrl: review.repoUrl,
+      sandboxPresetId,
+      title:
+        title.length > THREAD_TITLE_MAX_LENGTH
+          ? `${title.slice(0, THREAD_TITLE_MAX_LENGTH)}…`
+          : title,
+      updatedAt: now,
+      userId,
+    })
+
+    await ctx.db.insert("messages", {
+      content: prompt,
+      role: "user",
+      threadId,
+      userId,
+    })
+    const assistantMessageId = await ctx.db.insert("messages", {
+      content: "",
+      pending: true,
+      role: "assistant",
+      speed: review.speed,
+      thinking: review.reasoningEffort,
+      threadId,
+      userId,
+    })
+
+    const queuedLog = {
+      kind: "setup" as const,
+      message: `Queued review of PR #${args.pr.number}`,
+      time: now,
+    }
+    const runId = await ctx.db.insert("codexRuns", {
+      assistantMessageId,
+      baseBranch: args.pr.baseRef,
+      branchMode: "base",
+      createdAt: now,
+      ephemeralSandbox: true,
+      model: review.model,
+      prHeadSha: args.pr.headSha,
+      prNumber: args.pr.number,
+      prTitle: args.pr.title,
+      prUrl: args.pr.htmlUrl,
+      profile: auth.profile,
+      reasoningEffort: review.reasoningEffort,
+      repoUrl: review.repoUrl,
+      reviewId: review._id,
+      sandboxPresetId,
+      speed: review.speed,
+      status: "queued",
+      threadId,
+      updatedAt: now,
+      userId,
+      ...(args.githubUserEmail
+        ? { githubUserEmail: args.githubUserEmail }
+        : {}),
+      ...(args.githubUserName ? { githubUserName: args.githubUserName } : {}),
+      ...(args.githubUsername ? { githubUsername: args.githubUsername } : {}),
+    })
+
+    await Promise.all([
+      ctx.db.insert("codexRunInputs", {
+        ...(args.githubToken ? { githubToken: args.githubToken } : {}),
+        notesAccessToken: args.notesAccessToken,
+        prompt,
+        runId,
+        userId,
+      }),
+      upsertCodexRunCheckpoint(
+        ctx,
+        { _id: runId, threadId, userId },
+        { content: "" }
+      ),
+      appendCodexRunLogs(ctx, { _id: runId, threadId, userId }, [queuedLog]),
+      ctx.db.patch(threadId, {
+        hasPendingMessage: true,
+        lastUserMessageAt: now,
+        updatedAt: now,
+      }),
+      ctx.db.patch(review._id, {
+        lastRunAt: now,
+        lastRunError: undefined,
+        lastRunStatus: "running",
+        updatedAt: now,
+      }),
+    ])
+
+    return {
+      ok: true as const,
+      runId,
+      threadId,
+      userId,
+    }
+  },
+})
+
+export const recordSkipForWorker = mutation({
+  args: {
+    reviewId: v.id("reviews"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    const review = await ctx.db.get(args.reviewId)
+    if (!review) return
+
+    await ctx.db.patch(review._id, {
+      lastRunAt: Date.now(),
+      lastRunStatus: "skipped",
+      updatedAt: Date.now(),
+    })
+  },
+})
+
+export const recordDispatchFailureForWorker = mutation({
+  args: {
+    error: v.string(),
+    reviewId: v.id("reviews"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    const review = await ctx.db.get(args.reviewId)
+    if (!review) return
+
+    await recordReviewFailure(ctx, review, "dispatch_failed", args.error)
+  },
+})
+
+export const disableForWorker = mutation({
+  args: {
+    reason: v.string(),
+    reviewId: v.id("reviews"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    const review = await ctx.db.get(args.reviewId)
+    if (!review) return
+
+    await disableReview(ctx, review, args.reason)
+  },
+})
+
+/** The finished run's report for the comment-posting step. Content lives on
+ * the assistant message: workerComplete writes it there, not on the run. */
+export const workerGetRunOutcome = query({
+  args: {
+    runId: v.id("codexRuns"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    const run = await ctx.db.get(args.runId)
+    if (!run?.reviewId) return null
+
+    const message = await ctx.db.get(run.assistantMessageId)
+
+    return {
+      content: message?.content ?? "",
+      prNumber: run.prNumber,
+      prUrl: run.prUrl,
+      reviewId: run.reviewId,
+      status: run.status,
+      threadId: run.threadId,
+    }
+  },
+})
+
+export const workerRecordCommentPosted = mutation({
+  args: {
+    commentUrl: v.string(),
+    runId: v.id("codexRuns"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    const run = await ctx.db.get(args.runId)
+    if (!run?.reviewId) return
+
+    const now = Date.now()
+    await Promise.all([
+      ctx.db.patch(run._id, {
+        reviewCommentUrl: args.commentUrl,
+        updatedAt: now,
+      }),
+      appendCodexRunLogs(ctx, run, [
+        {
+          detail: args.commentUrl,
+          kind: "setup" as const,
+          message: "Posted review comment",
+          time: now,
+        },
+      ]),
+    ])
+  },
+})
+
+export const workerRecordCommentFailure = mutation({
+  args: {
+    error: v.string(),
+    reviewId: v.id("reviews"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    const review = await ctx.db.get(args.reviewId)
+    if (!review) return
+
+    await recordReviewFailure(ctx, review, "failed", args.error)
+  },
+})

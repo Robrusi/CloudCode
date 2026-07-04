@@ -20,6 +20,7 @@ import { logsForMessage } from "@/components/chat/message-model"
 import { RunSetupSummary } from "@/components/chat/message-setup"
 import { AllDiffsPanel, NotesPanel } from "@/components/chat/panels"
 import { AutomationsScreen } from "@/components/automations/screen"
+import { ReviewsScreen } from "@/components/reviews/screen"
 import type { SettingsSectionId } from "@/components/settings/sections"
 import { SettingsScreen } from "@/components/settings/screen"
 import type { Message } from "@/components/chat/types"
@@ -32,7 +33,7 @@ import type { GitHubAuthStatus } from "@/lib/github/auth"
 import type { SandboxPresetRecord } from "@/lib/sandbox/preset-types"
 import { cn } from "@/lib/shared/utils"
 
-type ChatView = "chat" | "settings" | "automations"
+type ChatView = "chat" | "settings" | "automations" | "reviews"
 type MainContentDiffStyle = "split" | "unified"
 
 type SettingsContent = {
@@ -47,6 +48,11 @@ type SettingsContent = {
 }
 
 type AutomationsContent = {
+  defaultRepoUrl: string
+  onOpenThread: (threadId: Id<"threads">) => void
+}
+
+type ReviewsContent = {
   defaultRepoUrl: string
   onOpenThread: (threadId: Id<"threads">) => void
 }
@@ -117,6 +123,7 @@ type ComposerContent = {
 export function ChatMainContent({
   automations,
   composer,
+  reviews,
   settings,
   terminal,
   thread,
@@ -125,6 +132,7 @@ export function ChatMainContent({
 }: {
   automations: AutomationsContent
   composer: ComposerContent
+  reviews: ReviewsContent
   settings: SettingsContent
   terminal: TerminalContent
   thread: ThreadContent
@@ -187,6 +195,10 @@ export function ChatMainContent({
 
   if (view === "automations") {
     return <AutomationsScreen {...automations} />
+  }
+
+  if (view === "reviews") {
+    return <ReviewsScreen {...reviews} />
   }
 
   const panelOpen =

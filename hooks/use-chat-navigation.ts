@@ -28,7 +28,7 @@ export function useChatNavigation({
   setPromptFocused: (value: boolean) => void
   setSettingsSection: (section: SettingsSectionId) => void
   setSidebarOpen: (value: boolean) => void
-  setView: (value: "chat" | "settings" | "automations") => void
+  setView: (value: "chat" | "settings" | "automations" | "reviews") => void
 }) {
   const closeSidebarOnMobile = useCallback(() => {
     if (isMobile) setSidebarOpen(false)
@@ -106,6 +106,20 @@ export function useChatNavigation({
     setView,
   ])
 
+  const showReviews = useCallback(() => {
+    setPromptFocused(false)
+    setView("reviews")
+    clearDraftAttachments()
+    resetThreadWorkspace()
+    closeSidebarOnMobile()
+  }, [
+    clearDraftAttachments,
+    closeSidebarOnMobile,
+    resetThreadWorkspace,
+    setPromptFocused,
+    setView,
+  ])
+
   const exitSettings = useCallback(() => {
     setView("chat")
   }, [setView])
@@ -123,6 +137,7 @@ export function useChatNavigation({
     selectChat,
     selectSettingsSection,
     showAutomations,
+    showReviews,
     showSettings,
     startNewChat,
     startNewChatInRepo,
