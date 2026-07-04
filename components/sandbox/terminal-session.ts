@@ -1,5 +1,7 @@
 import {
   persistedTerminalIdsForSandbox,
+  removePersistedTerminalOutput,
+  removePersistedTerminalOutputs,
   removePersistedTerminalSessions,
 } from "@/components/sandbox/terminal-storage"
 import { requestJson } from "@/lib/http/client-json"
@@ -23,18 +25,32 @@ function forgetTerminalSession(sandboxId: string, terminalId: string) {
 export function killBrowserTerminalSession(
   sandboxId: string,
   terminalId: string,
-  options: { forget?: boolean } = {}
+  options: { forget?: boolean; ignoreErrors?: boolean } = {}
 ) {
-  if (options.forget !== false) {
+  const forget = options.forget !== false
+
+  function forgetLocalSession() {
+    if (!forget) return
     forgetTerminalSession(sandboxId, terminalId)
+    removePersistedTerminalOutput(sandboxId, terminalId)
   }
 
-  return requestJson<void>(
+  const request = requestJson<void>(
     "/api/sandbox/terminal/ws",
     "DELETE",
     { sandboxId, terminalId },
     { init: { cache: "no-store" } }
-  ).catch(() => undefined)
+  )
+
+  if (options.ignoreErrors === false) {
+    return request.then((value) => {
+      forgetLocalSession()
+      return value
+    })
+  }
+
+  forgetLocalSession()
+  return request.catch(() => undefined)
 }
 
 export function registerTerminalCloser(
@@ -56,7 +72,7 @@ export function registerTerminalCloser(
 
 export function closeBrowserTerminalSession(
   sandboxId?: string,
-  options: { killRemote?: boolean } = {}
+  options: { forgetPersisted?: boolean; killRemote?: boolean } = {}
 ) {
   if (!sandboxId) return
   const ids = new Set([
@@ -72,5 +88,8 @@ export function closeBrowserTerminalSession(
   }
   terminalClosers.delete(sandboxId)
   terminalIds.delete(sandboxId)
-  removePersistedTerminalSessions(sandboxId)
+  if (options.forgetPersisted !== false) {
+    removePersistedTerminalOutputs(sandboxId, ids)
+    removePersistedTerminalSessions(sandboxId)
+  }
 }

@@ -45,6 +45,7 @@ type TopBarTools = {
   github: TopBarToolControl
   ssh: TopBarToolControl
   terminal: {
+    canOpen: boolean
     onPreload: () => void
     onToggle: () => void
     open: boolean
@@ -98,6 +99,7 @@ export function TopBar({
   const canOpenContext = context.canOpen
   const onToggleContext = context.onToggle
   const terminalOpen = terminal.open
+  const canOpenTerminal = terminal.canOpen
   const onPreloadTerminal = terminal.onPreload
   const onToggleTerminal = terminal.onToggle
 
@@ -183,9 +185,8 @@ export function TopBar({
               <StickyNote className="size-3.5" />
             </TopBarIconButton>
             <TopBarToolsMenu
-              sandboxId={sandboxId}
-              sandboxPending={sandboxPending}
               terminalOpen={terminalOpen}
+              canOpenTerminal={canOpenTerminal}
               onPreloadTerminal={onPreloadTerminal}
               onToggleTerminal={onToggleTerminal}
               githubOpen={githubOpen}

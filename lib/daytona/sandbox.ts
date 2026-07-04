@@ -708,8 +708,11 @@ export async function writeDaytonaFile(
   await sandbox.fs.uploadFile(content, path)
 }
 
-export async function getDaytonaTerminalUrl(sandboxId: string) {
-  const sandbox = await getStartedDaytonaSandbox(sandboxId)
+export async function getDaytonaTerminalUrl(
+  sandboxId: string,
+  options: { sandbox?: Sandbox } = {}
+) {
+  const sandbox = options.sandbox ?? (await getRunningDaytonaSandbox(sandboxId))
   const signed = await sandbox.getSignedPreviewUrl(DAYTONA_TERMINAL_PORT, 3600)
   return signed.url
 }

@@ -228,8 +228,8 @@ export function useChatController(): ChatShellProps {
     optimisticRuns,
     runningRunKeys,
   })
-  const terminalVisible =
-    terminalOpen && (Boolean(activeSandboxId) || activeRunPending)
+  const terminalCanOpen = activeRunPending || activeSandboxState === "running"
+  const terminalVisible = terminalOpen && terminalCanOpen
   const repoUrl = active ? active.repoUrl : draftRepo
   const baseBranch = active ? (active.baseBranch ?? "") : draftBaseBranch
   const model = active ? active.model : draftModel
@@ -889,6 +889,7 @@ export function useChatController(): ChatShellProps {
           open: sshOpen,
         },
         terminal: {
+          canOpen: terminalCanOpen,
           onPreload: preloadTerminalPanel,
           onToggle: toggleTerminal,
           open: terminalVisible,

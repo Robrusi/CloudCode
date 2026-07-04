@@ -18,9 +18,8 @@ import { cn } from "@/lib/shared/utils"
 
 export function TopBarToolsMenu({
   className,
-  sandboxId,
-  sandboxPending,
   terminalOpen,
+  canOpenTerminal,
   onPreloadTerminal,
   onToggleTerminal,
   githubOpen,
@@ -35,9 +34,8 @@ export function TopBarToolsMenu({
   onToggleSsh,
 }: {
   className?: string
-  sandboxId: string | null
-  sandboxPending: boolean
   terminalOpen: boolean
+  canOpenTerminal: boolean
   onPreloadTerminal: () => void
   onToggleTerminal: () => void
   githubOpen: boolean
@@ -61,7 +59,7 @@ export function TopBarToolsMenu({
       label: terminalOpen ? "Hide terminals" : "Terminals",
       icon: <SquareTerminal className="size-4" />,
       active: terminalOpen,
-      disabled: !sandboxId && !sandboxPending,
+      disabled: !canOpenTerminal,
       onSelect: () => {
         onPreloadTerminal()
         onToggleTerminal()

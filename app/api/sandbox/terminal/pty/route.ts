@@ -282,6 +282,13 @@ export async function DELETE(request: Request) {
     return jsonError("Sandbox not found.", 404)
   }
 
-  await killDaytonaTerminal(sandboxId, terminalId)
-  return NextResponse.json({ ok: true })
+  try {
+    await killDaytonaTerminal(sandboxId, terminalId)
+    return NextResponse.json({ ok: true })
+  } catch (error) {
+    return terminalOperationErrorResponse(
+      error,
+      "Unable to delete Daytona terminal."
+    )
+  }
 }

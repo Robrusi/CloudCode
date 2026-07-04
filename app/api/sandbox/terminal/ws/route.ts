@@ -153,6 +153,13 @@ export async function DELETE(request: Request) {
   const access = await requireTerminalAccess(sandboxId)
   if ("response" in access) return access.response
 
-  await killDaytonaTerminal(sandboxId, terminalId)
-  return NextResponse.json({ ok: true })
+  try {
+    await killDaytonaTerminal(sandboxId, terminalId)
+    return NextResponse.json({ ok: true })
+  } catch (error) {
+    return terminalOperationErrorResponse(
+      error,
+      "Unable to delete Daytona terminal."
+    )
+  }
 }

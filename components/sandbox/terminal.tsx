@@ -1,6 +1,14 @@
 "use client"
 
-import { CircleDot, Loader2, OctagonX, Plus, RefreshCw, X } from "lucide-react"
+import {
+  CircleDot,
+  Loader2,
+  OctagonX,
+  Plus,
+  RefreshCw,
+  SquareTerminal,
+  X,
+} from "lucide-react"
 import { useTheme } from "next-themes"
 import { useCallback, useEffect, useReducer, useRef, useState } from "react"
 
@@ -169,24 +177,42 @@ export function SandboxTerminalPanel({
   }
 
   function closeTerminalWindow(terminalId: string) {
-    if (!connectedSandboxId || sessions.length <= 1) return
-    void killBrowserTerminalSession(connectedSandboxId, terminalId)
-    setSessionStates((current) => {
-      const next = { ...current }
-      delete next[terminalId]
-      return next
-    })
-    const currentMountedSessions =
-      mountedBySandboxRef.current[connectedSandboxId]
-    if (currentMountedSessions?.[terminalId]) {
-      const { [terminalId]: _removed, ...nextSessions } = currentMountedSessions
-      void _removed
-      mountedBySandboxRef.current = {
-        ...mountedBySandboxRef.current,
-        [connectedSandboxId]: nextSessions,
+    if (!connectedSandboxId) return
+    const sandboxId = connectedSandboxId
+    void (async () => {
+      try {
+        await killBrowserTerminalSession(sandboxId, terminalId, {
+          ignoreErrors: false,
+        })
+        setSessionStates((current) => {
+          const next = { ...current }
+          delete next[terminalId]
+          return next
+        })
+        const currentMountedSessions = mountedBySandboxRef.current[sandboxId]
+        if (currentMountedSessions?.[terminalId]) {
+          const { [terminalId]: _removed, ...nextSessions } =
+            currentMountedSessions
+          void _removed
+          mountedBySandboxRef.current = {
+            ...mountedBySandboxRef.current,
+            [sandboxId]: nextSessions,
+          }
+        }
+        dispatchDock({ type: "close", sandboxId, terminalId })
+      } catch (error) {
+        setSessionStates((current) => ({
+          ...current,
+          [terminalId]: {
+            error:
+              error instanceof Error
+                ? error.message
+                : "Unable to delete terminal.",
+            status: "error",
+          },
+        }))
       }
-    }
-    dispatchDock({ type: "close", sandboxId: connectedSandboxId, terminalId })
+    })()
   }
 
   function reconnectActiveTerminal() {
@@ -198,10 +224,24 @@ export function SandboxTerminalPanel({
       [terminalId]: { error: null, status: "connecting" },
     }))
     void (async () => {
-      await killBrowserTerminalSession(sandboxId, terminalId, {
-        forget: false,
-      })
-      dispatchDock({ type: "restart", sandboxId, terminalId })
+      try {
+        await killBrowserTerminalSession(sandboxId, terminalId, {
+          forget: false,
+          ignoreErrors: false,
+        })
+        dispatchDock({ type: "restart", sandboxId, terminalId })
+      } catch (error) {
+        setSessionStates((current) => ({
+          ...current,
+          [terminalId]: {
+            error:
+              error instanceof Error
+                ? error.message
+                : "Unable to reconnect terminal.",
+            status: "error",
+          },
+        }))
+      }
     })()
   }
 
@@ -213,9 +253,12 @@ export function SandboxTerminalPanel({
   if (!open && !connectedSandboxId) return null
 
   const waitingForSandbox = open && !connectedSandboxId
+  const waitingForTerminal = Boolean(connectedSandboxId && !activeSession)
   const statusLabel = waitingForSandbox
     ? "Waiting"
-    : terminalStatusLabel(activeState)
+    : waitingForTerminal
+      ? "No terminal"
+      : terminalStatusLabel(activeState)
   const statusIsError = !waitingForSandbox && activeState?.status === "error"
   const statusIsReady = !waitingForSandbox && activeState?.status === "ready"
 
@@ -304,6 +347,8 @@ export function SandboxTerminalPanel({
               <CircleDot className="size-3.5 shrink-0 text-success" />
             ) : statusIsError ? (
               <OctagonX className="size-3.5 shrink-0" />
+            ) : waitingForTerminal ? (
+              <SquareTerminal className="size-3.5 shrink-0" />
             ) : (
               <Loader2 className="size-3.5 shrink-0 animate-spin" />
             )}
@@ -343,6 +388,10 @@ export function SandboxTerminalPanel({
                 onStatusChange={handleSessionStatusChange}
               />
             ))
+          ) : connectedSandboxId ? (
+            <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+              <span>No terminal open</span>
+            </div>
           ) : (
             <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" />
@@ -371,7 +420,6 @@ export function SandboxTerminalPanel({
             {
               label: "Delete",
               destructive: true,
-              disabled: sessions.length <= 1,
               onSelect: () => closeTerminalWindow(menu.terminalId),
             },
           ]}

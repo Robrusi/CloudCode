@@ -20,6 +20,7 @@ const MAX_REPLAY_BYTES = 1_000_000
 const GITHUB_AUTH_VERSION = 9
 const GITHUB_AUTH_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const GITHUB_AUTH_UNAVAILABLE_RECHECK_MS = 60_000
+const TERMINAL_IDLE_SESSION_TTL_MS = 5 * 60 * 1000
 
 type RunningDaytonaSandbox = Awaited<
   ReturnType<typeof getRunningDaytonaSandbox>
@@ -45,6 +46,7 @@ type TerminalSession = {
   githubAuthExpiresAt?: number
   githubAuthVersion?: number
   handle?: PtyHandle
+  idleCleanup?: ReturnType<typeof setTimeout>
   subscribers: Set<TerminalSubscriber>
 }
 
@@ -76,7 +78,10 @@ function copyBytes(data: Uint8Array) {
 
 function getSession(key: string) {
   const existing = sessions.get(key)
-  if (existing) return existing
+  if (existing) {
+    clearIdleSessionCleanup(existing)
+    return existing
+  }
 
   const session: TerminalSession = {
     buffer: [],
@@ -85,6 +90,34 @@ function getSession(key: string) {
   }
   sessions.set(key, session)
   return session
+}
+
+function clearIdleSessionCleanup(session: TerminalSession) {
+  if (!session.idleCleanup) return
+  clearTimeout(session.idleCleanup)
+  session.idleCleanup = undefined
+}
+
+function scheduleIdleSessionCleanup(key: string, session: TerminalSession) {
+  if (session.subscribers.size > 0 || session.idleCleanup) return
+
+  session.idleCleanup = setTimeout(() => {
+    void (async () => {
+      if (sessions.get(key) !== session || session.subscribers.size > 0) return
+
+      sessions.delete(key)
+      session.idleCleanup = undefined
+      const connecting = session.connecting
+      const currentHandle = session.handle
+      session.handle = undefined
+      session.connecting = undefined
+      const handle = currentHandle ?? (await connecting?.catch(() => undefined))
+      await session.githubAuth?.cleanup().catch(() => undefined)
+      session.githubAuth = undefined
+      await handle?.disconnect().catch(() => undefined)
+    })()
+  }, TERMINAL_IDLE_SESSION_TTL_MS)
+  session.idleCleanup.unref?.()
 }
 
 function appendReplayBuffer(session: TerminalSession, data: Uint8Array) {
@@ -415,6 +448,7 @@ export async function sendDaytonaTerminalInput({
 }) {
   const key = terminalSessionKey(sandboxId, terminalId)
   const session = sessions.get(key)
+  if (session) clearIdleSessionCleanup(session)
   let handle = session?.handle
   if (!handle?.isConnected() && session?.connecting) {
     handle = await session.connecting
@@ -454,6 +488,7 @@ export async function resizeDaytonaTerminal({
   const size = cleanTerminalDimensions({ cols, rows })
   const key = terminalSessionKey(sandboxId, terminalId)
   const session = sessions.get(key)
+  if (session) clearIdleSessionCleanup(session)
   let handle = session?.handle
   if (!handle?.isConnected() && session?.connecting) {
     handle = await session.connecting
@@ -493,6 +528,7 @@ export async function detachDaytonaTerminal(
   if (!session || !subscriber) return
 
   session.subscribers.delete(subscriber)
+  scheduleIdleSessionCleanup(key, session)
 }
 
 export async function killDaytonaTerminal(
@@ -502,10 +538,12 @@ export async function killDaytonaTerminal(
   const key = terminalSessionKey(sandboxId, terminalId)
   const session = sessions.get(key)
   sessions.delete(key)
+  if (session) clearIdleSessionCleanup(session)
   let handle = session?.handle
   if (!handle && session?.connecting) {
     handle = await session.connecting.catch(() => undefined)
   }
+  await session?.githubAuth?.cleanup().catch(() => undefined)
 
   if (handle) {
     await handle.kill().catch(() => undefined)

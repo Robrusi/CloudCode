@@ -10,6 +10,8 @@ type PersistedTerminalDock<TSession> = {
 }
 
 const TERMINAL_DOCK_KEY = "cloudcode:terminalDock:v1"
+const TERMINAL_OUTPUT_KEY_PREFIX = "cloudcode:terminalOutput:v1:"
+const TERMINAL_OUTPUT_MAX_BYTES = 512_000
 export const TERMINAL_ID_PATTERN = /^[A-Za-z0-9._:-]{1,120}$/
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -150,5 +152,105 @@ export function removePersistedTerminalSessions(sandboxId: string) {
     )
   } catch {
     // Persistence cleanup is best-effort; sandbox cleanup continues below.
+  }
+}
+
+function terminalOutputKey(sandboxId: string, terminalId: string) {
+  return `${TERMINAL_OUTPUT_KEY_PREFIX}${encodeURIComponent(
+    sandboxId
+  )}:${encodeURIComponent(terminalId)}`
+}
+
+function bytesToBase64(data: Uint8Array) {
+  let binary = ""
+  for (let index = 0; index < data.byteLength; index += 0x8000) {
+    binary += String.fromCharCode(
+      ...data.subarray(index, Math.min(index + 0x8000, data.byteLength))
+    )
+  }
+  return btoa(binary)
+}
+
+function base64ToBytes(value: string) {
+  const binary = atob(value)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return bytes
+}
+
+export function trimPersistedTerminalOutput(chunks: Uint8Array[]) {
+  let bytes = chunks.reduce((total, chunk) => total + chunk.byteLength, 0)
+  let first = 0
+  while (bytes > TERMINAL_OUTPUT_MAX_BYTES && first < chunks.length) {
+    bytes -= chunks[first].byteLength
+    first += 1
+  }
+  return first === 0 ? chunks : chunks.slice(first)
+}
+
+export function readPersistedTerminalOutput(
+  sandboxId: string,
+  terminalId: string
+) {
+  try {
+    const raw = readBrowserStorage(terminalOutputKey(sandboxId, terminalId))
+    if (!raw) return []
+
+    const parsed = JSON.parse(raw) as unknown
+    if (!isPlainRecord(parsed) || !Array.isArray(parsed.chunks)) return []
+
+    return trimPersistedTerminalOutput(
+      parsed.chunks
+        .filter((chunk): chunk is string => typeof chunk === "string")
+        .map(base64ToBytes)
+        .filter((chunk) => chunk.byteLength > 0)
+    )
+  } catch {
+    return []
+  }
+}
+
+export function writePersistedTerminalOutput({
+  chunks,
+  sandboxId,
+  terminalId,
+}: {
+  chunks: Uint8Array[]
+  sandboxId: string
+  terminalId: string
+}) {
+  try {
+    const trimmed = trimPersistedTerminalOutput(chunks)
+    if (trimmed.length === 0) {
+      removePersistedTerminalOutput(sandboxId, terminalId)
+      return
+    }
+
+    writeBrowserStorage(
+      terminalOutputKey(sandboxId, terminalId),
+      JSON.stringify({
+        chunks: trimmed.map(bytesToBase64),
+      })
+    )
+  } catch {
+    // Output replay is a convenience; terminal input must stay unaffected.
+  }
+}
+
+export function removePersistedTerminalOutput(
+  sandboxId: string,
+  terminalId: string
+) {
+  removeBrowserStorage(terminalOutputKey(sandboxId, terminalId))
+}
+
+export function removePersistedTerminalOutputs(
+  sandboxId: string,
+  terminalIds: Iterable<string>
+) {
+  for (const terminalId of terminalIds) {
+    removePersistedTerminalOutput(sandboxId, terminalId)
   }
 }

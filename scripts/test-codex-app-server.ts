@@ -183,12 +183,36 @@ const terminalWsRouteSource = await readFile(
   new URL("../app/api/sandbox/terminal/ws/route.ts", import.meta.url),
   "utf8"
 )
+const terminalUrlRouteSource = await readFile(
+  new URL("../app/api/sandbox/terminal/url/route.ts", import.meta.url),
+  "utf8"
+)
 const browserTerminalSessionSource = await readFile(
   new URL("../components/sandbox/terminal-session.ts", import.meta.url),
   "utf8"
 )
+const terminalPaneControllerSource = await readFile(
+  new URL("../components/sandbox/terminal-pane-controller.ts", import.meta.url),
+  "utf8"
+)
+const terminalStorageSource = await readFile(
+  new URL("../components/sandbox/terminal-storage.ts", import.meta.url),
+  "utf8"
+)
+const terminalPanelSource = await readFile(
+  new URL("../components/sandbox/terminal.tsx", import.meta.url),
+  "utf8"
+)
+const chatControllerSource = await readFile(
+  new URL("../hooks/use-chat-controller.ts", import.meta.url),
+  "utf8"
+)
 const chatSandboxActionsSource = await readFile(
   new URL("../hooks/use-chat-sandbox-actions.ts", import.meta.url),
+  "utf8"
+)
+const topBarToolsSource = await readFile(
+  new URL("../components/chat/top-bar-tools.tsx", import.meta.url),
   "utf8"
 )
 assert.ok(!daytonaCodexAgentSource.includes("restoredConversationPrompt"))
@@ -220,17 +244,31 @@ assert.ok(terminalWebSocketSource.includes("HOME: paths.home"))
 assert.ok(terminalWebSocketSource.includes("githubAuth?: SandboxGitHubAuth"))
 assert.ok(terminalSessionsSource.includes("getRunningDaytonaSandbox"))
 assert.ok(!terminalSessionsSource.includes("getStartedDaytonaSandbox"))
+assert.ok(terminalSessionsSource.includes("TERMINAL_IDLE_SESSION_TTL_MS"))
+assert.ok(terminalSessionsSource.includes("scheduleIdleSessionCleanup"))
 assert.ok(terminalWebSocketSource.includes("getRunningDaytonaSandbox"))
 assert.ok(!terminalWebSocketSource.includes("getStartedDaytonaSandbox"))
 assert.ok(!terminalWebSocketSource.includes("terminalSandboxCache"))
 assert.ok(terminalWsRouteSource.includes("terminalOperationErrorResponse"))
+assert.ok(browserTerminalSessionSource.includes("forgetPersisted?: boolean"))
 assert.ok(
-  browserTerminalSessionSource.includes("options: { killRemote?: boolean }")
+  browserTerminalSessionSource.includes("removePersistedTerminalOutputs")
+)
+assert.ok(terminalStorageSource.includes("TERMINAL_OUTPUT_MAX_BYTES"))
+assert.ok(terminalPaneControllerSource.includes("readPersistedTerminalOutput"))
+assert.ok(terminalPaneControllerSource.includes("writePersistedTerminalOutput"))
+assert.ok(terminalPanelSource.includes("ignoreErrors: false"))
+assert.ok(chatControllerSource.includes('activeSandboxState === "running"'))
+assert.ok(topBarToolsSource.includes("disabled: !canOpenTerminal"))
+assert.ok(
+  terminalUrlRouteSource.includes("getRunningCurrentUserDaytonaSandbox")
 )
 assert.ok(
-  chatSandboxActionsSource.includes(
-    "closeBrowserTerminalSession(sandboxId, { killRemote: false })"
-  )
+  !terminalUrlRouteSource.includes("getStartedCurrentUserDaytonaSandbox")
+)
+assert.ok(
+  chatSandboxActionsSource.includes("forgetPersisted: false") &&
+    chatSandboxActionsSource.includes("killRemote: false")
 )
 const terminalWsAuthIndex = terminalWsRouteSource.indexOf("const githubAuth =")
 const terminalWsPrepareIndex = terminalWsRouteSource.indexOf(

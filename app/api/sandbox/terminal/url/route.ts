@@ -2,16 +2,17 @@ import { NextResponse } from "next/server"
 
 import {
   BillingRequiredError,
-  getStartedCurrentUserDaytonaSandbox,
+  getRunningCurrentUserDaytonaSandbox,
+  SandboxNotRunningError,
 } from "@/lib/billing/server"
 import { jsonError, searchStringParam } from "@/lib/http/api-route"
 import {
+  DaytonaSandboxNotRunningError,
   getDaytonaTerminalUrl,
   resolveDaytonaPaths,
 } from "@/lib/daytona/sandbox"
 import { maybeGetCurrentGitHubRepoCredential } from "@/lib/github/auth"
 import { requireSameOrigin } from "@/lib/http/request-security"
-import { requireCurrentUserSandbox } from "@/lib/sandbox/authorization"
 import {
   configureSandboxGitHubRemote,
   setupSandboxGitHubAuth,
@@ -30,18 +31,13 @@ export async function GET(request: Request) {
   }
 
   try {
-    const sandboxAccess = await requireCurrentUserSandbox(sandboxId)
+    const { access: sandboxAccess, sandbox } =
+      await getRunningCurrentUserDaytonaSandbox(sandboxId)
     const githubAuth = await maybeGetCurrentGitHubRepoCredential(
       sandboxAccess.repoUrl
     )
 
-    let sandbox:
-      | Awaited<
-          ReturnType<typeof getStartedCurrentUserDaytonaSandbox>
-        >["sandbox"]
-      | undefined
     if (githubAuth?.token) {
-      sandbox = (await getStartedCurrentUserDaytonaSandbox(sandboxId)).sandbox
       const paths = await resolveDaytonaPaths(sandbox)
       const auth = await setupSandboxGitHubAuth({
         githubToken: githubAuth.token,
@@ -60,16 +56,18 @@ export async function GET(request: Request) {
       })
     }
 
-    if (!sandbox) {
-      await getStartedCurrentUserDaytonaSandbox(sandboxId)
-    }
-
     return NextResponse.json({
-      url: await getDaytonaTerminalUrl(sandboxId),
+      url: await getDaytonaTerminalUrl(sandboxId, { sandbox }),
     })
   } catch (error) {
     if (error instanceof BillingRequiredError) {
       return jsonError(error.message, 402)
+    }
+    if (
+      error instanceof SandboxNotRunningError ||
+      error instanceof DaytonaSandboxNotRunningError
+    ) {
+      return jsonError(error.message, 409, { sandboxNotRunning: true })
     }
 
     return jsonError(

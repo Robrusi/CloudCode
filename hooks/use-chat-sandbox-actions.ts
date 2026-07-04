@@ -99,7 +99,10 @@ export function useChatSandboxActions({
       setSandboxAction(action)
       if (action === "pause") {
         void cancelCodexRun(threadId)
-        closeBrowserTerminalSession(sandboxId, { killRemote: false })
+        closeBrowserTerminalSession(sandboxId, {
+          forgetPersisted: false,
+          killRemote: false,
+        })
         setTerminalOpen(false)
       }
 

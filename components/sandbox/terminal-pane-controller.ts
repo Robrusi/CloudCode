@@ -6,6 +6,11 @@ import { useCallback, useEffect, useRef } from "react"
 
 import { registerTerminalCloser } from "@/components/sandbox/terminal-session"
 import {
+  readPersistedTerminalOutput,
+  trimPersistedTerminalOutput,
+  writePersistedTerminalOutput,
+} from "@/components/sandbox/terminal-storage"
+import {
   TERMINAL_INPUT_FLUSH_DELAY_MS,
   type TerminalPalette,
   type TerminalSessionState,
@@ -137,6 +142,8 @@ export function useSandboxTerminalPaneController({
     let socketConnectionId = 0
     let socketInputReady = false
     let lastSize = { cols: 0, rows: 0 }
+    let outputChunks = readPersistedTerminalOutput(sessionSandboxId, terminalId)
+    let outputFlushTimer: ReturnType<typeof setTimeout> | undefined
     const inputEncoder = new TextEncoder()
 
     function setTerminalState(
@@ -185,6 +192,40 @@ export function useSandboxTerminalPaneController({
       }
     }
 
+    function flushOutputReplay() {
+      if (outputFlushTimer) {
+        clearTimeout(outputFlushTimer)
+        outputFlushTimer = undefined
+      }
+      writePersistedTerminalOutput({
+        chunks: outputChunks,
+        sandboxId: sessionSandboxId,
+        terminalId,
+      })
+    }
+
+    function scheduleOutputReplayFlush() {
+      if (outputFlushTimer) return
+      outputFlushTimer = setTimeout(flushOutputReplay, 500)
+    }
+
+    function rememberTerminalOutput(data: string | Uint8Array) {
+      const chunk =
+        typeof data === "string"
+          ? inputEncoder.encode(data)
+          : new Uint8Array(data)
+      if (!chunk.byteLength) return
+
+      outputChunks.push(chunk)
+      outputChunks = trimPersistedTerminalOutput(outputChunks)
+      scheduleOutputReplayFlush()
+    }
+
+    function writeTerminalOutput(data: string | Uint8Array) {
+      rememberTerminalOutput(data)
+      terminal.write(data)
+    }
+
     function sendResize() {
       if (disposed || !activeRef.current) return
       try {
@@ -226,6 +267,7 @@ export function useSandboxTerminalPaneController({
         clearTimeout(resizeTimer)
         resizeTimer = undefined
       }
+      flushOutputReplay()
       socketInputReady = false
       socket?.close()
       socket = undefined
@@ -288,6 +330,7 @@ export function useSandboxTerminalPaneController({
 
     terminal.loadAddon(fitAddon)
     terminal.open(node)
+    for (const chunk of outputChunks) terminal.write(chunk)
     focusTerminal()
     resizeObserver?.observe(node)
     window.addEventListener("resize", scheduleResize)
@@ -396,12 +439,12 @@ export function useSandboxTerminalPaneController({
           // Non-control strings are PTY output.
         }
 
-        terminal.write(event.data)
+        writeTerminalOutput(event.data)
         return
       }
 
       const bytes = await socketBytes(event.data)
-      if (bytes?.byteLength) terminal.write(bytes)
+      if (bytes?.byteLength) writeTerminalOutput(bytes)
     }
 
     async function connectSocket() {
@@ -468,6 +511,7 @@ export function useSandboxTerminalPaneController({
       if (reconnectTimer) clearTimeout(reconnectTimer)
       if (resizeTimer) clearTimeout(resizeTimer)
       flushInput()
+      flushOutputReplay()
       disposed = true
       dataDisposable.dispose()
       resizeObserver?.disconnect()
