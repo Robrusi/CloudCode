@@ -15,7 +15,10 @@ import {
   FACTORY_MAX_SPAWN_DEPTH,
 } from "@/lib/factory/limits"
 
-const FACTORY_TOOL_VERSION = "4"
+// Bumped for instruction changes too: the version feeds the hot-continuation
+// fingerprint, forcing a cold setup that rewrites AGENTS.md on reused
+// sandboxes so updated guidance actually reaches the agent.
+const FACTORY_TOOL_VERSION = "5"
 
 type FactoryConfigInput = {
   accessToken?: string
@@ -480,6 +483,11 @@ export function cloudcodeFactoryAgentInstructions() {
     "- `run_message` sends a follow-up prompt to a thread dispatched in this tree (rework, review fixes).",
     "- `automation_create`, `automation_list`, and `automation_set_enabled` manage recurring scheduled agent runs (cron).",
     "",
+    "Choosing a subagent mechanism:",
+    '- When the user says "factory subagents", "factory agents", or asks to dispatch runs/threads, use `run_dispatch`: each child is a separate cloud run with its own thread and sandbox, appears in the user\'s sidebar, bills usage on its own, can push branches and file PRs, and reports back through wake-ups.',
+    '- When the user says just "subagents" or "parallel agents" without "factory", use your built-in Codex collaborator subagents inside this run and sandbox — do not call `run_dispatch` for those.',
+    "- If it is ambiguous, prefer built-in subagents and mention that factory dispatch is available for long-running parallel work.",
+    "",
     "Wake-ups: you do not need to poll. When a dispatched run finishes, a wake-up message summarizing it is posted to your thread and a new turn starts (default notifyParent=true). After dispatching work, finish your turn with a brief status note — you will be woken to continue. Wake-ups coalesce: several runs finishing while you work arrive as one message.",
     "",
     "Rules:",
@@ -497,6 +505,7 @@ export function cloudcodeFactoryAgentContext() {
     "Cloudcode provides the `cloudcode_factory` MCP tools to dispatch parallel child agent runs on this repository (`run_dispatch`), follow them (`run_list`, `run_status`, `run_output`), send follow-up work to them (`run_message`), and schedule recurring agent runs (`automation_create`).",
     "Dispatch prompts must be self-sufficient — children share none of your context. Dispatched work bills usage and is capped server-side, so dispatch deliberately.",
     "When a dispatched run finishes you are woken with a summary message on this thread — dispatch, end your turn with a status note, and continue when woken instead of polling.",
+    'Reserve these tools for requests that say "factory" subagents/agents or ask for dispatched runs; a request for plain "subagents" means your built-in Codex collaborator subagents inside this run, not run_dispatch.',
   ].join("\n")
 }
 
