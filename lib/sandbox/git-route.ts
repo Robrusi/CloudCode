@@ -1,11 +1,18 @@
 import { NextResponse } from "next/server"
 
+import { SandboxNotRunningError } from "@/lib/billing/server"
 import { NothingToCommitError } from "@/lib/sandbox/git"
 import { SandboxAuthorizationError } from "@/lib/sandbox/authorization"
 
 export function gitApiErrorResponse(error: unknown) {
   if (error instanceof SandboxAuthorizationError) {
     return NextResponse.json({ error: error.message }, { status: 404 })
+  }
+  if (error instanceof SandboxNotRunningError) {
+    return NextResponse.json(
+      { error: error.message, sandboxNotRunning: true },
+      { status: 409 }
+    )
   }
   if (error instanceof NothingToCommitError) {
     return NextResponse.json({ error: error.message }, { status: 409 })

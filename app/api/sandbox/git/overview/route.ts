@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server"
 
-import { jsonError, searchStringParam } from "@/lib/http/api-route"
+import {
+  jsonError,
+  searchStringParam,
+  searchWakeSandbox,
+} from "@/lib/http/api-route"
 import {
   readSandboxGitOverview,
   resolveSandboxGitContext,
@@ -17,9 +21,10 @@ export async function GET(request: Request) {
 
   const baseBranch = searchStringParam(request, "base") ?? undefined
   const includeDetails = searchStringParam(request, "details") === "1"
+  const wakeSandbox = searchWakeSandbox(request)
 
   try {
-    const ctx = await resolveSandboxGitContext(sandboxId)
+    const ctx = await resolveSandboxGitContext(sandboxId, { wakeSandbox })
     const overview = await readSandboxGitOverview(ctx.sandbox, ctx.paths, {
       baseBranch,
       includeDetails,

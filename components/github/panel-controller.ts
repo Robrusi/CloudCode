@@ -359,7 +359,7 @@ export function useGithubPanelController({
   const openPrs = prs.filter((entry) => entry.state === "open" && !entry.merged)
 
   const loadOverview = useCallback(
-    async (detailsReady: boolean, signal?: AbortSignal) => {
+    async (detailsReady: boolean, signal?: AbortSignal, wakeSandbox = true) => {
       if (!sandboxId) return
       try {
         const params = new URLSearchParams({
@@ -367,6 +367,7 @@ export function useGithubPanelController({
           sandboxId,
         })
         if (detailsReady) params.set("details", "1")
+        if (!wakeSandbox) params.set("wakeSandbox", "0")
         const overview = await fetchJson<SandboxGitOverview>(
           `/api/sandbox/git/overview?${params}`,
           { signal },
@@ -376,6 +377,9 @@ export function useGithubPanelController({
         dispatch({ type: "overview-success", detailsReady, overview })
       } catch (error) {
         if (signal?.aborted) return
+        // A non-waking background prefetch just fails when the sandbox is
+        // stopped; that is expected, so don't surface it as a panel error.
+        if (!wakeSandbox) return
         dispatch({
           type: "overview-error",
           error:
@@ -393,16 +397,19 @@ export function useGithubPanelController({
       branchHint,
       detailsReady = false,
       signal,
+      wakeSandbox = true,
     }: {
       branchHint?: string | null
       detailsReady?: boolean
       signal?: AbortSignal
+      wakeSandbox?: boolean
     } = {}) => {
       if (!sandboxId) return
       try {
         const params = new URLSearchParams({ sandboxId })
         if (detailsReady) params.set("details", "1")
         if (detailsReady && branchHint) params.set("branch", branchHint)
+        if (!wakeSandbox) params.set("wakeSandbox", "0")
         const data = await fetchJson<GithubPrResponse>(
           `/api/sandbox/git/pr?${params}`,
           { signal },
@@ -419,9 +426,12 @@ export function useGithubPanelController({
   )
 
   const refresh = useCallback(
-    async (signal?: AbortSignal) => {
+    async (signal?: AbortSignal, wakeSandbox = true) => {
       dispatch({ type: "loading", value: true })
-      await Promise.all([loadOverview(false, signal), loadPr({ signal })])
+      await Promise.all([
+        loadOverview(false, signal, wakeSandbox),
+        loadPr({ signal, wakeSandbox }),
+      ])
       if (!signal?.aborted) dispatch({ type: "loading", value: false })
     },
     [loadOverview, loadPr]
@@ -430,6 +440,10 @@ export function useGithubPanelController({
   // The panel component stays mounted while closed, so data is prefetched as
   // soon as the sandbox is known — opening the panel is then instant. While
   // closed, a fresh cache is left alone; opening always revalidates.
+  //
+  // The closed prefetch must not wake a stopped sandbox (merely viewing a
+  // thread would otherwise resume it), so it passes wakeSandbox=false. Opening
+  // the panel is a deliberate action and is allowed to start the sandbox.
   useEffect(() => {
     if (!sandboxId) return
     if (!open) {
@@ -437,7 +451,7 @@ export function useGithubPanelController({
       if (cached && Date.now() - cached.at < PREFETCH_STALE_MS) return
     }
     const controller = new AbortController()
-    void refresh(controller.signal)
+    void refresh(controller.signal, open)
     return () => controller.abort()
   }, [open, sandboxId, refresh])
 

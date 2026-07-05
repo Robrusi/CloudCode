@@ -6,6 +6,7 @@ import {
   jsonStringField,
   readJsonRecordOrNull,
   searchStringParam,
+  searchWakeSandbox,
 } from "@/lib/http/api-route"
 import { maybeGetCurrentGitHubRepoCredential } from "@/lib/github/auth"
 import {
@@ -33,9 +34,10 @@ export async function GET(request: Request) {
   }
   const includeDetails = searchStringParam(request, "details") === "1"
   const requestedBranch = searchStringParam(request, "branch")
+  const wakeSandbox = searchWakeSandbox(request)
 
   try {
-    const ctx = await resolveSandboxGitContext(sandboxId)
+    const ctx = await resolveSandboxGitContext(sandboxId, { wakeSandbox })
     const credential = await maybeGetCurrentGitHubRepoCredential(ctx.repoUrl)
     const token = credential?.token
     const branch =

@@ -1,6 +1,9 @@
 import type { Sandbox } from "@daytona/sdk"
 
-import { getStartedCurrentUserDaytonaSandbox } from "@/lib/billing/server"
+import {
+  getRunningCurrentUserDaytonaSandbox,
+  getStartedCurrentUserDaytonaSandbox,
+} from "@/lib/billing/server"
 import {
   repoCommandEnv,
   resolveDaytonaPaths,
@@ -69,10 +72,16 @@ export type SandboxGitStatus = {
 }
 
 export async function resolveSandboxGitContext(
-  sandboxId: string
+  sandboxId: string,
+  options: { wakeSandbox?: boolean } = {}
 ): Promise<SandboxGitContext> {
+  // Waking is the default; background reads pass `wakeSandbox: false` so viewing
+  // a thread never starts a stopped sandbox (the non-waking getter throws
+  // SandboxNotRunningError instead, surfaced as a 409 by gitApiErrorResponse).
   const { access, sandbox } =
-    await getStartedCurrentUserDaytonaSandbox(sandboxId)
+    options.wakeSandbox === false
+      ? await getRunningCurrentUserDaytonaSandbox(sandboxId)
+      : await getStartedCurrentUserDaytonaSandbox(sandboxId)
   const { repoUrl } = access
   const paths = await resolveDaytonaPaths(sandbox)
   return { paths, repo: parseGitHubRepoUrl(repoUrl), repoUrl, sandbox }

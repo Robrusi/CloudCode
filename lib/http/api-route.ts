@@ -51,6 +51,13 @@ export function searchStringParam(request: Request, field: string) {
   return value?.trim() || undefined
 }
 
+// Sandbox read endpoints wake (start/resume) a stopped sandbox by default.
+// Background prefetches opt out with `wakeSandbox=0` so merely viewing a thread
+// never resumes its sandbox.
+export function searchWakeSandbox(request: Request) {
+  return new URL(request.url).searchParams.get("wakeSandbox") !== "0"
+}
+
 export function jsonError(
   message: string,
   status: number,
