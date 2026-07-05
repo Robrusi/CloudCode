@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import { stripInlineToolMarkers } from "@/lib/codex/run-log"
+import { finalRunMessageFromContent } from "@/lib/codex/run-log"
 import {
   failWorkerRun,
   getWorkerSecret,
@@ -60,8 +60,6 @@ type ReviewRunPayload = {
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Review run failed."
 }
-
-const LAST_TOOL_MARKER = "</codex-tool>"
 
 /** Best-effort context for re-reviews and mentions: the previous report,
  * the PR discussion, and the commit list. A failure here degrades to a
@@ -127,16 +125,9 @@ async function rerunContextForReview({
 /** The assistant message interleaves progress narration with encoded
  * <codex-tool> markers the chat UI renders as command chips; GitHub strips
  * the tags and shows the raw payloads. The PR comment wants only the final
- * report: the text after the last tool marker, with any markers removed. */
+ * report, so extract the text after the last tool marker. */
 function reviewReportFromContent(content: string) {
-  const lastMarkerEnd = content.lastIndexOf(LAST_TOOL_MARKER)
-  const tail =
-    lastMarkerEnd === -1
-      ? content
-      : content.slice(lastMarkerEnd + LAST_TOOL_MARKER.length)
-  return (
-    stripInlineToolMarkers(tail) || stripInlineToolMarkers(content)
-  ).trim()
+  return finalRunMessageFromContent(content).trim()
 }
 
 // Fans one verified pull_request webhook event out to every enabled review

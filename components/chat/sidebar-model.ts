@@ -4,6 +4,7 @@ import type { SandboxState } from "@/components/chat/sandbox-types"
 export type SidebarChat = {
   automationId?: Id<"automations">
   reviewId?: Id<"reviews">
+  factoryRootThreadId?: Id<"threads">
   id: Id<"threads">
   lastUserMessageAt: number
   pending: boolean
@@ -13,30 +14,62 @@ export type SidebarChat = {
   updatedAt: number
 }
 
+/** One sidebar row: a thread plus the factory-dispatched threads nested
+ * under it. `latest` is the subtree's most recent activity, so a working
+ * child keeps its root sorted to the top. */
+export type SidebarChatNode = {
+  chat: SidebarChat
+  children: SidebarChat[]
+  latest: number
+}
+
 export type SidebarChatGroup = {
-  items: SidebarChat[]
+  items: SidebarChatNode[]
   latest: number
   repo: string
 }
 
-export function isSidebarChatRunning(chat: SidebarChat) {
-  return chat.pending
+export function isSidebarNodeRunning(node: SidebarChatNode) {
+  return node.chat.pending || node.children.some((child) => child.pending)
 }
 
 export function groupSidebarChats(chats: SidebarChat[]): SidebarChatGroup[] {
-  const map = new Map<string, SidebarChatGroup>()
+  // Factory-dispatched threads nest under their root thread when it is in
+  // the same list; a root that was deleted or filtered away leaves the child
+  // rendered as a normal top-level chat.
+  const ids = new Set(chats.map((chat) => chat.id as string))
+  const childrenByRoot = new Map<string, SidebarChat[]>()
+  const topLevel: SidebarChat[] = []
   for (const chat of chats) {
+    const rootId = chat.factoryRootThreadId
+    if (rootId && rootId !== chat.id && ids.has(rootId as string)) {
+      const siblings = childrenByRoot.get(rootId as string)
+      if (siblings) siblings.push(chat)
+      else childrenByRoot.set(rootId as string, [chat])
+    } else {
+      topLevel.push(chat)
+    }
+  }
+
+  const map = new Map<string, SidebarChatGroup>()
+  for (const chat of topLevel) {
+    const children = (childrenByRoot.get(chat.id as string) ?? []).sort(
+      (a, b) => b.lastUserMessageAt - a.lastUserMessageAt
+    )
+    const latest = children.reduce(
+      (max, child) => Math.max(max, child.lastUserMessageAt),
+      chat.lastUserMessageAt
+    )
+    const node: SidebarChatNode = { chat, children, latest }
     const key = chat.repoUrl || ""
     const group = map.get(key)
     if (group) {
-      group.items.push(chat)
-      if (chat.lastUserMessageAt > group.latest) {
-        group.latest = chat.lastUserMessageAt
-      }
+      group.items.push(node)
+      if (latest > group.latest) group.latest = latest
     } else {
       map.set(key, {
-        items: [chat],
-        latest: chat.lastUserMessageAt,
+        items: [node],
+        latest,
         repo: key,
       })
     }
@@ -44,7 +77,7 @@ export function groupSidebarChats(chats: SidebarChat[]): SidebarChatGroup[] {
 
   const groups = Array.from(map.values())
   for (const group of groups) {
-    group.items.sort((a, b) => b.lastUserMessageAt - a.lastUserMessageAt)
+    group.items.sort((a, b) => b.latest - a.latest)
   }
   return groups.sort((a, b) => b.latest - a.latest)
 }

@@ -118,6 +118,7 @@ async function threadSummaryRecord(ctx: QueryCtx, thread: Doc<"threads">) {
     branchMode: thread.branchMode,
     codexThreadId: thread.codexThreadId,
     createdAt: thread.createdAt,
+    factoryRootThreadId: thread.factoryRootThreadId,
     id: thread._id,
     lastUserMessageAt: thread.lastUserMessageAt ?? thread.createdAt,
     messages: [],

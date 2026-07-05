@@ -152,6 +152,42 @@ export async function markRunCanceled(
   }
 }
 
+/** Fails a run that never started executing (still queued when its dispatch
+ * plumbing broke): marks the run failed, finalizes the pending assistant
+ * message, and clears the thread's pending flag. Canceling runs finalize as
+ * canceled instead; terminal runs are left untouched. */
+export async function failRunBeforeStart(
+  ctx: MutationCtx,
+  run: Doc<"codexRuns">,
+  error: string
+) {
+  if (TERMINAL_RUN_STATUSES.has(run.status)) return
+  if (run.status === "canceling") {
+    await markRunCanceled(ctx, run)
+    return
+  }
+
+  const now = Date.now()
+  await Promise.all([
+    ctx.db.patch(run._id, {
+      content: error,
+      error,
+      finishedAt: now,
+      status: "failed",
+      updatedAt: now,
+    }),
+    ctx.db.patch(run.assistantMessageId, {
+      content: error,
+      error: true,
+      pending: false,
+    }),
+    ctx.db.patch(run.threadId, {
+      hasPendingMessage: false,
+      updatedAt: now,
+    }),
+  ])
+}
+
 export async function markRunCanceling(
   ctx: MutationCtx,
   run: Doc<"codexRuns">

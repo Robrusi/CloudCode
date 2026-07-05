@@ -7,6 +7,7 @@ import { recordReviewRunOutcome } from "./lib/reviewRecords"
 import { compactMessageMeta, compactRunLogs } from "./lib/codexRunLogs"
 import {
   activeRunForThread,
+  failRunBeforeStart,
   markRunCanceled,
   markRunCanceling,
   sandboxIdFromLog,
@@ -21,6 +22,7 @@ import {
 } from "./lib/codexRunRecords"
 import { findCodexAuth } from "./lib/codexRunAuth"
 import { workerInputForRun } from "./lib/codexRunWorkerInput"
+import { factoryWakeRunsAfterFinish } from "./lib/factoryWake"
 import {
   codexAuthMissingMessage,
   codexAuthReconnectMessage,
@@ -519,31 +521,7 @@ export const failBeforeStart = mutation({
       ctx.db.get(args.runId),
     ])
     if (!run || run.userId !== userId) throw new Error("Run not found.")
-    if (TERMINAL_RUN_STATUSES.has(run.status)) return
-    if (run.status === "canceling") {
-      await markRunCanceled(ctx, run)
-      return
-    }
-
-    const now = Date.now()
-    await Promise.all([
-      ctx.db.patch(args.runId, {
-        content: args.error,
-        error: args.error,
-        finishedAt: now,
-        status: "failed",
-        updatedAt: now,
-      }),
-      ctx.db.patch(run.assistantMessageId, {
-        content: args.error,
-        error: true,
-        pending: false,
-      }),
-      ctx.db.patch(run.threadId, {
-        hasPendingMessage: false,
-        updatedAt: now,
-      }),
-    ])
+    await failRunBeforeStart(ctx, run, args.error)
   },
 })
 
@@ -704,10 +682,15 @@ export const workerComplete = mutation({
     requireWorkerSecret(args.workerSecret)
     const run = await ctx.db.get(args.runId)
     if (!run) throw new Error("Run not found.")
-    if (run.status === "canceled") return { canceled: true }
+    if (run.status === "canceled") {
+      return { canceled: true, factoryWakeRuns: [] }
+    }
     if (run.status === "canceling") {
+      // No wake-ups here: the worker routes a canceled completion through
+      // workerCancel, which delivers them; creating them now would leave
+      // queued wake runs nothing ever triggers.
       await markRunCanceled(ctx, run, "_Stopped._", args.sandboxId)
-      return { canceled: true }
+      return { canceled: true, factoryWakeRuns: [] }
     }
 
     const now = Date.now()
@@ -770,8 +753,9 @@ export const workerComplete = mutation({
         : undefined
     await recordAutomationRunOutcome(ctx, run, nextStatus, outcomeError)
     await recordReviewRunOutcome(ctx, run, nextStatus, outcomeError)
+    const factoryWakeRuns = await factoryWakeRunsAfterFinish(ctx, run)
 
-    return { canceled: false }
+    return { canceled: false, factoryWakeRuns }
   },
 })
 
@@ -786,10 +770,13 @@ export const workerFail = mutation({
     requireWorkerSecret(args.workerSecret)
     const run = await ctx.db.get(args.runId)
     if (!run) throw new Error("Run not found.")
-    if (run.status === "canceled") return { canceled: true }
+    if (run.status === "canceled") {
+      return { canceled: true, factoryWakeRuns: [] }
+    }
     if (run.status === "canceling") {
       await markRunCanceled(ctx, run, "_Stopped._", args.sandboxId)
-      return { canceled: true }
+      const factoryWakeRuns = await factoryWakeRunsAfterFinish(ctx, run)
+      return { canceled: true, factoryWakeRuns }
     }
 
     const now = Date.now()
@@ -821,8 +808,9 @@ export const workerFail = mutation({
 
     await recordAutomationRunOutcome(ctx, run, "failed", args.error)
     await recordReviewRunOutcome(ctx, run, "failed", args.error)
+    const factoryWakeRuns = await factoryWakeRunsAfterFinish(ctx, run)
 
-    return { canceled: false }
+    return { canceled: false, factoryWakeRuns }
   },
 })
 
@@ -835,8 +823,10 @@ export const workerCancel = mutation({
   handler: async (ctx, args) => {
     requireWorkerSecret(args.workerSecret)
     const run = await ctx.db.get(args.runId)
-    if (!run) return
+    if (!run) return { factoryWakeRuns: [] }
     await markRunCanceled(ctx, run, "_Stopped._", args.sandboxId)
+    const factoryWakeRuns = await factoryWakeRunsAfterFinish(ctx, run)
+    return { factoryWakeRuns }
   },
 })
 

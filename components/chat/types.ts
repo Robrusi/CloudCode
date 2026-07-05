@@ -38,6 +38,7 @@ export type ChatRecord = {
   baseBranch?: string
   branchMode?: BranchMode
   codexThreadId?: string
+  factoryRootThreadId?: Id<"threads">
   id: Id<"threads">
   lastUserMessageAt?: number
   notes?: string

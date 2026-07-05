@@ -4,9 +4,12 @@ import { ChevronRight, Clock, Ellipsis, Plus } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
 import { ContextMenu } from "@/components/ui/context-menu"
-import type { SidebarChat } from "@/components/chat/sidebar-model"
+import type {
+  SidebarChat,
+  SidebarChatNode,
+} from "@/components/chat/sidebar-model"
 import {
-  isSidebarChatRunning,
+  isSidebarNodeRunning,
   relativeTime,
 } from "@/components/chat/sidebar-model"
 import { BrailleSpinner, SandboxDot } from "@/components/chat/sidebar-status"
@@ -27,7 +30,7 @@ export function FolderGroup({
 }: {
   label: string
   repoUrl: string
-  items: SidebarChat[]
+  items: SidebarChatNode[]
   activeId: Id<"threads"> | null
   onSelect: (id: Id<"threads">) => void
   onDelete: (id: Id<"threads">) => void
@@ -36,7 +39,7 @@ export function FolderGroup({
 }) {
   const [open, setOpen] = useState(true)
   const [expanded, setExpanded] = useState(false)
-  const visibleItems = open ? items : items.filter(isSidebarChatRunning)
+  const visibleItems = open ? items : items.filter(isSidebarNodeRunning)
   const canExpand = open && visibleItems.length > THREAD_PREVIEW_COUNT
   const displayedItems =
     canExpand && !expanded
@@ -71,15 +74,20 @@ export function FolderGroup({
       </div>
       {displayedItems.length > 0 ? (
         <div>
-          {displayedItems.map((chat) => (
+          {displayedItems.map((node) => (
             <SidebarItem
-              key={chat.id}
-              chat={chat}
-              active={chat.id === activeId}
-              pending={chat.pending}
-              onSelect={() => onSelect(chat.id)}
-              onDelete={() => onDelete(chat.id)}
-              onRename={(title) => onRename(chat.id, title)}
+              key={node.chat.id}
+              chat={node.chat}
+              childChats={node.children}
+              active={node.chat.id === activeId}
+              activeId={activeId}
+              pending={node.chat.pending}
+              onSelect={() => onSelect(node.chat.id)}
+              onDelete={() => onDelete(node.chat.id)}
+              onRename={(title) => onRename(node.chat.id, title)}
+              onSelectId={onSelect}
+              onDeleteId={onDelete}
+              onRenameId={onRename}
             />
           ))}
         </div>
@@ -104,22 +112,36 @@ function SidebarItem({
   chat,
   active,
   pending,
+  nested = false,
+  childChats,
+  activeId,
   onSelect,
   onDelete,
   onRename,
+  onSelectId,
+  onDeleteId,
+  onRenameId,
 }: {
   chat: SidebarChat
   active: boolean
   pending: boolean
+  nested?: boolean
+  childChats?: SidebarChat[]
+  activeId?: Id<"threads"> | null
   onSelect: () => void
   onDelete: () => void
   onRename: (title: string) => void
+  onSelectId?: (id: Id<"threads">) => void
+  onDeleteId?: (id: Id<"threads">) => void
+  onRenameId?: (id: Id<"threads">, title: string) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(chat.title || "")
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const [childrenOpen, setChildrenOpen] = useState(true)
   const inputRef = useRef<HTMLInputElement>(null)
   const cancelledRef = useRef(false)
+  const hasChildren = Boolean(childChats?.length)
 
   useEffect(() => {
     if (!editing) return
@@ -146,59 +168,24 @@ function SidebarItem({
   }
 
   return (
-    <div
-      onContextMenu={(event) => {
-        event.preventDefault()
-        event.stopPropagation()
-        setMenu({ x: event.clientX, y: event.clientY })
-      }}
-      className={cn(
-        "group/item relative flex items-center rounded-lg transition-colors",
-        active ? "bg-muted" : "hover:bg-muted/60"
-      )}
-    >
-      {editing ? (
-        <div className="flex min-w-0 flex-1 items-center gap-2 py-2 pr-1 pl-2.5 md:pr-2.5">
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="flex min-w-0 items-center gap-1.5">
-              {chat.automationId ? (
-                <Clock
-                  aria-label="Automation"
-                  className="size-3 shrink-0 text-muted-foreground"
-                />
-              ) : null}
-              <input
-                ref={inputRef}
-                aria-label="Chat title"
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                onBlur={(event) => commit(event.target.value)}
-                onFocus={(event) => event.currentTarget.select()}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault()
-                    commit(event.currentTarget.value)
-                  } else if (event.key === "Escape") {
-                    event.preventDefault()
-                    cancelledRef.current = true
-                    setEditing(false)
-                  }
-                }}
-                onClick={(event) => event.stopPropagation()}
-                className="-my-px min-w-0 flex-1 rounded-[0.3125rem] border border-border bg-background px-1 py-px text-[0.8125rem] text-foreground outline-none focus:border-foreground/40"
-              />
-            </span>
-            <span className="min-w-0 truncate pl-1 text-[0.6875rem] text-muted-foreground">
-              {relativeTime(chat.lastUserMessageAt)}
-            </span>
-          </div>
-        </div>
-      ) : (
-        <>
-          <button
-            type="button"
-            onClick={onSelect}
-            className="flex min-w-0 flex-1 items-center gap-2 py-2 pr-1 pl-2.5 text-left md:pr-2.5"
+    <div>
+      <div
+        onContextMenu={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          setMenu({ x: event.clientX, y: event.clientY })
+        }}
+        className={cn(
+          "group/item relative flex items-center rounded-lg transition-colors",
+          active ? "bg-muted" : "hover:bg-muted/60"
+        )}
+      >
+        {editing ? (
+          <div
+            className={cn(
+              "flex min-w-0 flex-1 items-center gap-2 pr-1 pl-2.5 md:pr-2.5",
+              nested ? "py-1.5" : "py-2"
+            )}
           >
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
               <span className="flex min-w-0 items-center gap-1.5">
@@ -208,55 +195,157 @@ function SidebarItem({
                     className="size-3 shrink-0 text-muted-foreground"
                   />
                 ) : null}
-                <span className="min-w-0 truncate text-[0.8125rem] text-foreground">
-                  {chat.title || "Untitled"}
-                </span>
+                <input
+                  ref={inputRef}
+                  aria-label="Chat title"
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  onBlur={(event) => commit(event.target.value)}
+                  onFocus={(event) => event.currentTarget.select()}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault()
+                      commit(event.currentTarget.value)
+                    } else if (event.key === "Escape") {
+                      event.preventDefault()
+                      cancelledRef.current = true
+                      setEditing(false)
+                    }
+                  }}
+                  onClick={(event) => event.stopPropagation()}
+                  className={cn(
+                    "-my-px min-w-0 flex-1 rounded-[0.3125rem] border border-border bg-background px-1 py-px text-foreground outline-none focus:border-foreground/40",
+                    nested ? "text-[0.75rem]" : "text-[0.8125rem]"
+                  )}
+                />
               </span>
-              <span className="min-w-0 truncate text-[0.6875rem] text-muted-foreground">
+              <span
+                className={cn(
+                  "min-w-0 truncate pl-1 text-muted-foreground",
+                  nested ? "text-[0.625rem]" : "text-[0.6875rem]"
+                )}
+              >
                 {relativeTime(chat.lastUserMessageAt)}
               </span>
             </div>
-            <span className="flex size-5 shrink-0 items-center justify-center">
-              {pending ? (
-                <BrailleSpinner className="text-muted-foreground" />
-              ) : (
-                <SandboxDot state={chat.sandboxState} starting={false} />
+          </div>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={onSelect}
+              className={cn(
+                "flex min-w-0 flex-1 items-center gap-2 pr-1 pl-2.5 text-left md:pr-2.5",
+                nested ? "py-1.5" : "py-2"
               )}
-            </span>
-          </button>
-          <button
-            type="button"
-            aria-label="Chat options"
-            onClick={(event) => {
-              event.stopPropagation()
-              const rect = event.currentTarget.getBoundingClientRect()
-              const menuWidth = 180
-              const menuHeight = 96
-              setMenu({
-                x: Math.max(
-                  8,
-                  Math.min(rect.right, window.innerWidth - 8) - menuWidth
-                ),
-                y: Math.min(rect.bottom + 4, window.innerHeight - menuHeight),
-              })
-            }}
-            className="mr-1 grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
-          >
-            <Ellipsis className="size-4" />
-          </button>
-        </>
-      )}
+            >
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  {chat.automationId ? (
+                    <Clock
+                      aria-label="Automation"
+                      className="size-3 shrink-0 text-muted-foreground"
+                    />
+                  ) : null}
+                  <span
+                    className={cn(
+                      "min-w-0 truncate text-foreground",
+                      nested ? "text-[0.75rem]" : "text-[0.8125rem]"
+                    )}
+                  >
+                    {chat.title || "Untitled"}
+                  </span>
+                </span>
+                <span
+                  className={cn(
+                    "min-w-0 truncate text-muted-foreground",
+                    nested ? "text-[0.625rem]" : "text-[0.6875rem]"
+                  )}
+                >
+                  {relativeTime(chat.lastUserMessageAt)}
+                </span>
+              </div>
+              <span className="flex size-5 shrink-0 items-center justify-center">
+                {pending ? (
+                  <BrailleSpinner className="text-muted-foreground" />
+                ) : (
+                  <SandboxDot state={chat.sandboxState} starting={false} />
+                )}
+              </span>
+            </button>
+            {hasChildren ? (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setChildrenOpen(!childrenOpen)
+                }}
+                aria-expanded={childrenOpen}
+                aria-label={
+                  childrenOpen
+                    ? "Collapse dispatched chats"
+                    : "Expand dispatched chats"
+                }
+                className="mr-1 grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <ChevronRight
+                  className={cn(
+                    "size-3 transition-transform",
+                    childrenOpen && "rotate-90"
+                  )}
+                />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              aria-label="Chat options"
+              onClick={(event) => {
+                event.stopPropagation()
+                const rect = event.currentTarget.getBoundingClientRect()
+                const menuWidth = 180
+                const menuHeight = 96
+                setMenu({
+                  x: Math.max(
+                    8,
+                    Math.min(rect.right, window.innerWidth - 8) - menuWidth
+                  ),
+                  y: Math.min(rect.bottom + 4, window.innerHeight - menuHeight),
+                })
+              }}
+              className="mr-1 grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
+            >
+              <Ellipsis className="size-4" />
+            </button>
+          </>
+        )}
 
-      {menu ? (
-        <ContextMenu
-          x={menu.x}
-          y={menu.y}
-          onClose={() => setMenu(null)}
-          items={[
-            { label: "Rename", onSelect: startRename },
-            { label: "Delete", onSelect: onDelete, destructive: true },
-          ]}
-        />
+        {menu ? (
+          <ContextMenu
+            x={menu.x}
+            y={menu.y}
+            onClose={() => setMenu(null)}
+            items={[
+              { label: "Rename", onSelect: startRename },
+              { label: "Delete", onSelect: onDelete, destructive: true },
+            ]}
+          />
+        ) : null}
+      </div>
+      {hasChildren && childrenOpen ? (
+        <div className="ml-4">
+          {childChats?.map((child) => (
+            <SidebarItem
+              key={child.id}
+              nested
+              chat={child}
+              active={child.id === activeId}
+              pending={child.pending}
+              onSelect={() => onSelectId?.(child.id)}
+              onDelete={() => onDeleteId?.(child.id)}
+              onRename={(title) => onRenameId?.(child.id, title)}
+            />
+          ))}
+        </div>
       ) : null}
     </div>
   )

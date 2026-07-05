@@ -185,6 +185,20 @@ export function stripInlineToolMarkers(content: string) {
     .trim()
 }
 
+const CODEX_TOOL_MARKER_CLOSE = "</codex-tool>"
+
+/** The final assistant message of a run's streamed content: the text after
+ * the last inline tool marker, with any markers removed. Falls back to the
+ * whole cleaned content when the tail is empty. */
+export function finalRunMessageFromContent(content: string) {
+  const lastMarkerEnd = content.lastIndexOf(CODEX_TOOL_MARKER_CLOSE)
+  const tail =
+    lastMarkerEnd === -1
+      ? content
+      : content.slice(lastMarkerEnd + CODEX_TOOL_MARKER_CLOSE.length)
+  return stripInlineToolMarkers(tail) || stripInlineToolMarkers(content)
+}
+
 export function extractInlineToolMarkers(content: string) {
   CODEX_TOOL_MARKER_REGEX.lastIndex = 0
   return Array.from(

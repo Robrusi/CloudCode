@@ -86,6 +86,9 @@ export default defineSchema({
     branchMode: v.optional(branchMode),
     branchName: v.optional(v.string()),
     createdAt: v.number(),
+    // Set when a factory MCP tool created this automation from inside an
+    // agent run; such automations are the only ones agent tools may disable.
+    createdByRunId: v.optional(v.id("codexRuns")),
     cron: v.string(),
     disabledReason: v.optional(v.string()),
     enabled: v.boolean(),
@@ -202,6 +205,15 @@ export default defineSchema({
     model,
     previousDiff: v.optional(v.string()),
     notesAccessToken: v.optional(v.string()),
+    // Set on runs spawned by the factory MCP tools: whether the dispatching
+    // thread gets a wake-up run when this one finishes.
+    notifyParent: v.optional(v.boolean()),
+    // Set on runs spawned by the factory MCP tools: the run that dispatched
+    // this one, its thread (wake-up delivery targets it), the thread at the
+    // root of the dispatch tree (caps and run_list group by it), and how
+    // deep this run sits in that tree.
+    parentRunId: v.optional(v.id("codexRuns")),
+    parentThreadId: v.optional(v.id("threads")),
     prHeadSha: v.optional(v.string()),
     prNumber: v.optional(v.number()),
     prTitle: v.optional(v.string()),
@@ -213,9 +225,11 @@ export default defineSchema({
     resumeContext: v.optional(v.string()),
     reviewCommentUrl: v.optional(v.string()),
     reviewId: v.optional(v.id("reviews")),
+    rootThreadId: v.optional(v.id("threads")),
     sandboxId: v.optional(v.string()),
     sandboxPresetId: v.optional(v.id("sandboxPresets")),
     sandboxState: v.optional(sandboxState),
+    spawnDepth: v.optional(v.number()),
     speed,
     startedAt: v.optional(v.number()),
     status: codexRunStatus,
@@ -223,8 +237,12 @@ export default defineSchema({
     triggerRunId: v.optional(v.string()),
     updatedAt: v.number(),
     userId: v.id("users"),
+    // Set when a finished dispatched run has been surfaced to its parent
+    // thread by a factory wake-up run.
+    wakeReportedAt: v.optional(v.number()),
   })
     .index("by_automation_created", ["automationId", "createdAt"])
+    .index("by_parent_thread_status", ["parentThreadId", "status"])
     .index("by_review_created", ["reviewId", "createdAt"])
     .index("by_review_pr", ["reviewId", "prNumber", "createdAt"])
     .index("by_thread_updated", ["threadId", "updatedAt"])
@@ -234,9 +252,11 @@ export default defineSchema({
       "sandboxState",
       "updatedAt",
     ])
+    .index("by_root_thread", ["rootThreadId", "createdAt"])
     .index("by_sandbox", ["sandboxId"])
     .index("by_trigger_run", ["triggerRunId"])
     .index("by_user_profile_updated", ["userId", "profile", "updatedAt"])
+    .index("by_user_status", ["userId", "status"])
     .index("by_user_updated", ["userId", "updatedAt"]),
 
   codexRunInputs: defineTable({
@@ -548,6 +568,9 @@ export default defineSchema({
     branchMode: v.optional(branchMode),
     codexThreadId: v.optional(v.string()),
     createdAt: v.number(),
+    // Set on threads created by factory run_dispatch: the root thread of the
+    // dispatch tree. The sidebar nests these threads under that root.
+    factoryRootThreadId: v.optional(v.id("threads")),
     hasPendingMessage: v.optional(v.boolean()),
     lastUserMessageAt: v.optional(v.number()),
     model,

@@ -27,6 +27,14 @@ import {
   writeCloudcodeContextState,
 } from "@/lib/daytona/context"
 import {
+  cloudcodeFactoryAgentContext,
+  cloudcodeFactoryAgentInstructions,
+  cloudcodeFactoryCodexConfig,
+  cloudcodeFactoryToolVersion,
+  installCloudcodeFactoryTools,
+  writeCloudcodeFactoryState,
+} from "@/lib/daytona/factory"
+import {
   cloudcodeGitHubAgentContext,
   cloudcodeGitHubAgentInstructions,
   cloudcodeGitHubCodexConfig,
@@ -176,6 +184,7 @@ function hotContinuationFingerprint({
         codexCliVersion: desiredCodexCliVersion(),
         codexDaemonVersion: CODEX_APP_SERVER_DAEMON_VERSION,
         contextToolVersion: cloudcodeContextToolVersion(),
+        factoryToolVersion: cloudcodeFactoryToolVersion(),
         githubToolVersion: cloudcodeGitHubToolVersion(),
         desktopToolFingerprint: daytonaDesktopToolContentFingerprint(),
         mcpConfig,
@@ -233,12 +242,14 @@ function hotContinuationCheckScript({
   contextEnabled,
   expectedFingerprint,
   expectedRemoteUrl,
+  factoryEnabled,
   githubEnabled,
   paths,
 }: {
   contextEnabled: boolean
   expectedFingerprint: string
   expectedRemoteUrl?: string | null
+  factoryEnabled: boolean
   githubEnabled: boolean
   paths: DaytonaSandboxPaths
 }) {
@@ -249,6 +260,7 @@ function hotContinuationCheckScript({
     `expected_fingerprint=${shellQuote(expectedFingerprint)}`,
     `expected_remote=${shellQuote(expectedRemoteUrl ?? "")}`,
     `context_enabled=${contextEnabled ? "1" : "0"}`,
+    `factory_enabled=${factoryEnabled ? "1" : "0"}`,
     `github_enabled=${githubEnabled ? "1" : "0"}`,
     hotContinuationHashHelpers(),
     "miss() {",
@@ -266,6 +278,8 @@ function hotContinuationCheckScript({
     `[ -s ${shellQuote(`${paths.codexHome}/desktop/tool-version`)} ] || miss desktop-marker`,
     `[ "$context_enabled" != "1" ] || [ -x ${shellQuote(`${paths.codexHome}/context/cloudcode-context-mcp.mjs`)} ] || miss context-tool`,
     `[ "$context_enabled" != "1" ] || [ -s ${shellQuote(`${paths.codexHome}/context/tool-version`)} ] || miss context-marker`,
+    `[ "$factory_enabled" != "1" ] || [ -x ${shellQuote(`${paths.codexHome}/factory/cloudcode-factory-mcp.mjs`)} ] || miss factory-tool`,
+    `[ "$factory_enabled" != "1" ] || [ -s ${shellQuote(`${paths.codexHome}/factory/tool-version`)} ] || miss factory-marker`,
     `[ "$github_enabled" != "1" ] || [ -x ${shellQuote(`${paths.codexHome}/github/cloudcode-github-mcp.mjs`)} ] || miss github-tool`,
     `[ "$github_enabled" != "1" ] || [ -s ${shellQuote(`${paths.codexHome}/github/tool-version`)} ] || miss github-marker`,
     "yaml_hash=$(repo_cloudcode_hash)",
@@ -530,6 +544,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         ? cloudcodeGitHubAgentContext({ authenticated: Boolean(gitAuth) })
         : undefined,
       sharedNotesEnabled ? cloudcodeContextAgentContext() : undefined,
+      sharedNotesEnabled ? cloudcodeFactoryAgentContext() : undefined,
       buildImageAttachmentPromptBlock(sandboxImageAttachments),
     ].filter((value): value is string => Boolean(value))
     const promptForTask = (task: string) =>
@@ -544,6 +559,13 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       runId: input.runId,
       threadId: input.threadId,
     })
+    const factoryConfig = cloudcodeFactoryCodexConfig({
+      accessToken: input.notesAccessToken,
+      convexUrl: input.convexUrl,
+      paths,
+      runId: input.runId,
+      threadId: input.threadId,
+    })
     const githubConfig = cloudcodeGitHubCodexConfig({
       enabled: githubMcpEnabled,
       paths,
@@ -551,6 +573,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     const mcpConfig = [
       githubConfig,
       contextConfig,
+      factoryConfig,
       userMcpCodexConfig(input.mcpServers),
     ]
       .filter(Boolean)
@@ -574,6 +597,14 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
           ? writeCloudcodeContextState(sandbox, paths, {
               convexUrl: input.convexUrl,
               notesAccessToken: input.notesAccessToken,
+              runId: input.runId,
+              threadId: input.threadId,
+            })
+          : Promise.resolve(),
+        factoryConfig
+          ? writeCloudcodeFactoryState(sandbox, paths, {
+              accessToken: input.notesAccessToken,
+              convexUrl: input.convexUrl,
               runId: input.runId,
               threadId: input.threadId,
             })
@@ -668,6 +699,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
               contextEnabled: Boolean(contextConfig),
               expectedFingerprint: hotFingerprint,
               expectedRemoteUrl: gitAuth?.remoteUrl,
+              factoryEnabled: Boolean(factoryConfig),
               githubEnabled: Boolean(githubConfig),
               paths,
             })
@@ -691,7 +723,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       ? parseHotContinuationStatus(preRunResult.stdout)
       : { ready: false as const }
     if (hotContinuation.ready) {
-      if (contextConfig || githubConfig) {
+      if (contextConfig || githubConfig || factoryConfig) {
         const toolStateReady = await writeRunToolState()
           .then(() => true)
           .catch(() => false)
@@ -830,6 +862,11 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
           ? installCloudcodeContextTools(sandbox, paths, input.signal)
           : undefined
       )
+      .then(() =>
+        factoryConfig
+          ? installCloudcodeFactoryTools(sandbox, paths, input.signal)
+          : undefined
+      )
       .then(() => writeRunToolState())
       .then(() =>
         installDaytonaDesktopTools(sandbox, paths, input.signal, {
@@ -841,6 +878,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
                 })
               : undefined,
             contextConfig ? cloudcodeContextAgentInstructions() : undefined,
+            factoryConfig ? cloudcodeFactoryAgentInstructions() : undefined,
             input.agentInstructions?.trim() || undefined,
           ]
             .filter(Boolean)

@@ -1,4 +1,4 @@
-import { schedules, task, timeout } from "@trigger.dev/sdk"
+import { schedules, task, tasks, timeout } from "@trigger.dev/sdk"
 
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -43,11 +43,37 @@ import {
   pauseSandboxForBilling,
   type ActiveBillingSandboxSegment,
 } from "@/trigger/cloudcode-run-billing"
+import type { factoryDispatch } from "@/trigger/factory"
 
 function errorMessage(error: unknown) {
   return redactCodexAuthPayloads(
     error instanceof Error ? error.message : "Codex run failed."
   )
+}
+
+type FactoryWakeRunRef = {
+  runId: Id<"codexRuns">
+  threadId: Id<"threads">
+  userId: Id<"users">
+}
+
+/** Factory wake-up runs created by the terminal-status mutations sit queued
+ * until a factory-dispatch task picks them up; queue one per created run. */
+async function queueFactoryWakeRuns(wakeRuns?: FactoryWakeRunRef[]) {
+  for (const wake of wakeRuns ?? []) {
+    await tasks
+      .trigger<typeof factoryDispatch>(
+        "factory-dispatch",
+        { runId: wake.runId },
+        {
+          idempotencyKey: `factory-dispatch:${wake.runId}`,
+          tags: [`user:${wake.userId}`, `thread:${wake.threadId}`],
+        }
+      )
+      .catch((error) => {
+        console.warn("Unable to queue factory wake-up run.", error)
+      })
+  }
 }
 
 class CodexAuthReconnectHandledError extends Error {
@@ -82,14 +108,16 @@ async function failCodexAuthReconnectRun({
     console.warn("Unable to invalidate Codex auth profile: missing profile.")
   }
 
-  await failWorkerRun(
+  const failResponse = await failWorkerRun(
     client,
     runId,
     CODEX_AUTH_RECONNECT_MESSAGE,
     sandboxId
   ).catch((failError) => {
     console.warn("Unable to mark Codex run failed.", failError)
+    return undefined
   })
+  await queueFactoryWakeRuns(failResponse?.factoryWakeRuns)
 }
 
 export const billingReconcileDaytonaSandboxes = schedules.task({
@@ -345,7 +373,13 @@ export const cloudcodeRun = task({
       }
 
       const content = workerRunFinalContent(contentBuffer.content, result)
-      await completeWorkerRun(client, payload.runId, content, result)
+      const completeResponse = await completeWorkerRun(
+        client,
+        payload.runId,
+        content,
+        result
+      )
+      await queueFactoryWakeRuns(completeResponse.factoryWakeRuns)
       streamPublisher?.publishDone(
         result.exitCode === 0 ? "succeeded" : "failed"
       )
@@ -370,7 +404,12 @@ export const cloudcodeRun = task({
       }
 
       if (signal.aborted || isWorkerRunCanceledError(error)) {
-        await cancelWorkerRun(client, payload.runId, latestSandboxId)
+        const cancelResponse = await cancelWorkerRun(
+          client,
+          payload.runId,
+          latestSandboxId
+        )
+        await queueFactoryWakeRuns(cancelResponse?.factoryWakeRuns)
         streamPublisher?.publishDone("canceled")
         await streamPublisher?.flush()
         return { canceled: true }
@@ -413,14 +452,16 @@ export const cloudcodeRun = task({
       }
 
       const failureMessage = errorMessage(error)
-      await failWorkerRun(
+      const failResponse = await failWorkerRun(
         client,
         payload.runId,
         failureMessage,
         latestSandboxId
       ).catch((failError) => {
         console.warn("Unable to mark Codex run failed.", failError)
+        return undefined
       })
+      await queueFactoryWakeRuns(failResponse?.factoryWakeRuns)
       streamPublisher?.publishError(failureMessage)
       await streamPublisher?.flush()
       throw error
@@ -450,6 +491,7 @@ export const cloudcodeRun = task({
     }
   },
   onCancel: async ({ payload }) => {
-    await cancelWorkerRun(workerConvexClient(), payload.runId)
+    const response = await cancelWorkerRun(workerConvexClient(), payload.runId)
+    await queueFactoryWakeRuns(response?.factoryWakeRuns)
   },
 })

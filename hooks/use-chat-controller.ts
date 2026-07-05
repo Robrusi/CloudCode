@@ -4,6 +4,7 @@ import { useUser } from "@clerk/nextjs"
 import { useCallback, useEffect, useMemo, useState } from "react"
 
 import type { ChatComposerProps } from "@/components/chat/composer"
+import type { Id } from "@/convex/_generated/dataModel"
 import { repoLabel } from "@/components/chat/format"
 import type { ChatShellProps } from "@/components/chat/shell"
 import type { DaytonaUiTestRun } from "@/components/sandbox/ui-tests-model"
@@ -653,24 +654,44 @@ export function useChatController(): ChatShellProps {
   // Automation and review threads live in their own sidebar contexts. Normal
   // chat views list regular chats only; opening an automation/review thread
   // still renders as chat but keeps the matching sidebar context active.
+  // Factory-dispatched threads carry no automation/review tag themselves and
+  // follow their root thread's context so they nest under it in the sidebar.
+  const contextAnchorFor = useCallback(
+    (chat: {
+      automationId?: Id<"automations">
+      factoryRootThreadId?: Id<"threads">
+      reviewId?: Id<"reviews">
+    }) => {
+      if (!chat.factoryRootThreadId) return chat
+      return (
+        sidebarChats.find((entry) => entry.id === chat.factoryRootThreadId) ??
+        chat
+      )
+    },
+    [sidebarChats]
+  )
+  const activeAnchor = active ? contextAnchorFor(active) : null
   const sidebarThreadContext =
-    view === "automations" || (view === "chat" && Boolean(active?.automationId))
+    view === "automations" ||
+    (view === "chat" && Boolean(activeAnchor?.automationId))
       ? "automations"
-      : view === "reviews" || (view === "chat" && Boolean(active?.reviewId))
+      : view === "reviews" ||
+          (view === "chat" && Boolean(activeAnchor?.reviewId))
         ? "reviews"
         : "chats"
   const visibleSidebarChats = useMemo(() => {
-    switch (sidebarThreadContext) {
-      case "automations":
-        return sidebarChats.filter((chat) => chat.automationId)
-      case "reviews":
-        return sidebarChats.filter((chat) => chat.reviewId)
-      default:
-        return sidebarChats.filter(
-          (chat) => !chat.automationId && !chat.reviewId
-        )
-    }
-  }, [sidebarChats, sidebarThreadContext])
+    return sidebarChats.filter((chat) => {
+      const anchor = contextAnchorFor(chat)
+      switch (sidebarThreadContext) {
+        case "automations":
+          return Boolean(anchor.automationId)
+        case "reviews":
+          return Boolean(anchor.reviewId)
+        default:
+          return !anchor.automationId && !anchor.reviewId
+      }
+    })
+  }, [contextAnchorFor, sidebarChats, sidebarThreadContext])
 
   return {
     dialogs: {
