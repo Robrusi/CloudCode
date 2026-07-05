@@ -1,6 +1,7 @@
 import type { Id } from "@/convex/_generated/dataModel"
 import type { SandboxState } from "@/components/chat/sandbox-types"
 
+// types
 export type SidebarChat = {
   automationId?: Id<"automations">
   reviewId?: Id<"reviews">
@@ -19,8 +20,78 @@ export type SidebarChatGroup = {
   repo: string
 }
 
+export type WorkspaceHealthLevel = "active" | "idle" | "attention" | "empty"
+
+export type WorkspaceHealthSummary = {
+  attentionCount: number
+  automationCount: number
+  latestActivityAt: number | null
+  level: WorkspaceHealthLevel
+  pendingCount: number
+  repoCount: number
+  runningSandboxCount: number
+  staleCount: number
+  stoppedSandboxCount: number
+  totalChats: number
+}
+
+const STALE_THREAD_AGE_MS = 1000 * 60 * 60 * 24 * 14
+
 export function isSidebarChatRunning(chat: SidebarChat) {
   return chat.pending
+}
+
+export function summarizeWorkspaceHealth(
+  chats: SidebarChat[],
+  now = Date.now()
+): WorkspaceHealthSummary {
+  const repos = new Set<string>()
+  let automationCount = 0
+  let latestActivityAt: number | null = null
+  let pendingCount = 0
+  let runningSandboxCount = 0
+  let staleCount = 0
+  let stoppedSandboxCount = 0
+
+  for (const chat of chats) {
+    if (chat.repoUrl) repos.add(chat.repoUrl)
+    if (chat.automationId) automationCount += 1
+    if (chat.pending) pendingCount += 1
+    if (chat.sandboxState === "running") runningSandboxCount += 1
+    if (chat.sandboxState === "stopped") stoppedSandboxCount += 1
+    if (now - chat.lastUserMessageAt >= STALE_THREAD_AGE_MS) staleCount += 1
+    if (
+      latestActivityAt === null ||
+      chat.lastUserMessageAt > latestActivityAt
+    ) {
+      latestActivityAt = chat.lastUserMessageAt
+    }
+  }
+
+  const attentionCount = chats.filter(
+    (chat) => chat.pending || chat.sandboxState === "running"
+  ).length
+  const level: WorkspaceHealthLevel =
+    chats.length === 0
+      ? "empty"
+      : attentionCount > 0
+        ? "active"
+        : stoppedSandboxCount > 0 || staleCount > 0
+          ? "attention"
+          : "idle"
+
+  return {
+    attentionCount,
+    automationCount,
+    latestActivityAt,
+    level,
+    pendingCount,
+    repoCount: repos.size,
+    runningSandboxCount,
+    staleCount,
+    stoppedSandboxCount,
+    totalChats: chats.length,
+  }
 }
 
 export function groupSidebarChats(chats: SidebarChat[]): SidebarChatGroup[] {
@@ -49,8 +120,8 @@ export function groupSidebarChats(chats: SidebarChat[]): SidebarChatGroup[] {
   return groups.sort((a, b) => b.latest - a.latest)
 }
 
-export function relativeTime(timestamp: number) {
-  const diff = Math.max(0, Date.now() - timestamp)
+export function relativeTime(timestamp: number, now = Date.now()) {
+  const diff = Math.max(0, now - timestamp)
   const seconds = Math.floor(diff / 1000)
   if (seconds < 60) return seconds <= 1 ? "just now" : `${seconds} seconds ago`
   const minutes = Math.floor(seconds / 60)
