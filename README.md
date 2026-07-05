@@ -21,6 +21,7 @@ Cloudcode is a platform for running Codex in sandboxes.
 ## Demo
 
 [Watch the demo](https://drive.google.com/file/d/1TXkPj7NiCo4qouHJE5VemrvAAb7LsD-o/view?usp=sharing)
+The flicker in the video is fixed
 
 ## Setup
 
@@ -48,7 +49,8 @@ For the GitHub App, configure:
 Homepage URL: http://localhost:3000
 Callback URL: http://localhost:3000/api/github/app/oauth/callback
 Setup URL: http://localhost:3000/api/github/app/setup
-Webhook: disabled
+Webhook: enabled
+Webhook URL: https://cloudcode.computer/api/github/webhook
 ```
 
 Grant the app repository permissions for **Contents: Read and write** and
