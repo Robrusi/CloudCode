@@ -257,6 +257,7 @@ function IntegrationRow({
  * these are inbound entry points, not agent tools. */
 export function IntegrationsConnections() {
   const [status, setStatus] = useState<IntegrationsStatus | null>(null)
+  const [loadError, setLoadError] = useState("")
 
   const refresh = useCallback(async () => {
     try {
@@ -266,8 +267,13 @@ export function IntegrationsConnections() {
         { fallbackError: "Unable to load integrations." }
       )
       setStatus(data)
-    } catch {
-      setStatus(null)
+      setLoadError("")
+    } catch (error) {
+      // Keep any previously loaded status; a transient failure must not
+      // masquerade as "needs server setup".
+      setLoadError(
+        error instanceof Error ? error.message : "Unable to load integrations."
+      )
     }
   }, [])
 
@@ -282,6 +288,25 @@ export function IntegrationsConnections() {
   const linearInstallation = installations.find(
     (installation) => installation.provider === "linear"
   )
+
+  if (loadError && !status) {
+    return (
+      <div>
+        <p className="text-sm text-muted-foreground">
+          Slack &amp; Linear status could not be loaded: {loadError}
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="mt-2"
+          onClick={() => void refresh()}
+        >
+          Retry
+        </Button>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">
