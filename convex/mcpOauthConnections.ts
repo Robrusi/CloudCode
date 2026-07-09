@@ -1,6 +1,6 @@
 import { v } from "convex/values"
 
-import { mutation, query } from "./_generated/server"
+import { internalMutation, mutation, query } from "./_generated/server"
 import type { Doc, Id } from "./_generated/dataModel"
 import type { MutationCtx, QueryCtx } from "./_generated/server"
 import { deleteMcpServerCascade } from "./lib/mcpServerRecords"
@@ -211,6 +211,36 @@ export const disconnect = mutation({
 
     await ctx.db.delete(connection._id)
     return { deletedConnection: true, deletedServer }
+  },
+})
+
+// One-time cleanup after Slack and Linear moved from MCP providers to the
+// dedicated chat integrations: without it, previously connected rows keep
+// injecting those MCP servers into sandbox runs. Idempotent; run with
+//   npx convex run mcpOauthConnections:removeDiscontinuedProviders
+export const removeDiscontinuedProviders = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const discontinued = new Set(["linear", "slack"])
+    const connections = await ctx.db.query("mcpOauthConnections").collect()
+
+    let deletedConnections = 0
+    let deletedServers = 0
+    for (const connection of connections) {
+      if (!discontinued.has(connection.provider)) continue
+
+      if (connection.serverId) {
+        const server = await ctx.db.get(connection.serverId)
+        if (server) {
+          await deleteMcpServerCascade(ctx, server._id)
+          deletedServers += 1
+        }
+      }
+      await ctx.db.delete(connection._id)
+      deletedConnections += 1
+    }
+
+    return { deletedConnections, deletedServers }
   },
 })
 

@@ -20,6 +20,12 @@ import {
   speed,
   thinking,
 } from "./lib/codexRunValidators"
+import {
+  automationTrigger,
+  automationTriggerOf,
+  automationTriggerSourceKey,
+  type AutomationTrigger,
+} from "./lib/integrationTriggers"
 import { resolveOwnedPresetOrAutoDefault } from "./lib/sandboxPresets"
 import { ensureCurrentUser, getCurrentUser } from "./lib/users"
 import { requireWorkerSecret } from "./lib/workerAuth"
@@ -37,7 +43,7 @@ const automationConfigArgs = {
   baseBranch: v.optional(v.string()),
   branchMode: v.optional(branchMode),
   branchName: v.optional(v.string()),
-  cron: v.string(),
+  cron: v.optional(v.string()),
   model,
   name: v.string(),
   profile: v.optional(v.string()),
@@ -48,7 +54,8 @@ const automationConfigArgs = {
   sandboxRetention: v.optional(automationSandboxRetention),
   speed,
   threadMode: v.optional(automationThreadMode),
-  timezone: v.string(),
+  timezone: v.optional(v.string()),
+  trigger: v.optional(automationTrigger),
 }
 
 type AutomationConfigArgs = {
@@ -56,7 +63,7 @@ type AutomationConfigArgs = {
   baseBranch?: string
   branchMode?: Doc<"automations">["branchMode"]
   branchName?: string
-  cron: string
+  cron?: string
   model: Doc<"automations">["model"]
   name: string
   profile?: string
@@ -67,14 +74,79 @@ type AutomationConfigArgs = {
   sandboxRetention?: Doc<"automations">["sandboxRetention"]
   speed: Doc<"automations">["speed"]
   threadMode?: Doc<"automations">["threadMode"]
-  timezone: string
+  timezone?: string
+  trigger?: AutomationTrigger
+}
+
+/** Resolves the canonical trigger from the request: an explicit trigger
+ * object, or the legacy cron/timezone pair from clients that predate event
+ * triggers. Validates the fields the trigger kind requires. */
+async function resolveAutomationTrigger(
+  ctx: MutationCtx,
+  args: AutomationConfigArgs,
+  userId: Id<"users">
+): Promise<AutomationTrigger> {
+  const trigger: AutomationTrigger = args.trigger ?? {
+    cron: args.cron ?? "",
+    kind: "cron",
+    timezone: args.timezone ?? "",
+  }
+
+  if (trigger.kind === "cron") {
+    if (!trigger.cron.trim()) throw new Error("cron is required.")
+    if (!trigger.timezone.trim()) throw new Error("timezone is required.")
+    return {
+      cron: trigger.cron.trim(),
+      kind: "cron",
+      timezone: trigger.timezone.trim(),
+    }
+  }
+
+  const installation = await ctx.db.get(trigger.installationId)
+  if (
+    !installation ||
+    installation.userId !== userId ||
+    installation.provider !== trigger.kind
+  ) {
+    throw new Error("Connect the integration before using it as a trigger.")
+  }
+
+  if (trigger.kind === "slack") {
+    if (trigger.event === "keyword" && !trigger.keyword?.trim()) {
+      throw new Error("keyword is required for keyword triggers.")
+    }
+    if (trigger.event === "reaction" && !trigger.emoji?.trim()) {
+      throw new Error("emoji is required for reaction triggers.")
+    }
+    return {
+      ...trigger,
+      emoji: trigger.emoji?.trim().replace(/^:|:$/g, "") || undefined,
+      keyword: trigger.keyword?.trim() || undefined,
+    }
+  }
+
+  if (trigger.event === "labelAdded" && !trigger.labelId?.trim()) {
+    throw new Error("labelId is required for label triggers.")
+  }
+  return trigger
+}
+
+/** Denormalized trigger columns stored alongside the trigger object: the
+ * legacy cron/timezone pair for cron kind, and the source key that
+ * by_trigger_source matches webhook events against for event kinds. */
+function triggerColumns(trigger: AutomationTrigger) {
+  return {
+    cron: trigger.kind === "cron" ? trigger.cron : undefined,
+    timezone: trigger.kind === "cron" ? trigger.timezone : undefined,
+    trigger,
+    triggerKind: trigger.kind,
+    triggerSourceKey: automationTriggerSourceKey(trigger),
+  }
 }
 
 function validateAutomationConfig(args: AutomationConfigArgs) {
   if (!args.name.trim()) throw new Error("name is required.")
   if (!args.prompt.trim()) throw new Error("prompt is required.")
-  if (!args.cron.trim()) throw new Error("cron is required.")
-  if (!args.timezone.trim()) throw new Error("timezone is required.")
   if (!args.repoUrl.trim()) throw new Error("repoUrl is required.")
 }
 
@@ -116,12 +188,19 @@ export const list = query({
 export const create = mutation({
   args: {
     ...automationConfigArgs,
-    nextRunAt: v.number(),
+    nextRunAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
     validateAutomationConfig(args)
-    validateNextRunAt(args.nextRunAt)
+    const trigger = await resolveAutomationTrigger(ctx, args, userId)
+    const nextRunAt = trigger.kind === "cron" ? args.nextRunAt : undefined
+    if (trigger.kind === "cron") {
+      if (nextRunAt === undefined) {
+        throw new Error("nextRunAt is required for scheduled automations.")
+      }
+      validateNextRunAt(nextRunAt)
+    }
     const sandboxPresetId = await resolveOwnedPresetOrAutoDefault(
       ctx,
       args.sandboxPresetId,
@@ -151,12 +230,11 @@ export const create = mutation({
         ? { branchName: args.branchName.trim() }
         : {}),
       createdAt: now,
-      cron: args.cron.trim(),
       enabled: true,
       failureCount: 0,
       model: args.model,
       name: args.name.trim(),
-      nextRunAt: args.nextRunAt,
+      nextRunAt,
       ...(args.profile ? { profile: args.profile } : {}),
       prompt: args.prompt.trim(),
       reasoningEffort: args.reasoningEffort,
@@ -168,7 +246,7 @@ export const create = mutation({
       speed: args.speed,
       threadId,
       ...(args.threadMode ? { threadMode: args.threadMode } : {}),
-      timezone: args.timezone.trim(),
+      ...triggerColumns(trigger),
       updatedAt: now,
       userId,
     })
@@ -185,11 +263,12 @@ export const update = mutation({
   args: {
     ...automationConfigArgs,
     automationId: v.id("automations"),
-    nextRunAt: v.number(),
+    nextRunAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
     validateAutomationConfig(args)
+    const trigger = await resolveAutomationTrigger(ctx, args, userId)
     const automation = await requireOwnedAutomation(
       ctx,
       args.automationId,
@@ -204,7 +283,13 @@ export const update = mutation({
 
     const now = Date.now()
     const trimmedBaseBranch = args.baseBranch?.trim()
-    if (automation.enabled) validateNextRunAt(args.nextRunAt)
+    const nextRunAt = trigger.kind === "cron" ? args.nextRunAt : undefined
+    if (automation.enabled && trigger.kind === "cron") {
+      if (nextRunAt === undefined) {
+        throw new Error("nextRunAt is required for scheduled automations.")
+      }
+      validateNextRunAt(nextRunAt)
+    }
 
     await Promise.all([
       ctx.db.patch(automation._id, {
@@ -212,10 +297,10 @@ export const update = mutation({
         baseBranch: trimmedBaseBranch || undefined,
         branchMode: args.branchMode,
         branchName: args.branchName?.trim() || undefined,
-        cron: args.cron.trim(),
         model: args.model,
         name: args.name.trim(),
-        ...(automation.enabled ? { nextRunAt: args.nextRunAt } : {}),
+        // Event triggers never schedule; switching kinds clears the slot.
+        nextRunAt: automation.enabled ? nextRunAt : undefined,
         profile: args.profile,
         prompt: args.prompt.trim(),
         reasoningEffort: args.reasoningEffort,
@@ -224,7 +309,7 @@ export const update = mutation({
         sandboxRetention: args.sandboxRetention,
         speed: args.speed,
         threadMode: args.threadMode,
-        timezone: args.timezone.trim(),
+        ...triggerColumns(trigger),
         updatedAt: now,
       }),
       // The automation's thread mirrors its config so the chat UI shows the
@@ -259,15 +344,20 @@ export const setEnabled = mutation({
     )
 
     if (args.enabled) {
-      if (args.nextRunAt === undefined) {
+      const isCron = automationTriggerOf(automation).kind === "cron"
+      if (isCron && args.nextRunAt === undefined) {
         throw new Error("nextRunAt is required when enabling an automation.")
       }
-      validateNextRunAt(args.nextRunAt)
+      if (isCron && args.nextRunAt !== undefined) {
+        validateNextRunAt(args.nextRunAt)
+      }
       await ctx.db.patch(automation._id, {
         disabledReason: undefined,
         enabled: true,
+        eventFireCount: undefined,
+        eventFireWindowStart: undefined,
         failureCount: 0,
-        nextRunAt: args.nextRunAt,
+        nextRunAt: isCron ? args.nextRunAt : undefined,
         updatedAt: Date.now(),
       })
       return
@@ -380,13 +470,18 @@ export const dueForWorker = query({
       )
       .take(Math.min(Math.max(args.limit, 1), 100))
 
-    return due.map((automation) => ({
-      _id: automation._id,
-      cron: automation.cron,
-      nextRunAt: automation.nextRunAt!,
-      timezone: automation.timezone,
-      userId: automation.userId,
-    }))
+    // Only cron automations carry a nextRunAt, so every row here reads as
+    // the cron kind (legacy rows through automationTriggerOf).
+    return due.map((automation) => {
+      const trigger = automationTriggerOf(automation)
+      return {
+        _id: automation._id,
+        cron: trigger.kind === "cron" ? trigger.cron : "",
+        nextRunAt: automation.nextRunAt!,
+        timezone: trigger.kind === "cron" ? trigger.timezone : "UTC",
+        userId: automation.userId,
+      }
+    })
   },
 })
 
@@ -453,6 +548,9 @@ export const workerCreateRun = mutation({
     githubUsername: v.optional(v.string()),
     manual: v.boolean(),
     notesAccessToken: v.string(),
+    // Event-triggered fires interpolate the triggering event into the
+    // configured prompt; when set this full text replaces automation.prompt.
+    prompt: v.optional(v.string()),
     workerSecret: v.string(),
   },
   handler: async (ctx, args) => {
@@ -537,8 +635,9 @@ export const workerCreateRun = mutation({
         ? thread.sandboxId
         : undefined
 
+    const prompt = args.prompt?.trim() || automation.prompt
     await ctx.db.insert("messages", {
-      content: automation.prompt,
+      content: prompt,
       role: "user",
       threadId,
       userId,
@@ -590,7 +689,7 @@ export const workerCreateRun = mutation({
       ctx.db.insert("codexRunInputs", {
         ...(args.githubToken ? { githubToken: args.githubToken } : {}),
         notesAccessToken: args.notesAccessToken,
-        prompt: automation.prompt,
+        prompt,
         runId,
         userId,
       }),
@@ -676,5 +775,86 @@ export const disableForWorker = mutation({
     if (!automation) return
 
     await disableAutomation(ctx, automation, args.reason)
+  },
+})
+
+// Sliding-window cap on event-triggered fires: a webhook feedback loop (an
+// automation whose run re-emits its own trigger event) stalls out instead of
+// self-amplifying. Ten fires per hour is far above any legitimate cadence.
+const EVENT_FIRE_WINDOW_MS = 60 * 60_000
+const EVENT_FIRE_WINDOW_MAX = 10
+
+/** Enabled event automations matching any of the coarse source keys computed
+ * from a webhook event. The caller applies the trigger's fine predicates
+ * (channel, keyword, emoji, team, label, state) on the returned rows. */
+export const workerMatchTriggeredAutomations = query({
+  args: {
+    sourceKeys: v.array(v.string()),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    const matched = new Map<
+      string,
+      {
+        _id: Id<"automations">
+        name: string
+        trigger: NonNullable<Doc<"automations">["trigger"]>
+        userId: Id<"users">
+      }
+    >()
+    for (const sourceKey of args.sourceKeys.slice(0, 10)) {
+      const rows = await ctx.db
+        .query("automations")
+        .withIndex("by_trigger_source", (q) =>
+          q.eq("triggerSourceKey", sourceKey).eq("enabled", true)
+        )
+        .take(50)
+      for (const row of rows) {
+        if (!row.trigger) continue
+        matched.set(row._id, {
+          _id: row._id,
+          name: row.name,
+          trigger: row.trigger,
+          userId: row.userId,
+        })
+      }
+    }
+
+    return [...matched.values()]
+  },
+})
+
+/** Compare-and-set style fire claim for one event automation: bumps the
+ * sliding-window counter and refuses once the cap is reached, so redelivered
+ * or looping events cannot pile runs up. */
+export const workerClaimEventFire = mutation({
+  args: {
+    automationId: v.id("automations"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    const automation = await ctx.db.get(args.automationId)
+    if (!automation || !automation.enabled) {
+      return { claimed: false as const, reason: "disabled" as const }
+    }
+
+    const now = Date.now()
+    const windowStart = automation.eventFireWindowStart ?? 0
+    const inWindow = now - windowStart < EVENT_FIRE_WINDOW_MS
+    const count = inWindow ? (automation.eventFireCount ?? 0) : 0
+    if (count >= EVENT_FIRE_WINDOW_MAX) {
+      return { claimed: false as const, reason: "rate_limited" as const }
+    }
+
+    await ctx.db.patch(automation._id, {
+      eventFireCount: count + 1,
+      eventFireWindowStart: inWindow ? windowStart : now,
+      updatedAt: now,
+    })
+    return { claimed: true as const }
   },
 })

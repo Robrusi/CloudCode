@@ -34,11 +34,15 @@ export async function POST(request: Request) {
         automationId,
       })
       if (!automation) return jsonError("Automation not found.", 404)
-      nextRunAt = nextRunAtAfter(
-        automation.cron,
-        automation.timezone,
-        Date.now()
-      )
+      // Event-triggered automations have no schedule; only cron automations
+      // re-arm nextRunAt when re-enabled.
+      if (automation.cron) {
+        nextRunAt = nextRunAtAfter(
+          automation.cron,
+          automation.timezone ?? "UTC",
+          Date.now()
+        )
+      }
     }
 
     await client.mutation(api.automations.setEnabled, {

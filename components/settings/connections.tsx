@@ -3,6 +3,7 @@
 import { AccountRow } from "@/components/settings/account-row"
 import { ChatGPTConnectionRow } from "@/components/settings/chatgpt-connection"
 import { GitHubConnectionRow } from "@/components/settings/github-connection"
+import { IntegrationsConnections } from "@/components/settings/integrations-connections"
 import { SettingsPage } from "@/components/settings/shared"
 import type { CodexAuthOverview } from "@/lib/codex/auth-types"
 import type { GitHubAuthStatus } from "@/lib/github/auth"
@@ -41,6 +42,9 @@ export function ConnectionsSettings({
             error={githubAuthError}
             onGitHubAuthChanged={onGitHubAuthChanged}
           />
+        </div>
+        <div className="py-7">
+          <IntegrationsConnections />
         </div>
         <div className="pt-7">
           <AccountRow />

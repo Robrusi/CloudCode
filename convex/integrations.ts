@@ -1,0 +1,691 @@
+import { v } from "convex/values"
+
+import type { Doc, Id } from "./_generated/dataModel"
+import {
+  mutation,
+  query,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server"
+import { findCodexAuth } from "./lib/codexRunAuth"
+import { activeRunForThread } from "./lib/codexRunLifecycle"
+import { insertFactoryRunRecords } from "./lib/factoryRuns"
+import { integrationProvider } from "./lib/integrationTriggers"
+import { resolveOwnedPresetOrAutoDefault } from "./lib/sandboxPresets"
+import { threadContinuationInput } from "./lib/threadContinuation"
+import { ensureCurrentUser, getCurrentUser } from "./lib/users"
+import { requireWorkerSecret } from "./lib/workerAuth"
+import {
+  codexAuthMissingMessage,
+  codexAuthReconnectMessage,
+} from "@/lib/codex/auth-errors"
+
+// Session defaults for runs started from Slack/Linear. Follow-up runs on an
+// existing bridge reuse the thread's previous run options instead.
+const INTEGRATION_RUN_MODEL = "gpt-5.5" as const
+const INTEGRATION_RUN_EFFORT = "medium" as const
+const INTEGRATION_RUN_SPEED = "standard" as const
+
+const THREAD_TITLE_MAX_LENGTH = 120
+const PENDING_MESSAGES_MAX = 20
+const QUEUED_LOG_MESSAGE = "Queued Codex run"
+
+function integrationThreadTitle(title: string) {
+  const base = title.trim().split("\n", 1)[0]?.trim() || "Integration session"
+  return base.length > THREAD_TITLE_MAX_LENGTH
+    ? `${base.slice(0, THREAD_TITLE_MAX_LENGTH)}…`
+    : base
+}
+
+async function installationForProviderExternal(
+  ctx: QueryCtx | MutationCtx,
+  provider: Doc<"integrationInstallations">["provider"],
+  externalId: string
+) {
+  return await ctx.db
+    .query("integrationInstallations")
+    .withIndex("by_provider_external", (q) =>
+      q.eq("provider", provider).eq("externalId", externalId)
+    )
+    .first()
+}
+
+async function bridgeForExternalThread(
+  ctx: QueryCtx | MutationCtx,
+  provider: Doc<"integrationThreads">["provider"],
+  externalThreadId: string
+) {
+  return await ctx.db
+    .query("integrationThreads")
+    .withIndex("by_external", (q) =>
+      q.eq("provider", provider).eq("externalThreadId", externalThreadId)
+    )
+    .unique()
+}
+
+async function requireOwnedInstallation(
+  ctx: MutationCtx,
+  installationId: Id<"integrationInstallations">,
+  userId: Id<"users">
+) {
+  const installation = await ctx.db.get(installationId)
+  if (!installation || installation.userId !== userId) {
+    throw new Error("Integration not found.")
+  }
+  return installation
+}
+
+/** Disable automations that fire from the given installation, so a removed
+ * integration never leaves orphaned event triggers behind. */
+async function disableInstallationAutomations(
+  ctx: MutationCtx,
+  installation: Doc<"integrationInstallations">,
+  reason: string
+) {
+  const automations = await ctx.db
+    .query("automations")
+    .withIndex("by_user_updated", (q) => q.eq("userId", installation.userId))
+    .collect()
+
+  for (const automation of automations) {
+    const trigger = automation.trigger
+    if (
+      trigger &&
+      trigger.kind !== "cron" &&
+      trigger.installationId === installation._id &&
+      automation.enabled
+    ) {
+      await ctx.db.patch(automation._id, {
+        disabledReason: reason,
+        enabled: false,
+        nextRunAt: undefined,
+        updatedAt: Date.now(),
+      })
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Settings surface (Clerk-authed).
+// ---------------------------------------------------------------------------
+
+export const list = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUser(ctx)
+    if (!user) return []
+
+    const installations = await ctx.db
+      .query("integrationInstallations")
+      .withIndex("by_user_provider", (q) => q.eq("userId", user._id))
+      .collect()
+
+    return installations.map((installation) => ({
+      botUserId: installation.botUserId,
+      defaultRepoUrl: installation.defaultRepoUrl,
+      defaultSandboxPresetId: installation.defaultSandboxPresetId,
+      enabled: installation.enabled,
+      externalId: installation.externalId,
+      externalName: installation.externalName,
+      id: installation._id,
+      provider: installation.provider,
+      updatedAt: installation.updatedAt,
+    }))
+  },
+})
+
+export const saveInstallation = mutation({
+  args: {
+    botUserId: v.optional(v.string()),
+    externalId: v.string(),
+    externalName: v.optional(v.string()),
+    provider: integrationProvider,
+  },
+  handler: async (ctx, args) => {
+    const userId = await ensureCurrentUser(ctx)
+    const externalId = args.externalId.trim()
+    if (!externalId) throw new Error("externalId is required.")
+
+    const now = Date.now()
+    const existing = await installationForProviderExternal(
+      ctx,
+      args.provider,
+      externalId
+    )
+    if (existing && existing.userId !== userId) {
+      throw new Error(
+        "This workspace is already connected by another CloudCode user."
+      )
+    }
+
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        botUserId: args.botUserId ?? existing.botUserId,
+        enabled: true,
+        externalName: args.externalName ?? existing.externalName,
+        updatedAt: now,
+      })
+      return { installationId: existing._id }
+    }
+
+    const installationId = await ctx.db.insert("integrationInstallations", {
+      botUserId: args.botUserId,
+      createdAt: now,
+      enabled: true,
+      externalId,
+      externalName: args.externalName,
+      provider: args.provider,
+      updatedAt: now,
+      userId,
+    })
+    return { installationId }
+  },
+})
+
+export const updateSettings = mutation({
+  args: {
+    defaultRepoUrl: v.optional(v.string()),
+    defaultSandboxPresetId: v.optional(v.id("sandboxPresets")),
+    enabled: v.optional(v.boolean()),
+    installationId: v.id("integrationInstallations"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await ensureCurrentUser(ctx)
+    const installation = await requireOwnedInstallation(
+      ctx,
+      args.installationId,
+      userId
+    )
+
+    if (args.defaultSandboxPresetId) {
+      const preset = await ctx.db.get(args.defaultSandboxPresetId)
+      if (!preset || preset.userId !== userId) {
+        throw new Error("Sandbox preset not found.")
+      }
+    }
+
+    await ctx.db.patch(installation._id, {
+      ...(args.defaultRepoUrl !== undefined
+        ? { defaultRepoUrl: args.defaultRepoUrl.trim() || undefined }
+        : {}),
+      ...(args.defaultSandboxPresetId !== undefined
+        ? { defaultSandboxPresetId: args.defaultSandboxPresetId }
+        : {}),
+      ...(args.enabled !== undefined ? { enabled: args.enabled } : {}),
+      updatedAt: Date.now(),
+    })
+
+    if (args.enabled === false) {
+      await disableInstallationAutomations(
+        ctx,
+        installation,
+        "The connected integration was disabled. Re-enable it to resume this automation."
+      )
+    }
+  },
+})
+
+export const removeInstallation = mutation({
+  args: {
+    installationId: v.id("integrationInstallations"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await ensureCurrentUser(ctx)
+    const installation = await requireOwnedInstallation(
+      ctx,
+      args.installationId,
+      userId
+    )
+
+    await disableInstallationAutomations(
+      ctx,
+      installation,
+      "The connected integration was removed. Reconnect it and edit the automation to resume."
+    )
+    // Bridges stay: their threads keep their history, they just stop
+    // receiving events once the installation row is gone.
+    await ctx.db.delete(installation._id)
+  },
+})
+
+// ---------------------------------------------------------------------------
+// Worker functions for the integration-event Trigger task.
+// ---------------------------------------------------------------------------
+
+/** Everything the event worker needs before creating a run: the installation
+ * (with settings), the run owner (email match falling back to the installer),
+ * and the bridge state for the external thread when one exists. */
+export const workerResolveEvent = query({
+  args: {
+    authorEmail: v.optional(v.string()),
+    // Slack events do not always carry the team id; without it the single
+    // installation of the provider is used (single-workspace mode).
+    externalId: v.optional(v.string()),
+    externalThreadId: v.optional(v.string()),
+    provider: integrationProvider,
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    const installation = args.externalId
+      ? await installationForProviderExternal(
+          ctx,
+          args.provider,
+          args.externalId
+        )
+      : await ctx.db
+          .query("integrationInstallations")
+          .withIndex("by_provider_external", (q) =>
+            q.eq("provider", args.provider)
+          )
+          .first()
+    if (!installation) return { status: "not_installed" as const }
+    if (!installation.enabled) return { status: "disabled" as const }
+
+    let ownerUserId = installation.userId
+    const email = args.authorEmail?.trim().toLowerCase()
+    if (email) {
+      const matched = await ctx.db
+        .query("users")
+        .withIndex("by_email", (q) => q.eq("email", email))
+        .first()
+      if (matched) ownerUserId = matched._id
+    }
+
+    let bridge: {
+      activeRun: boolean
+      bridgeId: Id<"integrationThreads">
+      muted: boolean
+      pendingCount: number
+      threadId: Id<"threads">
+      userId: Id<"users">
+    } | null = null
+    if (args.externalThreadId) {
+      const row = await bridgeForExternalThread(
+        ctx,
+        args.provider,
+        args.externalThreadId
+      )
+      if (row) {
+        const activeRun = await activeRunForThread(ctx, row.threadId)
+        bridge = {
+          activeRun: Boolean(activeRun),
+          bridgeId: row._id,
+          muted: Boolean(row.muted),
+          pendingCount: row.pendingMessages?.length ?? 0,
+          threadId: row.threadId,
+          userId: row.userId,
+        }
+      }
+    }
+
+    return {
+      status: "ok" as const,
+      bridge,
+      defaultRepoUrl: installation.defaultRepoUrl,
+      defaultSandboxPresetId: installation.defaultSandboxPresetId,
+      externalId: installation.externalId,
+      installationId: installation._id,
+      ownerUserId,
+    }
+  },
+})
+
+/** Cheap pre-filter for the Slack webhook handler: does any enabled event
+ * automation match this channel message or reaction? Only matching events
+ * are enqueued to Trigger, so ordinary channel chatter costs one query and
+ * nothing more. The event worker still claims and re-validates each fire. */
+export const workerMatchSlackEvent = query({
+  args: {
+    channelId: v.string(),
+    emoji: v.optional(v.string()),
+    event: v.union(v.literal("keyword"), v.literal("reaction")),
+    externalId: v.optional(v.string()),
+    text: v.optional(v.string()),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    const installation = args.externalId
+      ? await installationForProviderExternal(ctx, "slack", args.externalId)
+      : await ctx.db
+          .query("integrationInstallations")
+          .withIndex("by_provider_external", (q) => q.eq("provider", "slack"))
+          .first()
+    if (!installation || !installation.enabled) return []
+
+    const rows = await ctx.db
+      .query("automations")
+      .withIndex("by_trigger_source", (q) =>
+        q
+          .eq("triggerSourceKey", `slack:${installation._id}:${args.event}`)
+          .eq("enabled", true)
+      )
+      .take(50)
+
+    const text = args.text?.toLowerCase() ?? ""
+    return rows
+      .filter((row) => {
+        const trigger = row.trigger
+        if (!trigger || trigger.kind !== "slack") return false
+        if (trigger.channelId && trigger.channelId !== args.channelId) {
+          return false
+        }
+        if (trigger.event === "keyword") {
+          const keyword = trigger.keyword?.toLowerCase()
+          return Boolean(keyword && text.includes(keyword))
+        }
+        return Boolean(trigger.emoji && trigger.emoji === args.emoji)
+      })
+      .map((row) => ({ automationId: row._id, name: row.name }))
+  },
+})
+
+export const workerCreateSessionRun = mutation({
+  args: {
+    installationId: v.id("integrationInstallations"),
+    externalThreadId: v.string(),
+    linearAgentSessionId: v.optional(v.string()),
+    linearIssueId: v.optional(v.string()),
+    linearOrganizationId: v.optional(v.string()),
+    prompt: v.string(),
+    provider: integrationProvider,
+    // Required for new sessions; follow-ups on an existing bridge continue
+    // on the bridged thread's repository instead.
+    repoUrl: v.optional(v.string()),
+    title: v.string(),
+    userId: v.id("users"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    const installation = await ctx.db.get(args.installationId)
+    if (!installation || !installation.enabled) {
+      return { ok: false as const, status: "not_installed" as const }
+    }
+    const prompt = args.prompt.trim()
+    if (!prompt) return { ok: false as const, status: "empty_prompt" as const }
+
+    const { auth, profile: authProfile } = await findCodexAuth(
+      ctx,
+      args.userId,
+      undefined,
+      { fallbackToActive: true }
+    )
+    if (!auth) {
+      return {
+        ok: false as const,
+        message: codexAuthMissingMessage(authProfile),
+        status: "missing_auth" as const,
+      }
+    }
+    if (auth.invalidatedAt) {
+      return {
+        ok: false as const,
+        message: codexAuthReconnectMessage(authProfile),
+        status: "auth_reconnect_required" as const,
+      }
+    }
+
+    const now = Date.now()
+    const bridge = await bridgeForExternalThread(
+      ctx,
+      args.provider,
+      args.externalThreadId
+    )
+
+    // A mention on an already-bridged external thread continues its CloudCode
+    // thread instead of opening a parallel session.
+    if (bridge) {
+      const thread = await ctx.db.get(bridge.threadId)
+      if (!thread) return { ok: false as const, status: "not_found" as const }
+      const activeRun = await activeRunForThread(ctx, bridge.threadId)
+      if (activeRun) {
+        return { ok: false as const, status: "thread_busy" as const }
+      }
+
+      const continuation = await threadContinuationInput(ctx, thread)
+      const latest = continuation.latest
+      const created = await insertFactoryRunRecords(ctx, {
+        baseBranch: thread.baseBranch ?? latest?.baseBranch,
+        branchMode: thread.branchMode ?? latest?.branchMode,
+        branchName: latest?.branchName,
+        codexThreadId: continuation.codexThreadId,
+        logMessage: QUEUED_LOG_MESSAGE,
+        model: latest?.model ?? thread.model,
+        previousDiff: continuation.previousDiff,
+        profile: auth.profile,
+        prompt,
+        reasoningEffort: latest?.reasoningEffort ?? INTEGRATION_RUN_EFFORT,
+        repoUrl: latest?.repoUrl ?? thread.repoUrl,
+        sandboxId: continuation.sandboxId,
+        sandboxPresetId: latest?.sandboxPresetId ?? thread.sandboxPresetId,
+        speed: latest?.speed ?? INTEGRATION_RUN_SPEED,
+        threadId: thread._id,
+        userId: bridge.userId,
+      })
+      await ctx.db.patch(bridge._id, {
+        lastRunId: created.runId,
+        muted: undefined,
+        updatedAt: now,
+      })
+      return {
+        ok: true as const,
+        isFollowUp: true,
+        repoUrl: latest?.repoUrl ?? thread.repoUrl,
+        ...created,
+      }
+    }
+
+    const repoUrl = args.repoUrl?.trim()
+    if (!repoUrl) return { ok: false as const, status: "missing_repo" as const }
+
+    const sandboxPresetId = await resolveOwnedPresetOrAutoDefault(
+      ctx,
+      installation.defaultSandboxPresetId,
+      args.userId
+    )
+    const threadId = await ctx.db.insert("threads", {
+      createdAt: now,
+      model: INTEGRATION_RUN_MODEL,
+      repoUrl,
+      sandboxPresetId,
+      title: integrationThreadTitle(args.title),
+      updatedAt: now,
+      userId: args.userId,
+    })
+    const created = await insertFactoryRunRecords(ctx, {
+      logMessage: QUEUED_LOG_MESSAGE,
+      model: INTEGRATION_RUN_MODEL,
+      profile: auth.profile,
+      prompt,
+      reasoningEffort: INTEGRATION_RUN_EFFORT,
+      repoUrl,
+      sandboxPresetId,
+      speed: INTEGRATION_RUN_SPEED,
+      threadId,
+      userId: args.userId,
+    })
+
+    await ctx.db.insert("integrationThreads", {
+      createdAt: now,
+      externalThreadId: args.externalThreadId,
+      installationId: installation._id,
+      lastRunId: created.runId,
+      linearAgentSessionId: args.linearAgentSessionId,
+      linearIssueId: args.linearIssueId,
+      linearOrganizationId: args.linearOrganizationId,
+      provider: args.provider,
+      threadId,
+      updatedAt: now,
+      userId: args.userId,
+    })
+
+    return { ok: true as const, isFollowUp: false, repoUrl, ...created }
+  },
+})
+
+export const workerQueuePendingMessage = mutation({
+  args: {
+    authorName: v.string(),
+    content: v.string(),
+    externalThreadId: v.string(),
+    provider: integrationProvider,
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    const bridge = await bridgeForExternalThread(
+      ctx,
+      args.provider,
+      args.externalThreadId
+    )
+    if (!bridge || bridge.muted) return { queued: false }
+
+    const pending = [
+      ...(bridge.pendingMessages ?? []),
+      {
+        authorName: args.authorName,
+        content: args.content,
+        receivedAt: Date.now(),
+      },
+    ].slice(-PENDING_MESSAGES_MAX)
+
+    await ctx.db.patch(bridge._id, {
+      pendingMessages: pending,
+      updatedAt: Date.now(),
+    })
+    return { queued: true }
+  },
+})
+
+export const workerSetMuted = mutation({
+  args: {
+    externalThreadId: v.string(),
+    muted: v.boolean(),
+    provider: integrationProvider,
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    const bridge = await bridgeForExternalThread(
+      ctx,
+      args.provider,
+      args.externalThreadId
+    )
+    if (!bridge) return { updated: false }
+
+    await ctx.db.patch(bridge._id, {
+      muted: args.muted || undefined,
+      updatedAt: Date.now(),
+    })
+    return { updated: true }
+  },
+})
+
+/** Terminal-run context for outbound notifications: null when the run's
+ * thread has no integration bridge, so the cloudcode-run seam is a no-op for
+ * regular chat, automation, review, and factory runs. */
+export const workerGetRunNotification = query({
+  args: {
+    runId: v.id("codexRuns"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    const run = await ctx.db.get(args.runId)
+    if (!run) return null
+    const bridge = await ctx.db
+      .query("integrationThreads")
+      .withIndex("by_thread", (q) => q.eq("threadId", run.threadId))
+      .unique()
+    if (!bridge) return null
+    // The Slack workspace id lets OAuth-mode workers resolve the stored bot
+    // token for the outbound post.
+    const installation = await ctx.db.get(bridge.installationId)
+
+    return {
+      branchName: run.branchName,
+      content: run.content,
+      error: run.error,
+      externalThreadId: bridge.externalThreadId,
+      linearOrganizationId: bridge.linearOrganizationId,
+      pendingCount: bridge.pendingMessages?.length ?? 0,
+      provider: bridge.provider,
+      prTitle: run.prTitle,
+      prUrl: run.prUrl,
+      slackTeamId:
+        bridge.provider === "slack" ? installation?.externalId : undefined,
+      status: run.status,
+      threadId: run.threadId,
+    }
+  },
+})
+
+/** Drains queued follow-up messages into one continuation run once the
+ * active run has finished. Returns the created run, or null when there is
+ * nothing to drain or the thread is busy again. */
+export const workerDrainPendingMessages = mutation({
+  args: {
+    threadId: v.id("threads"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    const bridge = await ctx.db
+      .query("integrationThreads")
+      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+      .unique()
+    if (!bridge || !bridge.pendingMessages?.length || bridge.muted) return null
+
+    const thread = await ctx.db.get(bridge.threadId)
+    if (!thread) return null
+    const activeRun = await activeRunForThread(ctx, bridge.threadId)
+    if (activeRun) return null
+
+    const { auth } = await findCodexAuth(ctx, bridge.userId, undefined, {
+      fallbackToActive: true,
+    })
+    if (!auth || auth.invalidatedAt) return null
+
+    const prompt = bridge.pendingMessages
+      .map((message) => `${message.authorName}: ${message.content}`)
+      .join("\n\n")
+    const continuation = await threadContinuationInput(ctx, thread)
+    const latest = continuation.latest
+
+    const created = await insertFactoryRunRecords(ctx, {
+      baseBranch: thread.baseBranch ?? latest?.baseBranch,
+      branchMode: thread.branchMode ?? latest?.branchMode,
+      branchName: latest?.branchName,
+      codexThreadId: continuation.codexThreadId,
+      logMessage: QUEUED_LOG_MESSAGE,
+      model: latest?.model ?? thread.model,
+      previousDiff: continuation.previousDiff,
+      profile: auth.profile,
+      prompt,
+      reasoningEffort: latest?.reasoningEffort ?? INTEGRATION_RUN_EFFORT,
+      repoUrl: latest?.repoUrl ?? thread.repoUrl,
+      sandboxId: continuation.sandboxId,
+      sandboxPresetId: latest?.sandboxPresetId ?? thread.sandboxPresetId,
+      speed: latest?.speed ?? INTEGRATION_RUN_SPEED,
+      threadId: thread._id,
+      userId: bridge.userId,
+    })
+
+    await ctx.db.patch(bridge._id, {
+      lastRunId: created.runId,
+      pendingMessages: undefined,
+      updatedAt: Date.now(),
+    })
+
+    return { repoUrl: latest?.repoUrl ?? thread.repoUrl, ...created }
+  },
+})

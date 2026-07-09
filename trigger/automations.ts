@@ -11,6 +11,10 @@ import {
 } from "@/lib/codex/run-worker"
 import { createWorkerGitHubRepoCredential } from "@/lib/github/app-worker"
 import { canClonePublicGitHubRepo } from "@/lib/github/repo-api"
+import {
+  applyEventContext,
+  type EventContextVars,
+} from "@/lib/integrations/events"
 import { deleteWorkerDaytonaSandbox } from "@/lib/sandbox/delete"
 import { encryptSecret } from "@/lib/security/secret-crypto"
 import type { cloudcodeRun } from "@/trigger/cloudcode-run"
@@ -26,6 +30,9 @@ const GITHUB_ACCESS_ERROR =
 
 type AutomationRunPayload = {
   automationId: Id<"automations">
+  // Set on event-triggered fires (Slack/Linear): interpolated into the
+  // automation's prompt as {{event.*}} plus an appended context block.
+  eventVars?: EventContextVars
   manual: boolean
   scheduledFor?: number
 }
@@ -221,6 +228,11 @@ export const automationRun = task({
         githubUsername: credential?.username ?? undefined,
         manual: payload.manual,
         notesAccessToken: randomUUID(),
+        ...(payload.eventVars
+          ? {
+              prompt: applyEventContext(automation.prompt, payload.eventVars),
+            }
+          : {}),
         workerSecret,
       })
       if (!result.ok) {

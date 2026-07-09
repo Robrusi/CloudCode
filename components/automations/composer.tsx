@@ -1,17 +1,23 @@
 "use client"
 
 import { useQuery } from "convex/react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 
 import {
   automationDraftFromRecord,
   automationRequestBody,
   deriveAutomationName,
   emptyAutomationDraft,
+  emptyLinearTrigger,
+  emptySlackTrigger,
   type AutomationDraft,
   type AutomationRecord,
 } from "@/components/automations/model"
 import { ScheduleChip } from "@/components/automations/schedule-chip"
+import {
+  LinearTriggerChip,
+  SlackTriggerChip,
+} from "@/components/automations/trigger-chip"
 import { BranchChip } from "@/components/chat/branch-chip"
 import { BranchTargetChip } from "@/components/chat/branch-target-chip"
 import {
@@ -28,11 +34,38 @@ import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import type { SandboxPresetRecord } from "@/lib/sandbox/preset-types"
 import { useAutoGrowTextarea } from "@/hooks/use-auto-grow-textarea"
-import { postJson } from "@/lib/http/client-json"
+import { fetchJson, postJson } from "@/lib/http/client-json"
 
 type CreatedAutomation = { automationId: Id<"automations"> }
 
+type IntegrationInstallation = {
+  enabled: boolean
+  id: string
+  provider: "slack" | "linear"
+}
+
 const EMPTY_SANDBOX_PRESETS: SandboxPresetRecord[] = []
+
+/** Fields the client can validate before submitting; the server re-checks. */
+function triggerDraftError(draft: AutomationDraft) {
+  const trigger = draft.trigger
+  if (trigger.kind === "slack") {
+    if (trigger.event === "keyword" && !trigger.keyword.trim()) {
+      return "Pick a keyword for the Slack trigger."
+    }
+    if (trigger.event === "reaction" && !trigger.emoji.trim()) {
+      return "Pick an emoji for the Slack trigger."
+    }
+  }
+  if (
+    trigger.kind === "linear" &&
+    trigger.event === "labelAdded" &&
+    !trigger.labelId
+  ) {
+    return "Pick a label for the Linear trigger."
+  }
+  return null
+}
 
 export function AutomationComposer({
   automation,
@@ -59,11 +92,43 @@ export function AutomationComposer({
   const [modelOpen, setModelOpen] = useState(false)
   const [presetOpen, setPresetOpen] = useState(false)
   const [scheduleOpen, setScheduleOpen] = useState(false)
+  const [triggerOpen, setTriggerOpen] = useState(false)
+  const [installations, setInstallations] = useState<IntegrationInstallation[]>(
+    []
+  )
 
   const rawPresets = useQuery(api.sandboxPresets.list)
   const sandboxPresets = rawPresets
     ? (rawPresets as SandboxPresetRecord[])
     : EMPTY_SANDBOX_PRESETS
+
+  // Connected integrations decide which trigger kinds the chip offers.
+  useEffect(() => {
+    let cancelled = false
+    void fetchJson<{ installations: IntegrationInstallation[] }>(
+      "/api/integrations",
+      { method: "GET" },
+      { fallbackError: "Unable to load integrations." }
+    )
+      .then((data) => {
+        if (!cancelled) {
+          setInstallations(
+            data.installations.filter((installation) => installation.enabled)
+          )
+        }
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const slackInstallation = installations.find(
+    (installation) => installation.provider === "slack"
+  )
+  const linearInstallation = installations.find(
+    (installation) => installation.provider === "linear"
+  )
 
   const set = <K extends keyof AutomationDraft>(
     key: K,
@@ -77,6 +142,12 @@ export function AutomationComposer({
     if (!draft.repoUrl.trim()) {
       setError("Pick a repository.")
       setEditingRepo(true)
+      return
+    }
+    const triggerError = triggerDraftError(draft)
+    if (triggerError) {
+      setError(triggerError)
+      setTriggerOpen(true)
       return
     }
 
@@ -188,16 +259,62 @@ export function AutomationComposer({
                 }
               />
             </DetailRow>
-            <DetailRow label="Repeats">
-              <ScheduleChip
-                schedule={draft.schedule}
-                timezone={draft.timezone}
-                open={scheduleOpen}
-                setOpen={setScheduleOpen}
-                onScheduleChange={(schedule) => set("schedule", schedule)}
-                onTimezoneChange={(timezone) => set("timezone", timezone)}
-              />
-            </DetailRow>
+            {slackInstallation || linearInstallation ? (
+              <DetailRow label="Trigger">
+                <OptionChip
+                  ariaLabel="Trigger kind"
+                  value={draft.trigger.kind}
+                  onChange={(kind) => {
+                    setTriggerOpen(false)
+                    if (kind === "cron") set("trigger", { kind: "cron" })
+                    else if (kind === "slack" && slackInstallation) {
+                      set("trigger", emptySlackTrigger(slackInstallation.id))
+                    } else if (kind === "linear" && linearInstallation) {
+                      set("trigger", emptyLinearTrigger(linearInstallation.id))
+                    }
+                  }}
+                  options={[
+                    { label: "Schedule", value: "cron" as const },
+                    ...(slackInstallation
+                      ? [{ label: "Slack event", value: "slack" as const }]
+                      : []),
+                    ...(linearInstallation
+                      ? [{ label: "Linear event", value: "linear" as const }]
+                      : []),
+                  ]}
+                />
+              </DetailRow>
+            ) : null}
+            {draft.trigger.kind === "cron" ? (
+              <DetailRow label="Repeats">
+                <ScheduleChip
+                  schedule={draft.schedule}
+                  timezone={draft.timezone}
+                  open={scheduleOpen}
+                  setOpen={setScheduleOpen}
+                  onScheduleChange={(schedule) => set("schedule", schedule)}
+                  onTimezoneChange={(timezone) => set("timezone", timezone)}
+                />
+              </DetailRow>
+            ) : draft.trigger.kind === "slack" ? (
+              <DetailRow label="Slack event">
+                <SlackTriggerChip
+                  trigger={draft.trigger}
+                  open={triggerOpen}
+                  setOpen={setTriggerOpen}
+                  onChange={(trigger) => set("trigger", trigger)}
+                />
+              </DetailRow>
+            ) : (
+              <DetailRow label="Linear event">
+                <LinearTriggerChip
+                  trigger={draft.trigger}
+                  open={triggerOpen}
+                  setOpen={setTriggerOpen}
+                  onChange={(trigger) => set("trigger", trigger)}
+                />
+              </DetailRow>
+            )}
             <DetailRow label="Model">
               <ModelChip
                 model={draft.model}

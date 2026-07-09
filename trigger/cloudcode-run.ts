@@ -35,6 +35,7 @@ import {
   codexRunStreamAvailable,
   createCodexRunStreamPublisher,
 } from "@/lib/codex/run-stream"
+import { notifyIntegrationRunFinished } from "@/lib/integrations/notify"
 import {
   createBillingAbortController,
   createTriggerUsageMeter,
@@ -380,6 +381,7 @@ export const cloudcodeRun = task({
         result
       )
       await queueFactoryWakeRuns(completeResponse.factoryWakeRuns)
+      await notifyIntegrationRunFinished(client, payload.runId)
       streamPublisher?.publishDone(
         result.exitCode === 0 ? "succeeded" : "failed"
       )
@@ -410,6 +412,7 @@ export const cloudcodeRun = task({
           latestSandboxId
         )
         await queueFactoryWakeRuns(cancelResponse?.factoryWakeRuns)
+        await notifyIntegrationRunFinished(client, payload.runId)
         streamPublisher?.publishDone("canceled")
         await streamPublisher?.flush()
         return { canceled: true }
@@ -462,6 +465,7 @@ export const cloudcodeRun = task({
         return undefined
       })
       await queueFactoryWakeRuns(failResponse?.factoryWakeRuns)
+      await notifyIntegrationRunFinished(client, payload.runId)
       streamPublisher?.publishError(failureMessage)
       await streamPublisher?.flush()
       throw error
@@ -491,7 +495,9 @@ export const cloudcodeRun = task({
     }
   },
   onCancel: async ({ payload }) => {
-    const response = await cancelWorkerRun(workerConvexClient(), payload.runId)
+    const client = workerConvexClient()
+    const response = await cancelWorkerRun(client, payload.runId)
     await queueFactoryWakeRuns(response?.factoryWakeRuns)
+    await notifyIntegrationRunFinished(client, payload.runId)
   },
 })

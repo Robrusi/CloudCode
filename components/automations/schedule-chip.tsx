@@ -1,18 +1,19 @@
 "use client"
 
-import { Check, ChevronDown, Clock, Globe } from "lucide-react"
-import { useCallback, useMemo, useRef, useState } from "react"
+import { ChevronDown, Clock, Globe } from "lucide-react"
+import { useMemo, useRef } from "react"
 
+import {
+  fieldBase,
+  MenuSelect,
+  type MenuSelectOption as Option,
+} from "@/components/automations/menu-select"
 import {
   formatInstantShort,
   timezoneOptions,
 } from "@/components/automations/model"
 import { formatRelative } from "@/components/chat/format"
-import {
-  chipTrigger,
-  popoverItem,
-  popoverPanel,
-} from "@/components/chat/control-styles"
+import { chipTrigger, popoverPanel } from "@/components/chat/control-styles"
 import {
   cronFromScheduleDraft,
   describeScheduleDraft,
@@ -31,89 +32,8 @@ import {
 import { useClickOutside } from "@/hooks/use-click-outside"
 import { cn } from "@/lib/shared/utils"
 
-/** The app's compact bordered field (matches BranchTargetChip / RepoChip). */
-const fieldBase =
-  "h-8 w-full rounded-lg border border-field bg-background text-sm outline-none transition-colors focus:border-ring focus:ring-3 focus:ring-ring/20"
-
 const MINUTE_OPTIONS = Array.from({ length: 12 }, (_, index) => index * 5)
 const pad2 = (value: number) => String(value).padStart(2, "0")
-
-type Option = { value: string; label: string }
-
-/** Custom dropdown (never a native <select>): a field trigger plus a checked
- * menu, matching the app's popover menus. */
-function MenuSelect({
-  ariaLabel,
-  onChange,
-  options,
-  value,
-}: {
-  ariaLabel: string
-  onChange: (value: string) => void
-  options: Option[]
-  value: string
-}) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-  useClickOutside(ref, open, () => setOpen(false))
-  const current = options.find((option) => option.value === value)
-  // Bring the selected row into view when the menu opens.
-  const selectedRef = useCallback((node: HTMLButtonElement | null) => {
-    node?.scrollIntoView({ block: "nearest" })
-  }, [])
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label={ariaLabel}
-        onClick={() => setOpen(!open)}
-        className={cn(fieldBase, "flex items-center gap-2 px-2.5 text-left")}
-      >
-        <span className="min-w-0 flex-1 truncate">
-          {current?.label ?? value}
-        </span>
-        <ChevronDown
-          className={cn(
-            "size-3.5 shrink-0 text-muted-foreground/70 transition-transform",
-            open && "rotate-180"
-          )}
-        />
-      </button>
-      {open ? (
-        <div
-          className={cn(
-            popoverPanel,
-            "top-full left-0 z-20 mt-1 max-h-52 w-full overflow-y-auto"
-          )}
-        >
-          {options.map((option) => {
-            const selected = option.value === value
-            return (
-              <button
-                key={option.value}
-                ref={selected ? selectedRef : undefined}
-                type="button"
-                onClick={() => {
-                  onChange(option.value)
-                  setOpen(false)
-                }}
-                className={cn(popoverItem, selected && "bg-muted")}
-              >
-                <span className="min-w-0 truncate">{option.label}</span>
-                {selected ? (
-                  <Check className="size-4 shrink-0" strokeWidth={2.25} />
-                ) : null}
-              </button>
-            )
-          })}
-        </div>
-      ) : null}
-    </div>
-  )
-}
 
 /** A single compact time input; its native picker is never clipped now that
  * the popover allows overflow. */

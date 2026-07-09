@@ -55,3 +55,14 @@ overrides:
   # 3.10.1 dropped provenance attestation (trustPolicy no-downgrade rejects it);
   # 4.4.x restores SLSA provenance. Lint-only tooling via eslint-config-next.
   eslint-import-resolver-typescript: ^4.4.3
+
+allowBuilds:
+  "@clerk/shared": set this to true or false
+  "@depot/cli": set this to true or false
+  esbuild: set this to true or false
+  msgpackr-extract: set this to true or false
+  msw: set this to true or false
+  protobufjs: set this to true or false
+  sharp: set this to true or false
+  unicode-animations: set this to true or false
+  unrs-resolver: set this to true or false

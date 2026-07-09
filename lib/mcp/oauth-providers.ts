@@ -1,3 +1,6 @@
+// Slack and Linear are intentionally absent: they are first-class chat
+// integrations (lib/integrations/*) with their own webhooks, agent sessions,
+// and automation triggers, not MCP tool servers.
 export type McpOauthProviderId =
   | "airtable"
   | "apollo_io"
@@ -9,12 +12,10 @@ export type McpOauthProviderId =
   | "gmail"
   | "granola"
   | "hubspot"
-  | "linear"
   | "notion"
   | "posthog"
   | "pylon"
   | "sentry"
-  | "slack"
   | "stripe"
   | "supabase"
   | "vercel"
@@ -153,13 +154,6 @@ export const MCP_OAUTH_PROVIDERS: McpOauthProvider[] = [
     url: "https://mcp.hubspot.com",
   },
   {
-    description: "Search, create, and update Linear issues and projects.",
-    id: "linear",
-    tagline: "Issues & cycles",
-    name: "Linear",
-    url: "https://mcp.linear.app/mcp",
-  },
-  {
     description: "Search and update Notion pages and databases.",
     id: "notion",
     tagline: "Pages & databases",
@@ -187,20 +181,6 @@ export const MCP_OAUTH_PROVIDERS: McpOauthProvider[] = [
     tagline: "Errors & traces",
     name: "Sentry",
     url: "https://mcp.sentry.dev/mcp",
-  },
-  {
-    description: "Search Slack messages, channels, and threads.",
-    id: "slack",
-    tagline: "Messages & channels",
-    name: "Slack",
-    staticClientEnv: {
-      clientIdVar: "SLACK_MCP_CLIENT_ID",
-      clientSecretVar: "SLACK_MCP_CLIENT_SECRET",
-      consoleUrl: "https://api.slack.com/apps",
-      setupHint:
-        "Click 'Create New App' → 'From scratch', add the redirect URL under 'OAuth & Permissions', and copy the client ID and secret from 'Basic Information' → 'App Credentials'.",
-    },
-    url: "https://mcp.slack.com/mcp",
   },
   {
     description: "Inspect Stripe customers, payments, and subscriptions.",

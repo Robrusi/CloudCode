@@ -17,7 +17,14 @@ export async function POST(request: Request) {
   try {
     const body = await readJsonRecord(request)
     const config = parseAutomationRequestConfig(body)
-    const nextRunAt = nextRunAtAfter(config.cron, config.timezone, Date.now())
+    const nextRunAt =
+      config.trigger.kind === "cron"
+        ? nextRunAtAfter(
+            config.trigger.cron,
+            config.trigger.timezone,
+            Date.now()
+          )
+        : undefined
 
     const client = await currentUserConvexHttpClient()
     const created = await client.mutation(api.automations.create, {
@@ -25,7 +32,6 @@ export async function POST(request: Request) {
       baseBranch: config.baseBranch,
       branchMode: config.branchMode,
       branchName: config.branchName,
-      cron: config.cron,
       model: config.model,
       name: config.name,
       nextRunAt,
@@ -39,7 +45,7 @@ export async function POST(request: Request) {
       sandboxRetention: config.sandboxRetention,
       speed: config.speed,
       threadMode: config.threadMode,
-      timezone: config.timezone,
+      trigger: config.trigger,
     })
 
     return NextResponse.json({

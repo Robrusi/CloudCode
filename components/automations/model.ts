@@ -10,10 +10,62 @@ import {
 import {
   cronFromScheduleDraft,
   scheduleDraftFromCron,
+  shortScheduleLabel,
   type ScheduleDraft,
 } from "@/lib/automations/schedule-draft"
 
 export type AutomationRecord = Doc<"automations">
+
+/** Composer-side trigger config. Cron keeps its schedule in the draft's
+ * schedule/timezone fields; the event kinds carry their own selection. */
+export type TriggerDraft =
+  | { kind: "cron" }
+  | {
+      channelId: string
+      channelName: string
+      emoji: string
+      event: "keyword" | "reaction"
+      installationId: string
+      keyword: string
+      kind: "slack"
+    }
+  | {
+      event: "labelAdded" | "statusChanged"
+      installationId: string
+      kind: "linear"
+      labelId: string
+      labelName: string
+      stateId: string
+      stateName: string
+      teamId: string
+      teamName: string
+    }
+
+export function emptySlackTrigger(installationId: string): TriggerDraft {
+  return {
+    channelId: "",
+    channelName: "",
+    emoji: "",
+    event: "keyword",
+    installationId,
+    keyword: "",
+    kind: "slack",
+  }
+}
+
+export function emptyLinearTrigger(installationId: string): TriggerDraft {
+  return {
+    event: "labelAdded",
+    installationId,
+    kind: "linear",
+    labelId: "",
+    labelName: "",
+    stateId: "",
+    stateName: "",
+    teamId: "",
+    teamName: "",
+  }
+}
 
 export type AutomationRunStatus = NonNullable<AutomationRecord["lastRunStatus"]>
 
@@ -42,6 +94,7 @@ export type AutomationDraft = {
   speed: Speed
   threadMode: AutomationThreadMode
   timezone: string
+  trigger: TriggerDraft
 }
 
 export function browserTimezone() {
@@ -77,6 +130,34 @@ export function emptyAutomationDraft(): AutomationDraft {
     speed: "standard",
     threadMode: AUTOMATION_THREAD_MODE_DEFAULT,
     timezone: browserTimezone(),
+    trigger: { kind: "cron" },
+  }
+}
+
+function triggerDraftFromRecord(automation: AutomationRecord): TriggerDraft {
+  const trigger = automation.trigger
+  if (!trigger || trigger.kind === "cron") return { kind: "cron" }
+  if (trigger.kind === "slack") {
+    return {
+      channelId: trigger.channelId ?? "",
+      channelName: trigger.channelName ?? "",
+      emoji: trigger.emoji ?? "",
+      event: trigger.event,
+      installationId: trigger.installationId,
+      keyword: trigger.keyword ?? "",
+      kind: "slack",
+    }
+  }
+  return {
+    event: trigger.event,
+    installationId: trigger.installationId,
+    kind: "linear",
+    labelId: trigger.labelId ?? "",
+    labelName: trigger.labelName ?? "",
+    stateId: trigger.stateId ?? "",
+    stateName: trigger.stateName ?? "",
+    teamId: trigger.teamId ?? "",
+    teamName: trigger.teamName ?? "",
   }
 }
 
@@ -102,7 +183,8 @@ export function automationDraftFromRecord(
       : { kind: "daily", time: "09:00" },
     speed: automation.speed,
     threadMode: automation.threadMode ?? AUTOMATION_THREAD_MODE_DEFAULT,
-    timezone: automation.timezone,
+    timezone: automation.timezone ?? browserTimezone(),
+    trigger: triggerDraftFromRecord(automation),
   }
 }
 
@@ -122,6 +204,39 @@ export function deriveAutomationName(text: string) {
   return name[0].toUpperCase() + name.slice(1)
 }
 
+function triggerRequestBody(draft: AutomationDraft) {
+  const trigger = draft.trigger
+  if (trigger.kind === "cron") {
+    return {
+      cron: cronFromScheduleDraft(draft.schedule),
+      kind: "cron" as const,
+      timezone: draft.timezone,
+    }
+  }
+  if (trigger.kind === "slack") {
+    return {
+      channelId: trigger.channelId || undefined,
+      channelName: trigger.channelName || undefined,
+      emoji: trigger.emoji || undefined,
+      event: trigger.event,
+      installationId: trigger.installationId,
+      keyword: trigger.keyword || undefined,
+      kind: "slack" as const,
+    }
+  }
+  return {
+    event: trigger.event,
+    installationId: trigger.installationId,
+    kind: "linear" as const,
+    labelId: trigger.labelId || undefined,
+    labelName: trigger.labelName || undefined,
+    stateId: trigger.stateId || undefined,
+    stateName: trigger.stateName || undefined,
+    teamId: trigger.teamId || undefined,
+    teamName: trigger.teamName || undefined,
+  }
+}
+
 /** Throws with a user-facing message when the draft is not submittable. */
 export function automationRequestBody(draft: AutomationDraft) {
   return {
@@ -129,7 +244,6 @@ export function automationRequestBody(draft: AutomationDraft) {
     baseBranch: draft.baseBranch.trim() || undefined,
     branchMode: draft.branchMode,
     branchName: draft.branchName.trim() || undefined,
-    cron: cronFromScheduleDraft(draft.schedule),
     model: draft.model,
     name: draft.name,
     prompt: draft.prompt,
@@ -139,8 +253,31 @@ export function automationRequestBody(draft: AutomationDraft) {
     sandboxRetention: draft.sandboxRetention,
     speed: draft.speed,
     threadMode: draft.threadMode,
-    timezone: draft.timezone,
+    trigger: triggerRequestBody(draft),
   }
+}
+
+/** One-line row label: the schedule for cron automations, the watched event
+ * for Slack/Linear ones. */
+export function automationTriggerLabel(automation: AutomationRecord) {
+  const trigger = automation.trigger
+  if (!trigger || trigger.kind === "cron") {
+    const cron = trigger?.kind === "cron" ? trigger.cron : automation.cron
+    return cron ? shortScheduleLabel(scheduleDraftFromCron(cron)) : "Schedule"
+  }
+  if (trigger.kind === "slack") {
+    const where = trigger.channelName ? ` in #${trigger.channelName}` : ""
+    return trigger.event === "reaction"
+      ? `On :${trigger.emoji}: reaction${where}`
+      : `On “${trigger.keyword}”${where}`
+  }
+  const scope = trigger.teamName ? ` in ${trigger.teamName}` : ""
+  if (trigger.event === "labelAdded") {
+    return `On label “${trigger.labelName || trigger.labelId}”${scope}`
+  }
+  return trigger.stateName
+    ? `On status → ${trigger.stateName}${scope}`
+    : `On status change${scope}`
 }
 
 export function formatInstantInZone(ms: number, timezone: string) {

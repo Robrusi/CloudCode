@@ -13,6 +13,11 @@ import {
   thinking,
   threadSandboxState as sandboxState,
 } from "./lib/codexRunValidators"
+import {
+  automationTrigger,
+  automationTriggerKind,
+  integrationProvider,
+} from "./lib/integrationTriggers"
 
 const sandboxPresetMode = v.union(v.literal("manual"), v.literal("auto"))
 const mcpTransport = v.union(v.literal("stdio"), v.literal("http"))
@@ -89,9 +94,15 @@ export default defineSchema({
     // Set when a factory MCP tool created this automation from inside an
     // agent run; such automations are the only ones agent tools may disable.
     createdByRunId: v.optional(v.id("codexRuns")),
-    cron: v.string(),
+    // Legacy columns for cron-triggered automations; the canonical config is
+    // the trigger field, which automationTriggerOf derives for old rows.
+    cron: v.optional(v.string()),
     disabledReason: v.optional(v.string()),
     enabled: v.boolean(),
+    // Sliding-window counter capping how often event-triggered automations
+    // may fire, so a webhook feedback loop cannot self-amplify.
+    eventFireCount: v.optional(v.number()),
+    eventFireWindowStart: v.optional(v.number()),
     failureCount: v.number(),
     lastRunAt: v.optional(v.number()),
     lastRunError: v.optional(v.string()),
@@ -109,12 +120,18 @@ export default defineSchema({
     speed,
     threadId: v.id("threads"),
     threadMode: v.optional(automationThreadMode),
-    timezone: v.string(),
+    timezone: v.optional(v.string()),
+    trigger: v.optional(automationTrigger),
+    // Denormalized from trigger for indexed webhook-event matching; unset for
+    // cron automations (the scheduler finds those through nextRunAt).
+    triggerKind: v.optional(automationTriggerKind),
+    triggerSourceKey: v.optional(v.string()),
     updatedAt: v.number(),
     userId: v.id("users"),
   })
     .index("by_user_updated", ["userId", "updatedAt"])
     .index("by_enabled_next", ["enabled", "nextRunAt"])
+    .index("by_trigger_source", ["triggerSourceKey", "enabled"])
     .index("by_thread", ["threadId"]),
 
   reviews: defineTable({
@@ -367,6 +384,62 @@ export default defineSchema({
     .index("by_sandbox", ["sandboxId"])
     .index("by_user_sandbox", ["userId", "sandboxId"]),
 
+  // One row per connected external workspace (Slack workspace or Linear
+  // organization). Holds settings and metadata only: the Slack bot token
+  // lives in env (single-workspace mode) and Linear OAuth tokens live in the
+  // Chat SDK's encrypted state store, so no credentials are stored here.
+  integrationInstallations: defineTable({
+    botUserId: v.optional(v.string()),
+    createdAt: v.number(),
+    defaultRepoUrl: v.optional(v.string()),
+    defaultSandboxPresetId: v.optional(v.id("sandboxPresets")),
+    enabled: v.boolean(),
+    externalId: v.string(),
+    externalName: v.optional(v.string()),
+    provider: integrationProvider,
+    updatedAt: v.number(),
+    // The connecting user: runs from external users without a matching
+    // CloudCode account (by email) are attributed to this user.
+    userId: v.id("users"),
+  })
+    .index("by_provider_external", ["provider", "externalId"])
+    .index("by_user_provider", ["userId", "provider"]),
+
+  // Bridge between an external chat thread (Slack thread / Linear agent
+  // session) and the CloudCode thread running its sessions. Follow-up
+  // messages, run updates, and completion notifications route through it.
+  integrationThreads: defineTable({
+    createdAt: v.number(),
+    externalThreadId: v.string(),
+    installationId: v.id("integrationInstallations"),
+    lastRunId: v.optional(v.id("codexRuns")),
+    linearAgentSessionId: v.optional(v.string()),
+    linearIssueId: v.optional(v.string()),
+    // Linear outbound posts need the organization to resolve the stored
+    // OAuth installation outside webhook context.
+    linearOrganizationId: v.optional(v.string()),
+    // Set by the "mute" keyword: follow-up messages are ignored until the
+    // bot is mentioned again.
+    muted: v.optional(v.boolean()),
+    // Follow-ups that arrived while a run was active; drained into one
+    // follow-up run when the active run finishes.
+    pendingMessages: v.optional(
+      v.array(
+        v.object({
+          authorName: v.string(),
+          content: v.string(),
+          receivedAt: v.number(),
+        })
+      )
+    ),
+    provider: integrationProvider,
+    threadId: v.id("threads"),
+    updatedAt: v.number(),
+    userId: v.id("users"),
+  })
+    .index("by_external", ["provider", "externalThreadId"])
+    .index("by_thread", ["threadId"]),
+
   githubAppInstallations: defineTable({
     accountId: v.optional(v.string()),
     accountLogin: v.string(),
@@ -601,5 +674,8 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_subject", ["subject"])
-    .index("by_token", ["tokenIdentifier"]),
+    .index("by_token", ["tokenIdentifier"])
+    // Integration events attribute runs by matching the external user's
+    // email against CloudCode accounts.
+    .index("by_email", ["email"]),
 })

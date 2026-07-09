@@ -44,12 +44,10 @@ const MCP_PROVIDER_ICON_ROUTES = {
     light: "https://svgl.app/library/granola-light.svg",
   },
   hubspot: "/icons/mcp/hubspot.svg",
-  linear: "https://svgl.app/library/linear.svg",
   notion: "https://svgl.app/library/notion.svg",
   posthog: "https://svgl.app/library/posthog.svg",
   pylon: "/icons/mcp/pylon.svg",
   sentry: "https://svgl.app/library/sentry.svg",
-  slack: "https://svgl.app/library/slack.svg",
   stripe: "https://svgl.app/library/stripe.svg",
   supabase: "https://svgl.app/library/supabase.svg",
   vercel: {

@@ -13,6 +13,8 @@ import {
 } from "@/lib/automations/schedule"
 import { MODELS, type Model } from "@/lib/chat/options"
 import { parseBranchMode, type BranchMode } from "@/lib/codex/branch-names"
+import type { Id } from "@/convex/_generated/dataModel"
+import type { AutomationTrigger } from "@/convex/lib/integrationTriggers"
 import {
   CODEX_REASONING_EFFORT_ERROR,
   CODEX_SPEED_ERROR,
@@ -28,7 +30,6 @@ export type AutomationRequestConfig = {
   baseBranch?: string
   branchMode: BranchMode
   branchName?: string
-  cron: string
   model: Model
   name: string
   profile?: string
@@ -39,7 +40,71 @@ export type AutomationRequestConfig = {
   sandboxRetention: AutomationSandboxRetention
   speed: CodexSpeed
   threadMode: AutomationThreadMode
-  timezone: string
+  trigger: AutomationTrigger
+}
+
+function recordField(body: JsonRecord, field: string): JsonRecord | undefined {
+  const value = body[field]
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonRecord)
+    : undefined
+}
+
+/** Parses the trigger config out of a request body. Bodies without a trigger
+ * object read as the cron kind from the legacy top-level cron/timezone
+ * fields, so older clients keep working unchanged. */
+function parseAutomationTrigger(body: JsonRecord): AutomationTrigger {
+  const raw = recordField(body, "trigger")
+  const kind = raw?.kind
+
+  if (!raw || kind === "cron") {
+    const cron = raw ? raw.cron : body.cron
+    const timezone = raw ? raw.timezone : body.timezone
+    return {
+      cron: validateAutomationCron(cron),
+      kind: "cron",
+      timezone: validateAutomationTimezone(timezone),
+    }
+  }
+
+  const installationId = jsonRawStringField(raw, "installationId")?.trim()
+  if (!installationId) throw new Error("trigger.installationId is required.")
+
+  if (kind === "slack") {
+    const event = raw.event
+    if (event !== "keyword" && event !== "reaction") {
+      throw new Error("trigger.event must be keyword or reaction.")
+    }
+    return {
+      channelId: jsonRawStringField(raw, "channelId")?.trim() || undefined,
+      channelName: jsonRawStringField(raw, "channelName")?.trim() || undefined,
+      emoji: jsonRawStringField(raw, "emoji")?.trim() || undefined,
+      event,
+      installationId: installationId as Id<"integrationInstallations">,
+      keyword: jsonRawStringField(raw, "keyword")?.trim() || undefined,
+      kind: "slack",
+    }
+  }
+
+  if (kind === "linear") {
+    const event = raw.event
+    if (event !== "labelAdded" && event !== "statusChanged") {
+      throw new Error("trigger.event must be labelAdded or statusChanged.")
+    }
+    return {
+      event,
+      installationId: installationId as Id<"integrationInstallations">,
+      labelId: jsonRawStringField(raw, "labelId")?.trim() || undefined,
+      labelName: jsonRawStringField(raw, "labelName")?.trim() || undefined,
+      stateId: jsonRawStringField(raw, "stateId")?.trim() || undefined,
+      stateName: jsonRawStringField(raw, "stateName")?.trim() || undefined,
+      teamId: jsonRawStringField(raw, "teamId")?.trim() || undefined,
+      teamName: jsonRawStringField(raw, "teamName")?.trim() || undefined,
+      kind: "linear",
+    }
+  }
+
+  throw new Error("trigger.kind must be cron, slack, or linear.")
 }
 
 // Shared by the create and update routes so both validate identically.
@@ -73,7 +138,6 @@ export function parseAutomationRequestConfig(
     // composer's behavior.
     branchMode: branchMode === "custom" && !branchName ? "auto" : branchMode,
     branchName: branchMode === "custom" ? branchName || undefined : undefined,
-    cron: validateAutomationCron(body.cron),
     model,
     name: parseAutomationName(body.name),
     profile: jsonRawStringField(body, "profile"),
@@ -84,6 +148,6 @@ export function parseAutomationRequestConfig(
     sandboxRetention: parseAutomationSandboxRetention(body.sandboxRetention),
     speed,
     threadMode: parseAutomationThreadMode(body.threadMode),
-    timezone: validateAutomationTimezone(body.timezone),
+    trigger: parseAutomationTrigger(body),
   }
 }

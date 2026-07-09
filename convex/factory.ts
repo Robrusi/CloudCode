@@ -30,7 +30,9 @@ import {
   insertFactoryRunRecords,
   type FactoryRunCreated,
 } from "./lib/factoryRuns"
+import { automationTriggerOf } from "./lib/integrationTriggers"
 import { resolveOwnedPresetOrAutoDefault } from "./lib/sandboxPresets"
+import { threadContinuationInput } from "./lib/threadContinuation"
 import { triggerTaskViaApi } from "./lib/triggerApi"
 import { requireWorkerSecret, workerSecretFromEnv } from "./lib/workerAuth"
 import {
@@ -406,6 +408,8 @@ export const createAutomation = mutation({
       threadId,
       ...(threadMode ? { threadMode } : {}),
       timezone,
+      trigger: { cron, kind: "cron", timezone },
+      triggerKind: "cron",
       updatedAt: now,
       userId: run.userId,
     })
@@ -436,11 +440,17 @@ export const setAutomationEnabled = mutation({
 
     const now = Date.now()
     if (args.enabled) {
+      // Factory tools only create cron automations, so the trigger always
+      // reads as the cron kind here.
+      const trigger = automationTriggerOf(automation)
       await ctx.db.patch(automation._id, {
         disabledReason: undefined,
         enabled: true,
         failureCount: 0,
-        nextRunAt: nextRunAtAfter(automation.cron, automation.timezone, now),
+        nextRunAt:
+          trigger.kind === "cron"
+            ? nextRunAtAfter(trigger.cron, trigger.timezone, now)
+            : undefined,
         updatedAt: now,
       })
       return { enabled: true }
@@ -563,13 +573,8 @@ export const workerCreateFollowUpRun = internalMutation({
     if (!target || target.userId !== parent.userId) {
       throw new Error("Thread not found.")
     }
-    const latest = await ctx.db
-      .query("codexRuns")
-      .withIndex("by_thread_updated", (q) =>
-        q.eq("threadId", args.targetThreadId)
-      )
-      .order("desc")
-      .first()
+    const continuation = await threadContinuationInput(ctx, target)
+    const latest = continuation.latest
     const rootThreadId = factoryRootThreadId(parent)
     if (!latest || latest.rootThreadId !== rootThreadId) {
       throw new Error(
@@ -600,14 +605,6 @@ export const workerCreateFollowUpRun = internalMutation({
       parent.userId
     )
 
-    // Mirror the chat client's continuation recipe: resume the Codex thread
-    // and sandbox when they survive, and carry the previous diff so a fresh
-    // sandbox can restore the working tree.
-    const latestMessage = await ctx.db.get(latest.assistantMessageId)
-    const previousDiff = latestMessage?.meta?.diff
-    const sandboxId =
-      target.sandboxState !== "deleted" ? target.sandboxId : undefined
-
     return await insertFactoryRunRecords(ctx, {
       baseBranch: target.baseBranch ?? latest.baseBranch,
       branchMode: parseFactoryChoice(
@@ -616,20 +613,20 @@ export const workerCreateFollowUpRun = internalMutation({
         "branchMode"
       ),
       branchName: latest.branchName,
-      codexThreadId: target.codexThreadId,
+      codexThreadId: continuation.codexThreadId,
       ephemeralSandbox: latest.ephemeralSandbox,
       logMessage: DISPATCH_QUEUED_LOG,
       model,
       notifyParent: args.notifyParent ?? true,
       parentRunId: parent._id,
       parentThreadId: parent.threadId,
-      previousDiff,
+      previousDiff: continuation.previousDiff,
       profile: auth.profile,
       prompt,
       reasoningEffort,
       repoUrl: latest.repoUrl,
       rootThreadId,
-      sandboxId,
+      sandboxId: continuation.sandboxId,
       sandboxPresetId,
       spawnDepth,
       speed,

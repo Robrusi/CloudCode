@@ -13,7 +13,10 @@ import {
 import { useRef, useState } from "react"
 
 import { AutomationComposer } from "@/components/automations/composer"
-import { type AutomationRecord } from "@/components/automations/model"
+import {
+  automationTriggerLabel,
+  type AutomationRecord,
+} from "@/components/automations/model"
 import {
   formatRelative,
   formatRunTime,
@@ -30,10 +33,6 @@ import { IconButton } from "@/components/ui/icon-button"
 import { Switch } from "@/components/ui/switch"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import {
-  scheduleDraftFromCron,
-  shortScheduleLabel,
-} from "@/lib/automations/schedule-draft"
 import { postJson } from "@/lib/http/client-json"
 import { cn } from "@/lib/shared/utils"
 
@@ -157,7 +156,7 @@ function AutomationRow({
   onToggleExpanded: () => void
 }) {
   const now = Date.now()
-  const schedule = shortScheduleLabel(scheduleDraftFromCron(automation.cron))
+  const schedule = automationTriggerLabel(automation)
   const statusFailed =
     automation.lastRunStatus === "failed" ||
     automation.lastRunStatus === "dispatch_failed"
@@ -415,7 +414,7 @@ export function AutomationsScreen({
                 <div>
                   <h1 className="text-2xl tracking-tight">Automations</h1>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Run prompts on a schedule in fresh sandboxes.
+                    Run prompts on a schedule or from Slack and Linear events.
                   </p>
                 </div>
                 {automations?.length ? (
