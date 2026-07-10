@@ -77,15 +77,11 @@ async function chatEventPayload(
   kind: "mention" | "follow_up",
   parsed: { presetOverride?: string; repoOverride?: string; text: string }
 ): Promise<IntegrationChatEventPayload> {
-  // Slack DM messages are top-level (each has its own thread id), so the DM
-  // conversation bridges by channel: every message continues one session
-  // instead of opening a new one per message.
-  const externalThreadId =
-    provider === "slack" && thread.isDM ? thread.channelId : thread.id
-
+  // DMs behave like channels: each top-level message is its own thread (and
+  // session); replies land threaded on that message.
   const payload: IntegrationChatEventPayload = {
     authorName: message.author.fullName || message.author.userName,
-    externalThreadId,
+    externalThreadId: thread.id,
     kind,
     messageId: message.id,
     presetOverride: parsed.presetOverride,
@@ -169,10 +165,8 @@ export function registerIntegrationHandlers(
     // reaction doubles as the ack.
     if (parsed.control === "mute" || parsed.control === "unmute") {
       const muted = parsed.control === "mute"
-      const bridgeThreadId =
-        provider === "slack" && thread.isDM ? thread.channelId : thread.id
       await convexClient().mutation(api.integrations.workerSetMuted, {
-        externalThreadId: bridgeThreadId,
+        externalThreadId: thread.id,
         muted,
         provider,
         workerSecret: getWorkerSecret(WORKER_SECRET_ERROR),
@@ -189,11 +183,7 @@ export function registerIntegrationHandlers(
       return
     }
 
-    // DM conversations bridge by channel, so per-message thread
-    // subscriptions are unnecessary there.
-    if (kind === "mention" && !thread.isDM) {
-      await thread.subscribe().catch(() => undefined)
-    }
+    if (kind === "mention") await thread.subscribe().catch(() => undefined)
     await acknowledge(provider, thread, message)
 
     const payload = await chatEventPayload(
