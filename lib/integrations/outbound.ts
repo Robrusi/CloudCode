@@ -4,6 +4,7 @@ import { api } from "@/convex/_generated/api"
 import { getWorkerSecret } from "@/lib/codex/run-worker"
 import { getInitializedIntegrationsBot } from "@/lib/integrations/bot"
 import { appThreadUrl, slackIntegrationEnv } from "@/lib/integrations/config"
+import { slackThreadParts } from "@/lib/integrations/slack-threads"
 
 export type IntegrationThreadRef = {
   externalThreadId: string
@@ -35,12 +36,6 @@ async function withSlackToken<T>(
   return await fn()
 }
 
-/** Slack DM conversations bridge by channel ("slack:D…" with no message
- * timestamp); channel posts go top-level instead of into a reply thread. */
-function isSlackChannelRef(externalThreadId: string) {
-  return externalThreadId.split(":").length === 2
-}
-
 /** Posts markdown to an external Slack thread or Linear agent session from
  * outside webhook context (Trigger.dev workers). */
 export async function postToIntegrationThread(
@@ -48,10 +43,13 @@ export async function postToIntegrationThread(
   markdown: string
 ) {
   const { bot, linear } = await getInitializedIntegrationsBot()
-  const post = () =>
-    ref.provider === "slack" && isSlackChannelRef(ref.externalThreadId)
-      ? bot.channel(ref.externalThreadId).post({ markdown })
-      : bot.thread(ref.externalThreadId).post({ markdown })
+  const post = () => {
+    if (ref.provider === "slack") {
+      const { channel, threadTs } = slackThreadParts(ref.externalThreadId)
+      if (!threadTs) return bot.channel(`slack:${channel}`).post({ markdown })
+    }
+    return bot.thread(ref.externalThreadId).post({ markdown })
+  }
 
   if (ref.provider === "linear") {
     if (!linear) throw new Error("The Linear integration is not configured.")
@@ -171,9 +169,8 @@ async function postSlackRunFinished(
   if (!slack) throw new Error("The Slack integration is not configured.")
 
   await withSlackToken(ref, async () => {
-    // "slack:{channel}" (DM conversation, top-level post) or
-    // "slack:{channel}:{ts}" (channel thread reply).
-    const [, channel, threadTs] = ref.externalThreadId.split(":")
+    // Timestamped ids post threaded; legacy DM bridges post top-level.
+    const { channel, threadTs } = slackThreadParts(ref.externalThreadId)
     const blocks = [
       { text: body.slice(0, SLACK_BLOCK_TEXT_MAX), type: "markdown" },
       {

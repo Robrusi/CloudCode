@@ -16,6 +16,7 @@ import {
   INTEGRATION_HELP_MESSAGE,
   parseIntegrationMessage,
 } from "@/lib/integrations/keywords"
+import { normalizeSlackDmThreadId } from "@/lib/integrations/slack-threads"
 import { getWorkerSecret } from "@/lib/security/worker-secret"
 import type { integrationEvent } from "@/trigger/integrations"
 
@@ -77,11 +78,14 @@ async function chatEventPayload(
   kind: "mention" | "follow_up",
   parsed: { presetOverride?: string; repoOverride?: string; text: string }
 ): Promise<IntegrationChatEventPayload> {
-  // DMs behave like channels: each top-level message is its own thread (and
-  // session); replies land threaded on that message.
+  const externalThreadId =
+    provider === "slack"
+      ? normalizeSlackDmThreadId(thread.id, message.id)
+      : thread.id
+
   const payload: IntegrationChatEventPayload = {
     authorName: message.author.fullName || message.author.userName,
-    externalThreadId: thread.id,
+    externalThreadId,
     kind,
     messageId: message.id,
     presetOverride: parsed.presetOverride,
@@ -153,9 +157,14 @@ export function registerIntegrationHandlers(
       message.text,
       INTEGRATIONS_BOT_USERNAME
     )
+    const externalThreadId =
+      provider === "slack"
+        ? normalizeSlackDmThreadId(thread.id, message.id)
+        : thread.id
 
     if (parsed.control === "help") {
-      await thread
+      await bot
+        .thread(externalThreadId)
         .post({ markdown: INTEGRATION_HELP_MESSAGE })
         .catch(() => undefined)
       return
@@ -166,7 +175,7 @@ export function registerIntegrationHandlers(
     if (parsed.control === "mute" || parsed.control === "unmute") {
       const muted = parsed.control === "mute"
       await convexClient().mutation(api.integrations.workerSetMuted, {
-        externalThreadId: thread.id,
+        externalThreadId,
         muted,
         provider,
         workerSecret: getWorkerSecret(WORKER_SECRET_ERROR),
@@ -183,7 +192,12 @@ export function registerIntegrationHandlers(
       return
     }
 
-    if (kind === "mention") await thread.subscribe().catch(() => undefined)
+    // DM thread replies arrive unsubscribed and route back through
+    // onNewMention; the bridge row turns them into follow-ups, so DM threads
+    // need no subscription (and the threadless DM id cannot be subscribed).
+    if (kind === "mention" && !thread.isDM) {
+      await thread.subscribe().catch(() => undefined)
+    }
     await acknowledge(provider, thread, message)
 
     const payload = await chatEventPayload(
@@ -198,6 +212,14 @@ export function registerIntegrationHandlers(
   }
 
   bot.onNewMention(async (thread, message) => {
+    await handleChatMessage(thread, message, "mention")
+  })
+
+  // Every DM message addresses the bot, so all DM traffic routes through the
+  // mention path: the session bridge decides new-session vs follow-up. This
+  // handler outranks subscription routing, so stale thread subscriptions
+  // (from before DMs threaded per message) can never swallow a DM.
+  bot.onDirectMessage(async (thread, message) => {
     await handleChatMessage(thread, message, "mention")
   })
 

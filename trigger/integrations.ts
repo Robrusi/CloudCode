@@ -18,6 +18,7 @@ import {
   runStartedMessage,
   type IntegrationThreadRef,
 } from "@/lib/integrations/outbound"
+import { normalizeSlackDmThreadId } from "@/lib/integrations/slack-threads"
 import type { automationRun } from "@/trigger/automations"
 
 const BILLING_EXHAUSTED_MESSAGE =
@@ -42,8 +43,14 @@ async function replyBestEffort(ref: IntegrationThreadRef, markdown: string) {
 async function handleChatEvent(payload: IntegrationChatEventPayload) {
   const client = workerConvexClient()
   const workerSecret = getWorkerSecret()
+  // Normalize again at the durable worker boundary. This also repairs events
+  // queued by an older webhook deployment before the DM routing fix landed.
+  const externalThreadId =
+    payload.provider === "slack"
+      ? normalizeSlackDmThreadId(payload.externalThreadId, payload.messageId)
+      : payload.externalThreadId
   const threadRef: IntegrationThreadRef = {
-    externalThreadId: payload.externalThreadId,
+    externalThreadId,
     linearOrganizationId:
       payload.provider === "linear" ? payload.externalId : undefined,
     provider: payload.provider,
@@ -53,7 +60,7 @@ async function handleChatEvent(payload: IntegrationChatEventPayload) {
   const resolved = await client.query(api.integrations.workerResolveEvent, {
     authorEmail: payload.authorEmail,
     externalId: payload.externalId,
-    externalThreadId: payload.externalThreadId,
+    externalThreadId,
     provider: payload.provider,
     workerSecret,
   })
@@ -71,17 +78,23 @@ async function handleChatEvent(payload: IntegrationChatEventPayload) {
   if (payload.provider === "slack") threadRef.slackTeamId = resolved.externalId
 
   const bridge = resolved.bridge
+  // Every DM message addresses the bot, so a DM without a session bridge
+  // starts a session no matter how the webhook generation classified it
+  // (stale thread subscriptions can deliver DMs as follow-ups).
+  const isSlackDm =
+    payload.provider === "slack" && externalThreadId.startsWith("slack:D")
   if (payload.kind === "follow_up") {
-    if (!bridge || bridge.muted) {
+    if (bridge?.muted) return { handled: false, reason: "muted" as const }
+    if (!bridge && !isSlackDm) {
       return { handled: false, reason: "no_bridge" as const }
     }
-    if (bridge.activeRun) {
+    if (bridge?.activeRun) {
       const queued = await client.mutation(
         api.integrations.workerQueuePendingMessage,
         {
           authorName: payload.authorName,
           content: payload.text,
-          externalThreadId: payload.externalThreadId,
+          externalThreadId,
           provider: payload.provider,
           workerSecret,
         }
@@ -112,7 +125,7 @@ async function handleChatEvent(payload: IntegrationChatEventPayload) {
     api.integrations.workerCreateSessionRun,
     {
       installationId: resolved.installationId,
-      externalThreadId: payload.externalThreadId,
+      externalThreadId,
       linearAgentSessionId: payload.linearAgentSessionId,
       linearIssueId: payload.linearIssueId,
       linearOrganizationId:
@@ -134,7 +147,7 @@ async function handleChatEvent(payload: IntegrationChatEventPayload) {
         {
           authorName: payload.authorName,
           content: payload.text,
-          externalThreadId: payload.externalThreadId,
+          externalThreadId,
           provider: payload.provider,
           workerSecret,
         }
