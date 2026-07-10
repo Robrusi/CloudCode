@@ -391,6 +391,9 @@ export default defineSchema({
   integrationInstallations: defineTable({
     botUserId: v.optional(v.string()),
     createdAt: v.number(),
+    defaultBaseBranch: v.optional(v.string()),
+    defaultModel: v.optional(model),
+    defaultReasoningEffort: v.optional(thinking),
     defaultRepoUrl: v.optional(v.string()),
     defaultSandboxPresetId: v.optional(v.id("sandboxPresets")),
     enabled: v.boolean(),

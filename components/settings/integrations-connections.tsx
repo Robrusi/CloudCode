@@ -1,7 +1,9 @@
 "use client"
 
+import { useQuery } from "convex/react"
 import { useCallback, useEffect, useState } from "react"
 
+import { MenuSelect } from "@/components/automations/menu-select"
 import {
   fieldHint,
   statusBadge,
@@ -11,16 +13,33 @@ import {
 import { LinearIcon, SlackIcon } from "@/components/ui/brand-icons"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { api } from "@/convex/_generated/api"
+import {
+  MODEL_LABEL,
+  MODELS,
+  THINKING_LABEL,
+  THINKINGS,
+} from "@/lib/chat/options"
 import { fetchJson, postJson } from "@/lib/http/client-json"
+import type { SandboxPresetRecord } from "@/lib/sandbox/preset-types"
 import { cn } from "@/lib/shared/utils"
 
 type Installation = {
+  defaultBaseBranch?: string
+  defaultModel?: string
+  defaultReasoningEffort?: string
   defaultRepoUrl?: string
+  defaultSandboxPresetId?: string
   enabled: boolean
   externalName?: string
   id: string
   provider: "slack" | "linear"
 }
+
+// The hardcoded session defaults; showing them as the selected value means
+// "default" needs no separate clear state.
+const SESSION_MODEL_DEFAULT = "gpt-5.5"
+const SESSION_EFFORT_DEFAULT = "medium"
 
 type IntegrationsStatus = {
   installations: Installation[]
@@ -30,17 +49,72 @@ type IntegrationsStatus = {
   stateConfigured: boolean
 }
 
-function DefaultRepoField({
+type InstallationDraft = {
+  defaultBaseBranch: string
+  defaultModel: string
+  defaultReasoningEffort: string
+  defaultRepoUrl: string
+  defaultSandboxPresetId: string
+}
+
+function draftOf(installation: Installation): InstallationDraft {
+  return {
+    defaultBaseBranch: installation.defaultBaseBranch ?? "",
+    defaultModel: installation.defaultModel ?? SESSION_MODEL_DEFAULT,
+    defaultReasoningEffort:
+      installation.defaultReasoningEffort ?? SESSION_EFFORT_DEFAULT,
+    defaultRepoUrl: installation.defaultRepoUrl ?? "",
+    defaultSandboxPresetId: installation.defaultSandboxPresetId ?? "",
+  }
+}
+
+function SettingsField({
+  children,
+  label,
+}: {
+  children: React.ReactNode
+  label: string
+}) {
+  return (
+    <label className="block min-w-0">
+      <span className="mb-1 block text-[11px] font-medium text-muted-foreground">
+        {label}
+      </span>
+      {children}
+    </label>
+  )
+}
+
+/** Per-workspace session defaults: which repo, environment, and model a
+ * session started from this integration uses. Inline !repo/!preset commands
+ * in the triggering message override these per session. */
+function InstallationSettings({
   installation,
   onSaved,
 }: {
   installation: Installation
   onSaved: () => void | Promise<void>
 }) {
-  const [value, setValue] = useState(installation.defaultRepoUrl ?? "")
+  const rawPresets = useQuery(api.sandboxPresets.list)
+  // The built-in auto preset is already the "" option below.
+  const presets = ((rawPresets ?? []) as SandboxPresetRecord[]).filter(
+    (preset) => !preset.isBuiltInAutoEnvironment
+  )
+  const [draft, setDraft] = useState<InstallationDraft>(() =>
+    draftOf(installation)
+  )
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
-  const dirty = value.trim() !== (installation.defaultRepoUrl ?? "")
+  const saved = draftOf(installation)
+  const dirty =
+    draft.defaultBaseBranch.trim() !== saved.defaultBaseBranch ||
+    draft.defaultModel !== saved.defaultModel ||
+    draft.defaultReasoningEffort !== saved.defaultReasoningEffort ||
+    draft.defaultRepoUrl.trim() !== saved.defaultRepoUrl ||
+    draft.defaultSandboxPresetId !== saved.defaultSandboxPresetId
+
+  const set = <K extends keyof InstallationDraft>(key: K, value: string) =>
+    setDraft((current) => ({ ...current, [key]: value }))
 
   async function save() {
     if (!dirty || saving) return
@@ -51,13 +125,17 @@ function DefaultRepoField({
         "/api/integrations",
         {
           body: JSON.stringify({
-            defaultRepoUrl: value.trim(),
+            defaultBaseBranch: draft.defaultBaseBranch.trim(),
+            defaultModel: draft.defaultModel,
+            defaultReasoningEffort: draft.defaultReasoningEffort,
+            defaultRepoUrl: draft.defaultRepoUrl.trim(),
+            defaultSandboxPresetId: draft.defaultSandboxPresetId,
             installationId: installation.id,
           }),
           headers: { "Content-Type": "application/json" },
           method: "PATCH",
         },
-        { fallbackError: "Unable to save the default repository." }
+        { fallbackError: "Unable to save the integration settings." }
       )
       await onSaved()
     } catch (saveError) {
@@ -70,33 +148,89 @@ function DefaultRepoField({
   }
 
   return (
-    <div className="mt-2.5 flex items-start gap-2 pl-8">
-      <div className="min-w-0 flex-1">
-        <Input
-          aria-label="Default repository"
-          value={value}
-          onChange={(event) => setValue(event.target.value)}
-          placeholder="https://github.com/owner/repo.git"
-          spellCheck={false}
-          autoComplete="off"
-        />
-        <p className={fieldHint}>
-          Sessions started from mentions run against this repository unless the
-          message includes !repo=owner/name.
-        </p>
-        {error ? (
-          <p className="mt-1 text-[11px] leading-4 text-destructive">{error}</p>
-        ) : null}
+    <div className="mt-3 pl-8">
+      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+        <SettingsField label="Repository">
+          <Input
+            aria-label="Default repository"
+            value={draft.defaultRepoUrl}
+            onChange={(event) => set("defaultRepoUrl", event.target.value)}
+            placeholder="https://github.com/owner/repo.git"
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </SettingsField>
+        <SettingsField label="Base branch">
+          <Input
+            aria-label="Default base branch"
+            value={draft.defaultBaseBranch}
+            onChange={(event) => set("defaultBaseBranch", event.target.value)}
+            placeholder="Repository default"
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </SettingsField>
+        <SettingsField label="Environment setup">
+          <MenuSelect
+            ariaLabel="Default sandbox preset"
+            value={draft.defaultSandboxPresetId}
+            options={[
+              { label: "Auto environment", value: "" },
+              ...presets.map((preset) => ({
+                label: preset.name,
+                value: preset.id,
+              })),
+            ]}
+            onChange={(value) => set("defaultSandboxPresetId", value)}
+          />
+        </SettingsField>
+        <SettingsField label="Model">
+          <MenuSelect
+            ariaLabel="Default model"
+            value={draft.defaultModel}
+            options={MODELS.map((value) => ({
+              label:
+                value === SESSION_MODEL_DEFAULT
+                  ? `${MODEL_LABEL[value]} (default)`
+                  : MODEL_LABEL[value],
+              value,
+            }))}
+            onChange={(value) => set("defaultModel", value)}
+          />
+        </SettingsField>
+        <SettingsField label="Reasoning">
+          <MenuSelect
+            ariaLabel="Default reasoning effort"
+            value={draft.defaultReasoningEffort}
+            options={THINKINGS.map((value) => ({
+              label:
+                value === SESSION_EFFORT_DEFAULT
+                  ? `${THINKING_LABEL[value]} (default)`
+                  : THINKING_LABEL[value],
+              value,
+            }))}
+            onChange={(value) => set("defaultReasoningEffort", value)}
+          />
+        </SettingsField>
+        <div className="flex items-end justify-end">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={!dirty || saving}
+            onClick={() => void save()}
+          >
+            {saving ? "Saving" : "Save"}
+          </Button>
+        </div>
       </div>
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        disabled={!dirty || saving}
-        onClick={() => void save()}
-      >
-        {saving ? "Saving" : "Save"}
-      </Button>
+      <p className={fieldHint}>
+        New sessions from this workspace use these defaults; !repo and !preset
+        in the triggering message override them per session.
+      </p>
+      {error ? (
+        <p className="mt-1 text-[11px] leading-4 text-destructive">{error}</p>
+      ) : null}
     </div>
   )
 }
@@ -241,7 +375,7 @@ function IntegrationRow({
         <p className={cn(fieldHint, "pl-8")}>{configureHint}</p>
       ) : null}
       {installation ? (
-        <DefaultRepoField installation={installation} onSaved={onChanged} />
+        <InstallationSettings installation={installation} onSaved={onChanged} />
       ) : null}
       {error ? (
         <p className="mt-2 pl-8 text-[11px] leading-4 text-destructive">

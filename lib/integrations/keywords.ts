@@ -7,6 +7,8 @@
  * Control words only count when they are the entire instruction, so a task
  * that merely contains the word "help" never triggers anything. */
 
+import { canonicalGitHubRepoUrl } from "@/lib/github/repo"
+
 const REPO_KEYWORD_RE = /(?:^|\s)!repo=(\S+)/i
 // Preset names may contain spaces; accept a quoted value or a bare token.
 const PRESET_KEYWORD_RE = /(?:^|\s)!preset=(?:"([^"]+)"|“([^”]+)”|(\S+))/i
@@ -22,15 +24,13 @@ export type ParsedIntegrationMessage = {
  * app; returns undefined for values that are neither a GitHub URL nor an
  * owner/name pair. */
 function repoUrlFromKeyword(value: string): string | undefined {
-  const trimmed = value.trim().replace(/\.git$/, "")
-  const urlMatch = trimmed.match(
-    /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)$/i
-  )
-  if (urlMatch) return `https://github.com/${urlMatch[1]}/${urlMatch[2]}.git`
-  const shortMatch = trimmed.match(/^([\w.-]+)\/([\w.-]+)$/)
-  if (shortMatch)
-    return `https://github.com/${shortMatch[1]}/${shortMatch[2]}.git`
-  return undefined
+  const trimmed = value.trim()
+  const shortMatch = trimmed.match(/^([\w.-]+)\/([\w.-]+?)(?:\.git)?$/)
+  const candidate =
+    !trimmed.includes("://") && shortMatch
+      ? `https://github.com/${shortMatch[1]}/${shortMatch[2]}`
+      : trimmed
+  return canonicalGitHubRepoUrl(candidate) ?? undefined
 }
 
 /** Strips the bot mention and inline keywords out of a message, returning

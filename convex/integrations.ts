@@ -2,6 +2,7 @@ import { v } from "convex/values"
 
 import type { Doc, Id } from "./_generated/dataModel"
 import {
+  internalMutation,
   mutation,
   query,
   type MutationCtx,
@@ -9,6 +10,7 @@ import {
 } from "./_generated/server"
 import { findCodexAuth } from "./lib/codexRunAuth"
 import { activeRunForThread } from "./lib/codexRunLifecycle"
+import { model, thinking } from "./lib/codexRunValidators"
 import { insertFactoryRunRecords } from "./lib/factoryRuns"
 import { integrationProvider } from "./lib/integrationTriggers"
 import { resolveOwnedPresetOrAutoDefault } from "./lib/sandboxPresets"
@@ -19,6 +21,7 @@ import {
   codexAuthMissingMessage,
   codexAuthReconnectMessage,
 } from "@/lib/codex/auth-errors"
+import { canonicalGitHubRepoUrl } from "@/lib/github/repo"
 
 // Session defaults for runs started from Slack/Linear. Follow-up runs on an
 // existing bridge reuse the thread's previous run options instead.
@@ -122,6 +125,9 @@ export const list = query({
 
     return installations.map((installation) => ({
       botUserId: installation.botUserId,
+      defaultBaseBranch: installation.defaultBaseBranch,
+      defaultModel: installation.defaultModel,
+      defaultReasoningEffort: installation.defaultReasoningEffort,
       defaultRepoUrl: installation.defaultRepoUrl,
       defaultSandboxPresetId: installation.defaultSandboxPresetId,
       enabled: installation.enabled,
@@ -184,6 +190,11 @@ export const saveInstallation = mutation({
 
 export const updateSettings = mutation({
   args: {
+    // "" clears a stored preset back to the auto default.
+    clearDefaultSandboxPreset: v.optional(v.boolean()),
+    defaultBaseBranch: v.optional(v.string()),
+    defaultModel: v.optional(model),
+    defaultReasoningEffort: v.optional(thinking),
     defaultRepoUrl: v.optional(v.string()),
     defaultSandboxPresetId: v.optional(v.id("sandboxPresets")),
     enabled: v.optional(v.boolean()),
@@ -204,13 +215,32 @@ export const updateSettings = mutation({
       }
     }
 
+    // Canonicalize so integration sessions share environments and sandboxes
+    // with app sessions on the same repository — the auto-environment cache
+    // keys by exact repoUrl string.
+    const trimmedRepoUrl = args.defaultRepoUrl?.trim()
     await ctx.db.patch(installation._id, {
+      ...(args.defaultBaseBranch !== undefined
+        ? { defaultBaseBranch: args.defaultBaseBranch.trim() || undefined }
+        : {}),
+      ...(args.defaultModel !== undefined
+        ? { defaultModel: args.defaultModel }
+        : {}),
+      ...(args.defaultReasoningEffort !== undefined
+        ? { defaultReasoningEffort: args.defaultReasoningEffort }
+        : {}),
       ...(args.defaultRepoUrl !== undefined
-        ? { defaultRepoUrl: args.defaultRepoUrl.trim() || undefined }
+        ? {
+            defaultRepoUrl: trimmedRepoUrl
+              ? (canonicalGitHubRepoUrl(trimmedRepoUrl) ?? trimmedRepoUrl)
+              : undefined,
+          }
         : {}),
-      ...(args.defaultSandboxPresetId !== undefined
-        ? { defaultSandboxPresetId: args.defaultSandboxPresetId }
-        : {}),
+      ...(args.clearDefaultSandboxPreset
+        ? { defaultSandboxPresetId: undefined }
+        : args.defaultSandboxPresetId !== undefined
+          ? { defaultSandboxPresetId: args.defaultSandboxPresetId }
+          : {}),
       ...(args.enabled !== undefined ? { enabled: args.enabled } : {}),
       updatedAt: Date.now(),
     })
@@ -245,6 +275,33 @@ export const removeInstallation = mutation({
     // Bridges stay: their threads keep their history, they just stop
     // receiving events once the installation row is gone.
     await ctx.db.delete(installation._id)
+  },
+})
+
+// One-time cleanup for installations saved before repo URLs were
+// canonicalized on write. Idempotent; run with
+//   npx convex run integrations:canonicalizeInstallationRepoUrls
+export const canonicalizeInstallationRepoUrls = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const installations = await ctx.db
+      .query("integrationInstallations")
+      .collect()
+
+    let updated = 0
+    for (const installation of installations) {
+      if (!installation.defaultRepoUrl) continue
+      const canonical = canonicalGitHubRepoUrl(installation.defaultRepoUrl)
+      if (canonical && canonical !== installation.defaultRepoUrl) {
+        await ctx.db.patch(installation._id, {
+          defaultRepoUrl: canonical,
+          updatedAt: Date.now(),
+        })
+        updated += 1
+      }
+    }
+
+    return { updated }
   },
 })
 
@@ -483,8 +540,13 @@ export const workerCreateSessionRun = mutation({
       }
     }
 
-    const repoUrl = args.repoUrl?.trim()
-    if (!repoUrl) return { ok: false as const, status: "missing_repo" as const }
+    const rawRepoUrl = args.repoUrl?.trim()
+    if (!rawRepoUrl) {
+      return { ok: false as const, status: "missing_repo" as const }
+    }
+    // The canonical ".git" form is what app-created threads use; anything
+    // else forks the per-repo environment cache into a parallel universe.
+    const repoUrl = canonicalGitHubRepoUrl(rawRepoUrl) ?? rawRepoUrl
 
     let requestedPresetId = installation.defaultSandboxPresetId
     const requestedPresetName = args.sandboxPresetName?.trim().toLowerCase()
@@ -517,9 +579,14 @@ export const workerCreateSessionRun = mutation({
       requestedPresetId,
       args.userId
     )
+    const sessionModel = installation.defaultModel ?? INTEGRATION_RUN_MODEL
+    const sessionEffort =
+      installation.defaultReasoningEffort ?? INTEGRATION_RUN_EFFORT
+    const baseBranch = installation.defaultBaseBranch?.trim() || undefined
     const threadId = await ctx.db.insert("threads", {
+      ...(baseBranch ? { baseBranch } : {}),
       createdAt: now,
-      model: INTEGRATION_RUN_MODEL,
+      model: sessionModel,
       repoUrl,
       sandboxPresetId,
       title: integrationThreadTitle(args.title),
@@ -527,11 +594,12 @@ export const workerCreateSessionRun = mutation({
       userId: args.userId,
     })
     const created = await insertFactoryRunRecords(ctx, {
+      baseBranch,
       logMessage: QUEUED_LOG_MESSAGE,
-      model: INTEGRATION_RUN_MODEL,
+      model: sessionModel,
       profile: auth.profile,
       prompt,
-      reasoningEffort: INTEGRATION_RUN_EFFORT,
+      reasoningEffort: sessionEffort,
       repoUrl,
       sandboxPresetId,
       speed: INTEGRATION_RUN_SPEED,

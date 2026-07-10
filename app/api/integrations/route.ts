@@ -12,6 +12,12 @@ import {
 } from "@/lib/http/api-route"
 import { requireSameOrigin } from "@/lib/http/request-security"
 import {
+  MODELS,
+  THINKINGS,
+  type Model,
+  type Thinking,
+} from "@/lib/chat/options"
+import {
   integrationsStateRedisUrl,
   linearIntegrationEnv,
   slackIntegrationEnv,
@@ -57,13 +63,30 @@ export async function PATCH(request: Request) {
       | undefined
     if (!installationId) return jsonError("installationId is required.", 400)
 
+    const rawModel = jsonStringField(body, "defaultModel")
+    if (rawModel && !(MODELS as readonly string[]).includes(rawModel)) {
+      return jsonError(`model must be one of ${MODELS.join(", ")}.`, 400)
+    }
+    const rawEffort = jsonStringField(body, "defaultReasoningEffort")
+    if (rawEffort && !(THINKINGS as readonly string[]).includes(rawEffort)) {
+      return jsonError(
+        `reasoningEffort must be one of ${THINKINGS.join(", ")}.`,
+        400
+      )
+    }
+    // "" for the preset means "clear back to the auto default".
+    const rawPreset = jsonRawStringField(body, "defaultSandboxPresetId")
+
     const client = await currentUserConvexHttpClient()
     await client.mutation(api.integrations.updateSettings, {
+      clearDefaultSandboxPreset: rawPreset === "" ? true : undefined,
+      defaultBaseBranch: jsonRawStringField(body, "defaultBaseBranch"),
+      defaultModel: rawModel as Model | undefined,
+      defaultReasoningEffort: rawEffort as Thinking | undefined,
       defaultRepoUrl: jsonRawStringField(body, "defaultRepoUrl"),
-      defaultSandboxPresetId: jsonStringField(
-        body,
-        "defaultSandboxPresetId"
-      ) as Id<"sandboxPresets"> | undefined,
+      defaultSandboxPresetId: rawPreset
+        ? (rawPreset as Id<"sandboxPresets">)
+        : undefined,
       enabled: jsonBooleanField(body, "enabled"),
       installationId,
     })
