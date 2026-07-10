@@ -5,7 +5,7 @@ import { getConvexAuthToken } from "@/lib/codex/auth"
 import { currentUserConvexHttpClient } from "@/lib/convex/http"
 import { jsonError } from "@/lib/http/api-route"
 import { requireSameOrigin } from "@/lib/http/request-security"
-import { getIntegrationsBot } from "@/lib/integrations/bot"
+import { getInitializedIntegrationsBot } from "@/lib/integrations/bot"
 import { slackIntegrationEnv } from "@/lib/integrations/config"
 
 export const runtime = "nodejs"
@@ -24,7 +24,7 @@ async function resolveSlackBotToken(): Promise<string | null> {
   )
   if (!slackInstallation) return null
 
-  const { slack } = getIntegrationsBot()
+  const { slack } = await getInitializedIntegrationsBot()
   const installation = await slack?.getInstallation(
     slackInstallation.externalId
   )

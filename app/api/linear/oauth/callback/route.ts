@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server"
 
 import { api } from "@/convex/_generated/api"
 import { currentUserConvexHttpClient } from "@/lib/convex/http"
-import { getIntegrationsBot } from "@/lib/integrations/bot"
+import { getInitializedIntegrationsBot } from "@/lib/integrations/bot"
 import {
   LINEAR_OAUTH_STATE_COOKIE,
   linearIntegrationEnv,
@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const { linear } = getIntegrationsBot()
+    const { linear } = await getInitializedIntegrationsBot()
     if (!linear) {
       return errorPage("The Linear integration is not configured.")
     }

@@ -4,7 +4,7 @@ import { api } from "@/convex/_generated/api"
 import { currentUserConvexHttpClient } from "@/lib/convex/http"
 import { jsonError } from "@/lib/http/api-route"
 import { requireSameOrigin } from "@/lib/http/request-security"
-import { getIntegrationsBot } from "@/lib/integrations/bot"
+import { getInitializedIntegrationsBot } from "@/lib/integrations/bot"
 import {
   integrationsStateRedisUrl,
   linearIntegrationEnv,
@@ -32,7 +32,7 @@ export async function GET(request: Request) {
       return jsonError("Connect Linear first.", 400)
     }
 
-    const { linear } = getIntegrationsBot()
+    const { linear } = await getInitializedIntegrationsBot()
     if (!linear) {
       return jsonError("The Linear integration is not configured.", 503)
     }

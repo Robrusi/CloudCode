@@ -2,7 +2,7 @@ import type { ConvexHttpClient } from "convex/browser"
 
 import { api } from "@/convex/_generated/api"
 import { getWorkerSecret } from "@/lib/codex/run-worker"
-import { getIntegrationsBot } from "@/lib/integrations/bot"
+import { getInitializedIntegrationsBot } from "@/lib/integrations/bot"
 import { appThreadUrl, slackIntegrationEnv } from "@/lib/integrations/config"
 
 export type IntegrationThreadRef = {
@@ -13,16 +13,12 @@ export type IntegrationThreadRef = {
 }
 
 /** Runs a Slack API call with the right bot token in scope: the stored
- * workspace installation in OAuth mode, or the env token in token mode. Also
- * initializes the Chat instance — webhook handling does that automatically,
- * but the Trigger workers post outside webhook context and would otherwise
- * hit "Adapter not initialized". */
+ * workspace installation in OAuth mode, or the env token in token mode. */
 async function withSlackToken<T>(
   ref: IntegrationThreadRef,
   fn: () => Promise<T>
 ): Promise<T> {
-  const { bot, slack } = getIntegrationsBot()
-  await bot.initialize()
+  const { slack } = await getInitializedIntegrationsBot()
   if (!slack) throw new Error("The Slack integration is not configured.")
 
   if (slackIntegrationEnv()?.mode === "oauth") {
@@ -39,15 +35,23 @@ async function withSlackToken<T>(
   return await fn()
 }
 
+/** Slack DM conversations bridge by channel ("slack:D…" with no message
+ * timestamp); channel posts go top-level instead of into a reply thread. */
+function isSlackChannelRef(externalThreadId: string) {
+  return externalThreadId.split(":").length === 2
+}
+
 /** Posts markdown to an external Slack thread or Linear agent session from
  * outside webhook context (Trigger.dev workers). */
 export async function postToIntegrationThread(
   ref: IntegrationThreadRef,
   markdown: string
 ) {
-  const { bot, linear } = getIntegrationsBot()
-  await bot.initialize()
-  const post = () => bot.thread(ref.externalThreadId).post({ markdown })
+  const { bot, linear } = await getInitializedIntegrationsBot()
+  const post = () =>
+    ref.provider === "slack" && isSlackChannelRef(ref.externalThreadId)
+      ? bot.channel(ref.externalThreadId).post({ markdown })
+      : bot.thread(ref.externalThreadId).post({ markdown })
 
   if (ref.provider === "linear") {
     if (!linear) throw new Error("The Linear integration is not configured.")
@@ -163,11 +167,13 @@ async function postSlackRunFinished(
   body: string,
   threadUrl: string
 ) {
-  const { slack } = getIntegrationsBot()
+  const { slack } = await getInitializedIntegrationsBot()
   if (!slack) throw new Error("The Slack integration is not configured.")
 
   await withSlackToken(ref, async () => {
-    const { channel, threadTs } = slack.decodeThreadId(ref.externalThreadId)
+    // "slack:{channel}" (DM conversation, top-level post) or
+    // "slack:{channel}:{ts}" (channel thread reply).
+    const [, channel, threadTs] = ref.externalThreadId.split(":")
     const blocks = [
       { text: body.slice(0, SLACK_BLOCK_TEXT_MAX), type: "markdown" },
       {
@@ -190,7 +196,7 @@ async function postSlackRunFinished(
       blocks: blocks as never,
       channel,
       text: body.slice(0, 2900),
-      thread_ts: threadTs,
+      ...(threadTs ? { thread_ts: threadTs } : {}),
       unfurl_links: false,
     })
   })

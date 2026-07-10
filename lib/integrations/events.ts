@@ -21,6 +21,7 @@ export type IntegrationChatEventPayload = {
   linearAgentSessionId?: string
   linearIssueId?: string
   messageId: string
+  presetOverride?: string
   provider: "slack" | "linear"
   repoOverride?: string
   subject?: IntegrationEventSubject

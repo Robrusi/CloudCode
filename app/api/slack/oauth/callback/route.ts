@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server"
 
 import { api } from "@/convex/_generated/api"
 import { currentUserConvexHttpClient } from "@/lib/convex/http"
-import { getIntegrationsBot } from "@/lib/integrations/bot"
+import { getInitializedIntegrationsBot } from "@/lib/integrations/bot"
 import {
   SLACK_OAUTH_STATE_COOKIE,
   slackIntegrationEnv,
@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const { slack } = getIntegrationsBot()
+    const { slack } = await getInitializedIntegrationsBot()
     if (!slack) return errorPage("The Slack integration is not configured.")
 
     // Exchanges the code and persists the workspace installation (bot token,

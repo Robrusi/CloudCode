@@ -1,15 +1,19 @@
 /** Inline controls in messages addressed to the bot, Devin-style:
  *
  *   @cloudcode !repo=owner/name fix the flaky auth test
+ *   @cloudcode !preset="node 20" run the benchmarks
  *   @cloudcode mute
  *
  * Control words only count when they are the entire instruction, so a task
- * that merely contains the word "stop" never cancels anything. */
+ * that merely contains the word "help" never triggers anything. */
 
 const REPO_KEYWORD_RE = /(?:^|\s)!repo=(\S+)/i
+// Preset names may contain spaces; accept a quoted value or a bare token.
+const PRESET_KEYWORD_RE = /(?:^|\s)!preset=(?:"([^"]+)"|“([^”]+)”|(\S+))/i
 
 export type ParsedIntegrationMessage = {
-  control: "mute" | "unmute" | null
+  control: "help" | "mute" | "unmute" | null
+  presetOverride?: string
   repoOverride?: string
   text: string
 }
@@ -51,13 +55,35 @@ export function parseIntegrationMessage(
     text = text.replace(REPO_KEYWORD_RE, " ")
   }
 
+  let presetOverride: string | undefined
+  const presetMatch = text.match(PRESET_KEYWORD_RE)
+  if (presetMatch) {
+    presetOverride =
+      (presetMatch[1] ?? presetMatch[2] ?? presetMatch[3])?.trim() || undefined
+    text = text.replace(PRESET_KEYWORD_RE, " ")
+  }
+
   text = text.replace(/\s+/g, " ").trim()
 
   const lowered = text.toLowerCase()
-  if (lowered === "mute") return { control: "mute", repoOverride, text: "" }
+  if (lowered === "mute") {
+    return { control: "mute", presetOverride, repoOverride, text: "" }
+  }
   if (lowered === "unmute") {
-    return { control: "unmute", repoOverride, text: "" }
+    return { control: "unmute", presetOverride, repoOverride, text: "" }
+  }
+  if (lowered === "help" || lowered === "commands") {
+    return { control: "help", presetOverride, repoOverride, text: "" }
   }
 
-  return { control: null, repoOverride, text }
+  return { control: null, presetOverride, repoOverride, text }
 }
+
+export const INTEGRATION_HELP_MESSAGE = [
+  "*Commands*",
+  "• `!repo=owner/name` — run against a specific repository",
+  '• `!preset=name` (or `!preset="name with spaces"`, `!preset=auto`) — pick the sandbox preset for a new session',
+  "• `mute` / `unmute` — pause or resume follow-ups in this thread",
+  "",
+  "Mention me with a task to start a session, reply in the thread to follow up, or DM me directly.",
+].join("\n")

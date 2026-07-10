@@ -12,7 +12,10 @@ import {
   type IntegrationEventPayload,
   type IntegrationEventSubject,
 } from "@/lib/integrations/events"
-import { parseIntegrationMessage } from "@/lib/integrations/keywords"
+import {
+  INTEGRATION_HELP_MESSAGE,
+  parseIntegrationMessage,
+} from "@/lib/integrations/keywords"
 import { getWorkerSecret } from "@/lib/security/worker-secret"
 import type { integrationEvent } from "@/trigger/integrations"
 
@@ -72,17 +75,23 @@ async function chatEventPayload(
   thread: Thread,
   message: Message,
   kind: "mention" | "follow_up",
-  text: string,
-  repoOverride: string | undefined
+  parsed: { presetOverride?: string; repoOverride?: string; text: string }
 ): Promise<IntegrationChatEventPayload> {
+  // Slack DM messages are top-level (each has its own thread id), so the DM
+  // conversation bridges by channel: every message continues one session
+  // instead of opening a new one per message.
+  const externalThreadId =
+    provider === "slack" && thread.isDM ? thread.channelId : thread.id
+
   const payload: IntegrationChatEventPayload = {
     authorName: message.author.fullName || message.author.userName,
-    externalThreadId: thread.id,
+    externalThreadId,
     kind,
     messageId: message.id,
+    presetOverride: parsed.presetOverride,
     provider,
-    repoOverride,
-    text,
+    repoOverride: parsed.repoOverride,
+    text: parsed.text,
   }
 
   if (provider === "slack") {
@@ -149,12 +158,21 @@ export function registerIntegrationHandlers(
       INTEGRATIONS_BOT_USERNAME
     )
 
+    if (parsed.control === "help") {
+      await thread
+        .post({ markdown: INTEGRATION_HELP_MESSAGE })
+        .catch(() => undefined)
+      return
+    }
+
     // Mute controls resolve inline: they need no run, and the confirmation
     // reaction doubles as the ack.
     if (parsed.control === "mute" || parsed.control === "unmute") {
       const muted = parsed.control === "mute"
+      const bridgeThreadId =
+        provider === "slack" && thread.isDM ? thread.channelId : thread.id
       await convexClient().mutation(api.integrations.workerSetMuted, {
-        externalThreadId: thread.id,
+        externalThreadId: bridgeThreadId,
         muted,
         provider,
         workerSecret: getWorkerSecret(WORKER_SECRET_ERROR),
@@ -171,7 +189,11 @@ export function registerIntegrationHandlers(
       return
     }
 
-    if (kind === "mention") await thread.subscribe().catch(() => undefined)
+    // DM conversations bridge by channel, so per-message thread
+    // subscriptions are unnecessary there.
+    if (kind === "mention" && !thread.isDM) {
+      await thread.subscribe().catch(() => undefined)
+    }
     await acknowledge(provider, thread, message)
 
     const payload = await chatEventPayload(
@@ -180,8 +202,7 @@ export function registerIntegrationHandlers(
       thread,
       message,
       kind,
-      parsed.text,
-      parsed.repoOverride
+      parsed
     )
     await enqueueIntegrationEvent(payload, `${provider}:${kind}:${message.id}`)
   }

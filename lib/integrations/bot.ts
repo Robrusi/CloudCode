@@ -83,3 +83,13 @@ export function getIntegrationsBot(): IntegrationsBot {
   cached = { bot, linear, slack }
   return cached
 }
+
+/** Webhook handling initializes the Chat instance automatically, but every
+ * other context (OAuth callbacks, settings routes, Trigger workers) must
+ * initialize before touching an adapter or installation storage throws
+ * "Adapter not initialized". Idempotent. */
+export async function getInitializedIntegrationsBot(): Promise<IntegrationsBot> {
+  const instance = getIntegrationsBot()
+  await instance.bot.initialize()
+  return instance
+}

@@ -120,6 +120,7 @@ async function handleChatEvent(payload: IntegrationChatEventPayload) {
       prompt: chatEventPrompt(payload),
       provider: payload.provider,
       repoUrl,
+      sandboxPresetName: payload.presetOverride,
       title: payload.subject?.title ?? payload.text,
       userId,
       workerSecret,
@@ -148,7 +149,8 @@ async function handleChatEvent(payload: IntegrationChatEventPayload) {
     }
     if (
       created.status === "missing_auth" ||
-      created.status === "auth_reconnect_required"
+      created.status === "auth_reconnect_required" ||
+      created.status === "unknown_preset"
     ) {
       await replyBestEffort(threadRef, `❌ ${created.message}`)
       return { handled: false, reason: created.status }

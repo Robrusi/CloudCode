@@ -395,6 +395,9 @@ export const workerCreateSessionRun = mutation({
     // Required for new sessions; follow-ups on an existing bridge continue
     // on the bridged thread's repository instead.
     repoUrl: v.optional(v.string()),
+    // !preset=name override: matched case-insensitively against the owner's
+    // preset names; "auto" forces the auto environment. New sessions only.
+    sandboxPresetName: v.optional(v.string()),
     title: v.string(),
     userId: v.id("users"),
     workerSecret: v.string(),
@@ -483,9 +486,35 @@ export const workerCreateSessionRun = mutation({
     const repoUrl = args.repoUrl?.trim()
     if (!repoUrl) return { ok: false as const, status: "missing_repo" as const }
 
+    let requestedPresetId = installation.defaultSandboxPresetId
+    const requestedPresetName = args.sandboxPresetName?.trim().toLowerCase()
+    if (requestedPresetName === "auto") {
+      requestedPresetId = undefined
+    } else if (requestedPresetName) {
+      const presets = await ctx.db
+        .query("sandboxPresets")
+        .withIndex("by_user_updated", (q) => q.eq("userId", args.userId))
+        .collect()
+      const match = presets.find(
+        (preset) => preset.name.trim().toLowerCase() === requestedPresetName
+      )
+      if (!match) {
+        const names = presets
+          .slice(0, 10)
+          .map((preset) => `\`${preset.name}\``)
+          .join(", ")
+        return {
+          ok: false as const,
+          message: `No sandbox preset named "${args.sandboxPresetName}". Available: ${names ? `${names}, ` : ""}\`auto\`.`,
+          status: "unknown_preset" as const,
+        }
+      }
+      requestedPresetId = match._id
+    }
+
     const sandboxPresetId = await resolveOwnedPresetOrAutoDefault(
       ctx,
-      installation.defaultSandboxPresetId,
+      requestedPresetId,
       args.userId
     )
     const threadId = await ctx.db.insert("threads", {
