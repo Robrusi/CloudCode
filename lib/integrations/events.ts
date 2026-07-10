@@ -36,6 +36,7 @@ export type SlackAutomationEventPayload = {
   channelId: string
   emoji?: string
   event: "keyword" | "reaction"
+  externalId: string
   externalThreadId: string
   kind: "slack_automation"
   messageId: string
@@ -136,6 +137,7 @@ export function slackAutomationEventVars(
     emoji: payload.emoji ?? "",
     message: payload.messageText ?? "",
     source: "slack",
+    workspace: payload.externalId,
   }
 }
 

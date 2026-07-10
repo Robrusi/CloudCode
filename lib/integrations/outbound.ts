@@ -11,6 +11,7 @@ import { slackThreadParts } from "@/lib/integrations/slack-threads"
 
 export type IntegrationThreadRef = {
   externalThreadId: string
+  linearAgentSessionId?: string
   linearOrganizationId?: string
   provider: "slack" | "linear"
   slackTeamId?: string
@@ -98,6 +99,8 @@ export async function recordDeliveryFailure(
     .mutation(api.integrations.workerRecordDeliveryFailure, {
       error: message,
       externalThreadId: ref.externalThreadId,
+      linearAgentSessionId: ref.linearAgentSessionId,
+      linearOrganizationId: ref.linearOrganizationId,
       provider: ref.provider,
       workerSecret: getWorkerSecret(),
     })

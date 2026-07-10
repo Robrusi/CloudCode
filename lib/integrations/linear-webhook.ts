@@ -1,6 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto"
 
-import type { LinearIssueAutomationEvent } from "@/lib/integrations/events"
+import type {
+  IntegrationChatEventPayload,
+  LinearIssueAutomationEvent,
+} from "@/lib/integrations/events"
+import { linearAgentSessionThreadId } from "@/lib/integrations/linear-threads"
 
 const LINEAR_WEBHOOK_REPLAY_WINDOW_MS = 60 * 1000
 
@@ -66,6 +70,82 @@ type LinearIssuePayload = {
   updatedFrom?: {
     labelIds?: string[]
     stateId?: string
+  }
+}
+
+type LinearAgentSessionPayload = {
+  action?: string
+  agentSession?: {
+    appUserId?: string
+    comment?: unknown
+    creator?: {
+      email?: string
+      name?: string
+    }
+    id?: string
+    issue?: {
+      description?: string
+      id?: string
+      identifier?: string
+      title?: string
+      url?: string
+    }
+    issueId?: string
+  }
+  appUserId?: string
+  organizationId?: string
+  promptContext?: string
+  type?: string
+  webhookId?: string
+}
+
+/** Builds the event the Linear adapter cannot currently build: a newly
+ * delegated agent session with no root comment. Normal comment-backed
+ * sessions stay exclusively on the adapter path to prevent duplicate runs. */
+export function parseCommentlessLinearDelegation(
+  payload: unknown
+): { appUserId: string; event: IntegrationChatEventPayload } | null {
+  const parsed = payload as LinearAgentSessionPayload
+  const session = parsed?.agentSession
+  if (
+    parsed?.type !== "AgentSessionEvent" ||
+    parsed.action !== "created" ||
+    !session ||
+    session.comment ||
+    !session.id ||
+    !parsed.organizationId
+  ) {
+    return null
+  }
+
+  const issueId = session.issueId ?? session.issue?.id
+  const appUserId = session.appUserId ?? parsed.appUserId
+  if (!issueId || !appUserId) return null
+
+  const issue = session.issue
+  const promptContext = parsed.promptContext?.trim()
+  const issueLabel = issue?.identifier ?? issue?.title ?? "this Linear issue"
+  return {
+    appUserId,
+    event: {
+      authorEmail: session.creator?.email,
+      authorName: session.creator?.name ?? "Linear",
+      externalId: parsed.organizationId,
+      externalThreadId: linearAgentSessionThreadId(issueId, session.id),
+      kind: "mention",
+      linearAgentSessionId: session.id,
+      linearIssueId: issueId,
+      messageId: parsed.webhookId ?? `agent-session:${session.id}:created`,
+      provider: "linear",
+      subject: issue
+        ? {
+            description: issue.description,
+            title: issue.title ?? issue.identifier,
+            url: issue.url,
+          }
+        : undefined,
+      text: promptContext || `Work on ${issueLabel}.`,
+    },
   }
 }
 

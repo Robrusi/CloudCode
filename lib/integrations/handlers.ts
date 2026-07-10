@@ -16,7 +16,9 @@ import {
   INTEGRATION_HELP_MESSAGE,
   parseIntegrationMessage,
 } from "@/lib/integrations/keywords"
+import { linearAgentSessionThreadId } from "@/lib/integrations/linear-threads"
 import { normalizeSlackDmThreadId } from "@/lib/integrations/slack-threads"
+import { currentSlackWebhookTeamId } from "@/lib/integrations/slack-webhook-context"
 import { getWorkerSecret } from "@/lib/security/worker-secret"
 import type { integrationEvent } from "@/trigger/integrations"
 
@@ -70,23 +72,53 @@ function linearRawOf(message: Message) {
   return raw && typeof raw === "object" && "organizationId" in raw ? raw : null
 }
 
-async function chatEventPayload(
+type ExternalThreadContext = {
+  externalThreadId: string
+  linearAgentSessionId?: string
+  linearIssueId?: string
+}
+
+/** Resolves the durable bridge identity once for controls, queuing, and run
+ * creation. Linear comment IDs identify individual prompts; an agent
+ * session ID identifies the conversation. */
+function externalThreadContext(
   provider: "slack" | "linear",
   adapters: { linear: LinearAdapter | null; slack: SlackAdapter | null },
   thread: Thread,
+  message: Message
+): ExternalThreadContext {
+  if (provider === "slack") {
+    return {
+      externalThreadId: normalizeSlackDmThreadId(thread.id, message.id),
+    }
+  }
+
+  const decoded = adapters.linear?.decodeThreadId(thread.id)
+  if (!decoded?.agentSessionId) return { externalThreadId: thread.id }
+  return {
+    externalThreadId: linearAgentSessionThreadId(
+      decoded.issueId,
+      decoded.agentSessionId
+    ),
+    linearAgentSessionId: decoded.agentSessionId,
+    linearIssueId: decoded.issueId,
+  }
+}
+
+async function chatEventPayload(
+  provider: "slack" | "linear",
+  adapters: { linear: LinearAdapter | null; slack: SlackAdapter | null },
   message: Message,
   kind: "mention" | "follow_up",
-  parsed: { presetOverride?: string; repoOverride?: string; text: string }
+  parsed: { presetOverride?: string; repoOverride?: string; text: string },
+  threadContext: ExternalThreadContext
 ): Promise<IntegrationChatEventPayload> {
-  const externalThreadId =
-    provider === "slack"
-      ? normalizeSlackDmThreadId(thread.id, message.id)
-      : thread.id
-
   const payload: IntegrationChatEventPayload = {
     authorName: message.author.fullName || message.author.userName,
-    externalThreadId,
+    externalThreadId: threadContext.externalThreadId,
     kind,
+    linearAgentSessionId: threadContext.linearAgentSessionId,
+    linearIssueId: threadContext.linearIssueId,
     messageId: message.id,
     presetOverride: parsed.presetOverride,
     provider,
@@ -110,11 +142,6 @@ async function chatEventPayload(
   // backing comment even though the type declares one.
   payload.authorEmail = raw?.comment?.user?.email
   payload.subject = await subjectOf(message)
-  if (adapters.linear) {
-    const decoded = adapters.linear.decodeThreadId(thread.id)
-    payload.linearIssueId = decoded.issueId
-    payload.linearAgentSessionId = decoded.agentSessionId
-  }
   return payload
 }
 
@@ -157,10 +184,13 @@ export function registerIntegrationHandlers(
       message.text,
       INTEGRATIONS_BOT_USERNAME
     )
-    const externalThreadId =
-      provider === "slack"
-        ? normalizeSlackDmThreadId(thread.id, message.id)
-        : thread.id
+    const threadContext = externalThreadContext(
+      provider,
+      adapters,
+      thread,
+      message
+    )
+    const { externalThreadId } = threadContext
 
     if (parsed.control === "help") {
       await bot
@@ -176,6 +206,11 @@ export function registerIntegrationHandlers(
       const muted = parsed.control === "mute"
       await convexClient().mutation(api.integrations.workerSetMuted, {
         externalThreadId,
+        linearAgentSessionId: threadContext.linearAgentSessionId,
+        linearOrganizationId:
+          provider === "linear"
+            ? linearRawOf(message)?.organizationId
+            : undefined,
         muted,
         provider,
         workerSecret: getWorkerSecret(WORKER_SECRET_ERROR),
@@ -203,10 +238,10 @@ export function registerIntegrationHandlers(
     const payload = await chatEventPayload(
       provider,
       adapters,
-      thread,
       message,
       kind,
-      parsed
+      parsed,
+      threadContext
     )
     await enqueueIntegrationEvent(payload, `${provider}:${kind}:${message.id}`)
   }
@@ -238,12 +273,17 @@ export function registerIntegrationHandlers(
     if (providerOfThread(thread.id) !== "slack") return
 
     const raw = message.raw as SlackEvent | undefined
+    const externalId = raw?.team_id ?? raw?.team
+    if (!externalId) {
+      console.warn("Ignoring Slack message without a workspace identity.")
+      return
+    }
     const matches = await convexClient().query(
       api.integrations.workerMatchSlackEvent,
       {
         channelId: thread.channelId,
         event: "keyword",
-        externalId: raw?.team_id ?? raw?.team,
+        externalId,
         text: message.text,
         workerSecret: getWorkerSecret(WORKER_SECRET_ERROR),
       }
@@ -256,13 +296,14 @@ export function registerIntegrationHandlers(
         automationIds: matches.map((match) => match.automationId),
         channelId: thread.channelId,
         event: "keyword",
+        externalId,
         externalThreadId: thread.id,
         kind: "slack_automation",
         messageId: message.id,
         messageText: message.text,
         provider: "slack",
       },
-      `slack:keyword:${message.id}`
+      `slack:keyword:${externalId}:${message.id}`
     )
   })
 
@@ -270,12 +311,22 @@ export function registerIntegrationHandlers(
     if (!event.added || event.user.isBot === true || event.user.isMe) return
     if (providerOfThread(event.threadId) !== "slack") return
 
+    // ReactionEvent does not expose Slack's outer webhook envelope, where
+    // team_id lives. The route carries that authenticated workspace through
+    // async request context. Never fall back to another tenant.
+    const externalId = currentSlackWebhookTeamId()
+    if (!externalId) {
+      console.warn("Ignoring Slack reaction without a workspace identity.")
+      return
+    }
+
     const matches = await convexClient().query(
       api.integrations.workerMatchSlackEvent,
       {
         channelId: event.thread.channelId,
         emoji: event.rawEmoji,
         event: "reaction",
+        externalId,
         workerSecret: getWorkerSecret(WORKER_SECRET_ERROR),
       }
     )
@@ -288,13 +339,14 @@ export function registerIntegrationHandlers(
         channelId: event.thread.channelId,
         emoji: event.rawEmoji,
         event: "reaction",
+        externalId,
         externalThreadId: event.threadId,
         kind: "slack_automation",
         messageId: event.messageId,
         messageText: event.message?.text,
         provider: "slack",
       },
-      `slack:reaction:${event.messageId}:${event.rawEmoji}:${event.user.userId}`
+      `slack:reaction:${externalId}:${event.messageId}:${event.rawEmoji}:${event.user.userId}`
     )
   })
 }

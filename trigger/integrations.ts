@@ -18,6 +18,7 @@ import {
   recordDeliveryFailure,
   type IntegrationThreadRef,
 } from "@/lib/integrations/outbound"
+import { linearAgentSessionThreadId } from "@/lib/integrations/linear-threads"
 import { normalizeSlackDmThreadId } from "@/lib/integrations/slack-threads"
 import type { automationRun } from "@/trigger/automations"
 
@@ -57,9 +58,15 @@ async function handleChatEvent(payload: IntegrationChatEventPayload) {
   const externalThreadId =
     payload.provider === "slack"
       ? normalizeSlackDmThreadId(payload.externalThreadId, payload.messageId)
-      : payload.externalThreadId
+      : payload.linearIssueId && payload.linearAgentSessionId
+        ? linearAgentSessionThreadId(
+            payload.linearIssueId,
+            payload.linearAgentSessionId
+          )
+        : payload.externalThreadId
   const threadRef: IntegrationThreadRef = {
     externalThreadId,
+    linearAgentSessionId: payload.linearAgentSessionId,
     linearOrganizationId:
       payload.provider === "linear" ? payload.externalId : undefined,
     provider: payload.provider,
@@ -70,6 +77,9 @@ async function handleChatEvent(payload: IntegrationChatEventPayload) {
     authorEmail: payload.authorEmail,
     externalId: payload.externalId,
     externalThreadId,
+    linearAgentSessionId: payload.linearAgentSessionId,
+    linearOrganizationId:
+      payload.provider === "linear" ? payload.externalId : undefined,
     provider: payload.provider,
     workerSecret,
   })
@@ -104,6 +114,9 @@ async function handleChatEvent(payload: IntegrationChatEventPayload) {
           authorName: payload.authorName,
           content: payload.text,
           externalThreadId,
+          linearAgentSessionId: payload.linearAgentSessionId,
+          linearOrganizationId:
+            payload.provider === "linear" ? payload.externalId : undefined,
           provider: payload.provider,
           workerSecret,
         }
@@ -157,6 +170,9 @@ async function handleChatEvent(payload: IntegrationChatEventPayload) {
           authorName: payload.authorName,
           content: payload.text,
           externalThreadId,
+          linearAgentSessionId: payload.linearAgentSessionId,
+          linearOrganizationId:
+            payload.provider === "linear" ? payload.externalId : undefined,
           provider: payload.provider,
           workerSecret,
         }
@@ -218,7 +234,7 @@ async function handleSlackAutomationEvent(
       "automation-run",
       { automationId, eventVars, manual: false },
       {
-        idempotencyKey: `${automationId}:${payload.event}:${payload.messageId}:${payload.emoji ?? ""}`,
+        idempotencyKey: `${automationId}:${payload.externalId}:${payload.event}:${payload.messageId}:${payload.emoji ?? ""}`,
         tags: [`automation:${automationId}`],
       }
     )

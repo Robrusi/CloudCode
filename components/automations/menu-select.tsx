@@ -7,9 +7,10 @@ import { popoverItem, popoverPanel } from "@/components/chat/control-styles"
 import { useClickOutside } from "@/hooks/use-click-outside"
 import { cn } from "@/lib/shared/utils"
 
-/** The app's compact bordered field (matches BranchTargetChip / RepoChip). */
+/** The app's compact bordered field (matches BranchTargetChip / RepoChip).
+ * Weight is pinned so the field reads the same inside font-medium labels. */
 export const fieldBase =
-  "h-8 w-full rounded-lg border border-field bg-background text-sm outline-none transition-colors focus:border-ring focus:ring-3 focus:ring-ring/20"
+  "h-8 w-full rounded-lg border border-field bg-background text-sm font-normal outline-none transition-colors focus:border-ring focus:ring-3 focus:ring-ring/20"
 
 export type MenuSelectOption = { value: string; label: string }
 
@@ -68,7 +69,7 @@ export function MenuSelect({
         <div
           className={cn(
             popoverPanel,
-            "top-full left-0 z-20 mt-1 max-h-52 w-full overflow-y-auto"
+            "top-full left-0 z-20 mt-1 max-h-52 w-full overflow-y-auto font-normal"
           )}
         >
           {options.map((option) => {

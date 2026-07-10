@@ -174,7 +174,7 @@ function InstallationSettings({
           <MenuSelect
             ariaLabel="Default sandbox preset"
             value={draft.defaultSandboxPresetId}
-            triggerClassName="h-9 px-3 font-normal"
+            triggerClassName="h-9 px-3"
             options={[
               { label: "Auto environment", value: "" },
               ...presets.map((preset) => ({
@@ -190,7 +190,7 @@ function InstallationSettings({
           <MenuSelect
             ariaLabel="Default model"
             value={draft.defaultModel}
-            triggerClassName="h-9 px-3 font-normal"
+            triggerClassName="h-9 px-3"
             options={MODELS.map((value) => ({
               label:
                 value === SESSION_MODEL_DEFAULT
@@ -206,7 +206,7 @@ function InstallationSettings({
           <MenuSelect
             ariaLabel="Default reasoning effort"
             value={draft.defaultReasoningEffort}
-            triggerClassName="h-9 px-3 font-normal"
+            triggerClassName="h-9 px-3"
             options={THINKINGS.map((value) => ({
               label:
                 value === SESSION_EFFORT_DEFAULT

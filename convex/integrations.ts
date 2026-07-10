@@ -66,6 +66,59 @@ async function bridgeForExternalThread(
     .unique()
 }
 
+/** Exact bridge lookup for current identifiers, with a migration bridge for
+ * Linear rows created when comment IDs were incorrectly part of the durable
+ * thread identity. Multiple legacy rows can exist; the latest is canonical. */
+async function bridgeForEvent(
+  ctx: QueryCtx | MutationCtx,
+  provider: Doc<"integrationThreads">["provider"],
+  externalThreadId: string,
+  linearOrganizationId?: string,
+  linearAgentSessionId?: string
+) {
+  const exact = await bridgeForExternalThread(ctx, provider, externalThreadId)
+  if (
+    exact ||
+    provider !== "linear" ||
+    !linearOrganizationId ||
+    !linearAgentSessionId
+  ) {
+    return exact
+  }
+
+  return await ctx.db
+    .query("integrationThreads")
+    .withIndex("by_linear_session", (q) =>
+      q
+        .eq("provider", "linear")
+        .eq("linearOrganizationId", linearOrganizationId)
+        .eq("linearAgentSessionId", linearAgentSessionId)
+    )
+    .order("desc")
+    .first()
+}
+
+function canonicalLinearBridgeIdentity(
+  provider: Doc<"integrationThreads">["provider"],
+  externalThreadId: string,
+  linearOrganizationId: string | undefined,
+  linearAgentSessionId: string | undefined,
+  storedExternalThreadId: string
+) {
+  if (
+    provider !== "linear" ||
+    !linearAgentSessionId ||
+    storedExternalThreadId === externalThreadId
+  ) {
+    return undefined
+  }
+  return {
+    externalThreadId,
+    linearAgentSessionId,
+    linearOrganizationId,
+  }
+}
+
 async function requireOwnedInstallation(
   ctx: MutationCtx,
   installationId: Id<"integrationInstallations">,
@@ -319,6 +372,8 @@ export const workerResolveEvent = query({
     // installation of the provider is used (single-workspace mode).
     externalId: v.optional(v.string()),
     externalThreadId: v.optional(v.string()),
+    linearAgentSessionId: v.optional(v.string()),
+    linearOrganizationId: v.optional(v.string()),
     provider: integrationProvider,
     workerSecret: v.string(),
   },
@@ -359,10 +414,12 @@ export const workerResolveEvent = query({
       userId: Id<"users">
     } | null = null
     if (args.externalThreadId) {
-      const row = await bridgeForExternalThread(
+      const row = await bridgeForEvent(
         ctx,
         args.provider,
-        args.externalThreadId
+        args.externalThreadId,
+        args.linearOrganizationId,
+        args.linearAgentSessionId
       )
       if (row) {
         const activeRun = await activeRunForThread(ctx, row.threadId)
@@ -398,19 +455,18 @@ export const workerMatchSlackEvent = query({
     channelId: v.string(),
     emoji: v.optional(v.string()),
     event: v.union(v.literal("keyword"), v.literal("reaction")),
-    externalId: v.optional(v.string()),
+    externalId: v.string(),
     text: v.optional(v.string()),
     workerSecret: v.string(),
   },
   handler: async (ctx, args) => {
     requireWorkerSecret(args.workerSecret)
 
-    const installation = args.externalId
-      ? await installationForProviderExternal(ctx, "slack", args.externalId)
-      : await ctx.db
-          .query("integrationInstallations")
-          .withIndex("by_provider_external", (q) => q.eq("provider", "slack"))
-          .first()
+    const installation = await installationForProviderExternal(
+      ctx,
+      "slack",
+      args.externalId
+    )
     if (!installation || !installation.enabled) return []
 
     const rows = await ctx.db
@@ -491,15 +547,31 @@ export const workerCreateSessionRun = mutation({
     }
 
     const now = Date.now()
-    const bridge = await bridgeForExternalThread(
+    const bridge = await bridgeForEvent(
       ctx,
       args.provider,
-      args.externalThreadId
+      args.externalThreadId,
+      args.linearOrganizationId,
+      args.linearAgentSessionId
     )
 
     // A mention on an already-bridged external thread continues its CloudCode
     // thread instead of opening a parallel session.
     if (bridge) {
+      const canonicalIdentity = canonicalLinearBridgeIdentity(
+        args.provider,
+        args.externalThreadId,
+        args.linearOrganizationId,
+        args.linearAgentSessionId,
+        bridge.externalThreadId
+      )
+      if (canonicalIdentity) {
+        await ctx.db.patch(bridge._id, {
+          ...canonicalIdentity,
+          linearIssueId: args.linearIssueId,
+          updatedAt: now,
+        })
+      }
       const thread = await ctx.db.get(bridge.threadId)
       if (!thread) return { ok: false as const, status: "not_found" as const }
       const activeRun = await activeRunForThread(ctx, bridge.threadId)
@@ -630,16 +702,20 @@ export const workerQueuePendingMessage = mutation({
     authorName: v.string(),
     content: v.string(),
     externalThreadId: v.string(),
+    linearAgentSessionId: v.optional(v.string()),
+    linearOrganizationId: v.optional(v.string()),
     provider: integrationProvider,
     workerSecret: v.string(),
   },
   handler: async (ctx, args) => {
     requireWorkerSecret(args.workerSecret)
 
-    const bridge = await bridgeForExternalThread(
+    const bridge = await bridgeForEvent(
       ctx,
       args.provider,
-      args.externalThreadId
+      args.externalThreadId,
+      args.linearOrganizationId,
+      args.linearAgentSessionId
     )
     if (!bridge || bridge.muted) return { queued: false }
 
@@ -653,6 +729,13 @@ export const workerQueuePendingMessage = mutation({
     ].slice(-PENDING_MESSAGES_MAX)
 
     await ctx.db.patch(bridge._id, {
+      ...canonicalLinearBridgeIdentity(
+        args.provider,
+        args.externalThreadId,
+        args.linearOrganizationId,
+        args.linearAgentSessionId,
+        bridge.externalThreadId
+      ),
       pendingMessages: pending,
       updatedAt: Date.now(),
     })
@@ -664,20 +747,31 @@ export const workerRecordDeliveryFailure = mutation({
   args: {
     error: v.string(),
     externalThreadId: v.string(),
+    linearAgentSessionId: v.optional(v.string()),
+    linearOrganizationId: v.optional(v.string()),
     provider: integrationProvider,
     workerSecret: v.string(),
   },
   handler: async (ctx, args) => {
     requireWorkerSecret(args.workerSecret)
 
-    const bridge = await bridgeForExternalThread(
+    const bridge = await bridgeForEvent(
       ctx,
       args.provider,
-      args.externalThreadId
+      args.externalThreadId,
+      args.linearOrganizationId,
+      args.linearAgentSessionId
     )
     if (!bridge) return { recorded: false }
 
     await ctx.db.patch(bridge._id, {
+      ...canonicalLinearBridgeIdentity(
+        args.provider,
+        args.externalThreadId,
+        args.linearOrganizationId,
+        args.linearAgentSessionId,
+        bridge.externalThreadId
+      ),
       deliveryError: args.error.slice(0, 2000),
       deliveryErrorAt: Date.now(),
       updatedAt: Date.now(),
@@ -689,6 +783,8 @@ export const workerRecordDeliveryFailure = mutation({
 export const workerSetMuted = mutation({
   args: {
     externalThreadId: v.string(),
+    linearAgentSessionId: v.optional(v.string()),
+    linearOrganizationId: v.optional(v.string()),
     muted: v.boolean(),
     provider: integrationProvider,
     workerSecret: v.string(),
@@ -696,14 +792,23 @@ export const workerSetMuted = mutation({
   handler: async (ctx, args) => {
     requireWorkerSecret(args.workerSecret)
 
-    const bridge = await bridgeForExternalThread(
+    const bridge = await bridgeForEvent(
       ctx,
       args.provider,
-      args.externalThreadId
+      args.externalThreadId,
+      args.linearOrganizationId,
+      args.linearAgentSessionId
     )
     if (!bridge) return { updated: false }
 
     await ctx.db.patch(bridge._id, {
+      ...canonicalLinearBridgeIdentity(
+        args.provider,
+        args.externalThreadId,
+        args.linearOrganizationId,
+        args.linearAgentSessionId,
+        bridge.externalThreadId
+      ),
       muted: args.muted || undefined,
       updatedAt: Date.now(),
     })

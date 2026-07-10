@@ -446,6 +446,11 @@ export default defineSchema({
     userId: v.id("users"),
   })
     .index("by_external", ["provider", "externalThreadId"])
+    .index("by_linear_session", [
+      "provider",
+      "linearOrganizationId",
+      "linearAgentSessionId",
+    ])
     .index("by_thread", ["threadId"]),
 
   githubAppInstallations: defineTable({
