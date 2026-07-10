@@ -82,7 +82,9 @@ export function runStartedMessage(threadId: string, isFollowUp: boolean) {
   return url ? `${action} — [open in CloudCode](${url})` : `${action}.`
 }
 
-const SUMMARY_MAX_LENGTH = 1500
+// Slack renders markdown_text up to 12k characters; leave room for the
+// status line and link so the agent's actual answer is what gets read.
+const SUMMARY_MAX_LENGTH = 6000
 
 /** Completion message for the external thread: status, branch, PR, and the
  * tail of the run's final answer. */

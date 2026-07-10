@@ -635,10 +635,13 @@ export const workerGetRunNotification = query({
     // The Slack workspace id lets OAuth-mode workers resolve the stored bot
     // token for the outbound post.
     const installation = await ctx.db.get(bridge.installationId)
+    // The run's final response lives on its assistant message (workerComplete
+    // finalizes it there); the run row's content field stays empty.
+    const assistantMessage = await ctx.db.get(run.assistantMessageId)
 
     return {
       branchName: run.branchName,
-      content: run.content,
+      content: assistantMessage?.content || run.content,
       error: run.error,
       externalThreadId: bridge.externalThreadId,
       linearOrganizationId: bridge.linearOrganizationId,
