@@ -2,7 +2,10 @@ import type { ConvexHttpClient } from "convex/browser"
 
 import { api } from "@/convex/_generated/api"
 import { getWorkerSecret } from "@/lib/codex/run-worker"
-import { getInitializedIntegrationsBot } from "@/lib/integrations/bot"
+import {
+  getInitializedIntegrationsBot,
+  type IntegrationsBot,
+} from "@/lib/integrations/bot"
 import { appThreadUrl, slackIntegrationEnv } from "@/lib/integrations/config"
 import { slackThreadParts } from "@/lib/integrations/slack-threads"
 
@@ -36,30 +39,45 @@ async function withSlackToken<T>(
   return await fn()
 }
 
+/** Runs a Linear API call with the stored organization installation in
+ * scope. Trigger workers run outside the webhook request that normally
+ * supplies this context. */
+async function withLinearInstallation(
+  ref: IntegrationThreadRef,
+  fn: (bot: IntegrationsBot["bot"]) => Promise<unknown>
+) {
+  const instance = await getInitializedIntegrationsBot()
+  if (!instance.linear) {
+    throw new Error("The Linear integration is not configured.")
+  }
+  if (!ref.linearOrganizationId) {
+    throw new Error("The Linear thread is missing its organization.")
+  }
+  await instance.linear.withInstallation(ref.linearOrganizationId, () =>
+    fn(instance.bot)
+  )
+}
+
 /** Posts markdown to an external Slack thread or Linear agent session from
  * outside webhook context (Trigger.dev workers). */
 export async function postToIntegrationThread(
   ref: IntegrationThreadRef,
   markdown: string
 ) {
-  const { bot, linear } = await getInitializedIntegrationsBot()
-  const post = () => {
-    if (ref.provider === "slack") {
-      const { channel, threadTs } = slackThreadParts(ref.externalThreadId)
-      if (!threadTs) return bot.channel(`slack:${channel}`).post({ markdown })
-    }
-    return bot.thread(ref.externalThreadId).post({ markdown })
-  }
-
   if (ref.provider === "linear") {
-    if (!linear) throw new Error("The Linear integration is not configured.")
-    if (!ref.linearOrganizationId) {
-      throw new Error("The Linear thread is missing its organization.")
-    }
-    await linear.withInstallation(ref.linearOrganizationId, post)
+    await withLinearInstallation(ref, (bot) =>
+      bot.thread(ref.externalThreadId).post({ markdown })
+    )
     return
   }
 
+  const { bot } = await getInitializedIntegrationsBot()
+  const post = () => {
+    const { channel, threadTs } = slackThreadParts(ref.externalThreadId)
+    return threadTs
+      ? bot.thread(ref.externalThreadId).post({ markdown })
+      : bot.channel(`slack:${channel}`).post({ markdown })
+  }
   await withSlackToken(ref, post)
 }
 
@@ -91,6 +109,25 @@ export function runStartedMessage(threadId: string, isFollowUp: boolean) {
   const url = appThreadUrl(threadId)
   const action = isFollowUp ? "On it — continuing the session" : "On it"
   return url ? `${action} — [open in CloudCode](${url})` : `${action}.`
+}
+
+/** Delivers the run-start acknowledgement with provider-native semantics.
+ * Linear uses an ephemeral thought so an in-progress run is not marked as a
+ * final response; Slack keeps the visible thread reply. */
+export async function postRunStarted(
+  ref: IntegrationThreadRef,
+  threadId: string,
+  isFollowUp: boolean
+) {
+  const markdown = runStartedMessage(threadId, isFollowUp)
+  if (ref.provider === "slack") {
+    await postToIntegrationThread(ref, markdown)
+    return
+  }
+
+  await withLinearInstallation(ref, (bot) =>
+    bot.thread(ref.externalThreadId).startTyping(markdown)
+  )
 }
 
 // Slack renders markdown_text up to 12k characters; leave room for the

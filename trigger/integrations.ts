@@ -13,9 +13,9 @@ import {
   type SlackAutomationEventPayload,
 } from "@/lib/integrations/events"
 import {
+  postRunStarted,
   postToIntegrationThread,
   recordDeliveryFailure,
-  runStartedMessage,
   type IntegrationThreadRef,
 } from "@/lib/integrations/outbound"
 import { normalizeSlackDmThreadId } from "@/lib/integrations/slack-threads"
@@ -30,10 +30,19 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Integration event failed."
 }
 
-async function replyBestEffort(ref: IntegrationThreadRef, markdown: string) {
-  await postToIntegrationThread(ref, markdown).catch(async (error) => {
+async function deliverBestEffort(
+  ref: IntegrationThreadRef,
+  deliver: () => Promise<void>
+) {
+  await deliver().catch(async (error) => {
     console.warn("Unable to reply to the integration thread.", error)
     await recordDeliveryFailure(workerConvexClient(), ref, error)
+  })
+}
+
+async function replyBestEffort(ref: IntegrationThreadRef, markdown: string) {
+  await deliverBestEffort(ref, async () => {
+    await postToIntegrationThread(ref, markdown)
   })
 }
 
@@ -174,10 +183,9 @@ async function handleChatEvent(payload: IntegrationChatEventPayload) {
     return { handled: false, reason: created.status }
   }
 
-  await replyBestEffort(
-    threadRef,
-    runStartedMessage(created.threadId, created.isFollowUp)
-  )
+  await deliverBestEffort(threadRef, async () => {
+    await postRunStarted(threadRef, created.threadId, created.isFollowUp)
+  })
 
   try {
     await dispatchIntegrationRun(client, created)
