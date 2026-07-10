@@ -22,6 +22,7 @@ import {
   codexAuthReconnectMessage,
 } from "@/lib/codex/auth-errors"
 import { canonicalGitHubRepoUrl } from "@/lib/github/repo"
+import { linearAgentSessionThreadParts } from "@/lib/integrations/linear-threads"
 
 // Session defaults for runs started from Slack/Linear. Follow-up runs on an
 // existing bridge reuse the thread's previous run options instead.
@@ -372,8 +373,6 @@ export const workerResolveEvent = query({
     // installation of the provider is used (single-workspace mode).
     externalId: v.optional(v.string()),
     externalThreadId: v.optional(v.string()),
-    linearAgentSessionId: v.optional(v.string()),
-    linearOrganizationId: v.optional(v.string()),
     provider: integrationProvider,
     workerSecret: v.string(),
   },
@@ -410,16 +409,23 @@ export const workerResolveEvent = query({
       bridgeId: Id<"integrationThreads">
       muted: boolean
       pendingCount: number
+      requiresCanonicalization: boolean
       threadId: Id<"threads">
       userId: Id<"users">
     } | null = null
     if (args.externalThreadId) {
+      // Session identity is encoded in the canonical external thread ID so
+      // callers never need a protocol-breaking validator change.
+      const linearSession =
+        args.provider === "linear"
+          ? linearAgentSessionThreadParts(args.externalThreadId)
+          : undefined
       const row = await bridgeForEvent(
         ctx,
         args.provider,
         args.externalThreadId,
-        args.linearOrganizationId,
-        args.linearAgentSessionId
+        args.provider === "linear" ? args.externalId : undefined,
+        linearSession?.agentSessionId
       )
       if (row) {
         const activeRun = await activeRunForThread(ctx, row.threadId)
@@ -428,6 +434,8 @@ export const workerResolveEvent = query({
           bridgeId: row._id,
           muted: Boolean(row.muted),
           pendingCount: row.pendingMessages?.length ?? 0,
+          requiresCanonicalization:
+            row.externalThreadId !== args.externalThreadId,
           threadId: row.threadId,
           userId: row.userId,
         }
@@ -702,20 +710,16 @@ export const workerQueuePendingMessage = mutation({
     authorName: v.string(),
     content: v.string(),
     externalThreadId: v.string(),
-    linearAgentSessionId: v.optional(v.string()),
-    linearOrganizationId: v.optional(v.string()),
     provider: integrationProvider,
     workerSecret: v.string(),
   },
   handler: async (ctx, args) => {
     requireWorkerSecret(args.workerSecret)
 
-    const bridge = await bridgeForEvent(
+    const bridge = await bridgeForExternalThread(
       ctx,
       args.provider,
-      args.externalThreadId,
-      args.linearOrganizationId,
-      args.linearAgentSessionId
+      args.externalThreadId
     )
     if (!bridge || bridge.muted) return { queued: false }
 
@@ -729,13 +733,6 @@ export const workerQueuePendingMessage = mutation({
     ].slice(-PENDING_MESSAGES_MAX)
 
     await ctx.db.patch(bridge._id, {
-      ...canonicalLinearBridgeIdentity(
-        args.provider,
-        args.externalThreadId,
-        args.linearOrganizationId,
-        args.linearAgentSessionId,
-        bridge.externalThreadId
-      ),
       pendingMessages: pending,
       updatedAt: Date.now(),
     })
@@ -747,31 +744,20 @@ export const workerRecordDeliveryFailure = mutation({
   args: {
     error: v.string(),
     externalThreadId: v.string(),
-    linearAgentSessionId: v.optional(v.string()),
-    linearOrganizationId: v.optional(v.string()),
     provider: integrationProvider,
     workerSecret: v.string(),
   },
   handler: async (ctx, args) => {
     requireWorkerSecret(args.workerSecret)
 
-    const bridge = await bridgeForEvent(
+    const bridge = await bridgeForExternalThread(
       ctx,
       args.provider,
-      args.externalThreadId,
-      args.linearOrganizationId,
-      args.linearAgentSessionId
+      args.externalThreadId
     )
     if (!bridge) return { recorded: false }
 
     await ctx.db.patch(bridge._id, {
-      ...canonicalLinearBridgeIdentity(
-        args.provider,
-        args.externalThreadId,
-        args.linearOrganizationId,
-        args.linearAgentSessionId,
-        bridge.externalThreadId
-      ),
       deliveryError: args.error.slice(0, 2000),
       deliveryErrorAt: Date.now(),
       updatedAt: Date.now(),
@@ -783,8 +769,6 @@ export const workerRecordDeliveryFailure = mutation({
 export const workerSetMuted = mutation({
   args: {
     externalThreadId: v.string(),
-    linearAgentSessionId: v.optional(v.string()),
-    linearOrganizationId: v.optional(v.string()),
     muted: v.boolean(),
     provider: integrationProvider,
     workerSecret: v.string(),
@@ -792,23 +776,14 @@ export const workerSetMuted = mutation({
   handler: async (ctx, args) => {
     requireWorkerSecret(args.workerSecret)
 
-    const bridge = await bridgeForEvent(
+    const bridge = await bridgeForExternalThread(
       ctx,
       args.provider,
-      args.externalThreadId,
-      args.linearOrganizationId,
-      args.linearAgentSessionId
+      args.externalThreadId
     )
     if (!bridge) return { updated: false }
 
     await ctx.db.patch(bridge._id, {
-      ...canonicalLinearBridgeIdentity(
-        args.provider,
-        args.externalThreadId,
-        args.linearOrganizationId,
-        args.linearAgentSessionId,
-        bridge.externalThreadId
-      ),
       muted: args.muted || undefined,
       updatedAt: Date.now(),
     })

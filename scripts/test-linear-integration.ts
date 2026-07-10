@@ -1,11 +1,22 @@
 import assert from "node:assert/strict"
 
 import { parseCommentlessLinearDelegation } from "../lib/integrations/linear-webhook"
-import { linearAgentSessionThreadId } from "../lib/integrations/linear-threads"
+import {
+  linearAgentSessionThreadId,
+  linearAgentSessionThreadParts,
+} from "../lib/integrations/linear-threads"
 
 assert.equal(
   linearAgentSessionThreadId("issue-1", "session-1"),
   "linear:issue-1:s:session-1"
+)
+assert.deepEqual(linearAgentSessionThreadParts("linear:issue-1:s:session-1"), {
+  agentSessionId: "session-1",
+  issueId: "issue-1",
+})
+assert.equal(
+  linearAgentSessionThreadParts("linear:issue-1:c:comment-1:s:session-1"),
+  undefined
 )
 
 const delegation = parseCommentlessLinearDelegation({

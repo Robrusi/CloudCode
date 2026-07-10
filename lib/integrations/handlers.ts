@@ -206,11 +206,6 @@ export function registerIntegrationHandlers(
       const muted = parsed.control === "mute"
       await convexClient().mutation(api.integrations.workerSetMuted, {
         externalThreadId,
-        linearAgentSessionId: threadContext.linearAgentSessionId,
-        linearOrganizationId:
-          provider === "linear"
-            ? linearRawOf(message)?.organizationId
-            : undefined,
         muted,
         provider,
         workerSecret: getWorkerSecret(WORKER_SECRET_ERROR),

@@ -66,20 +66,20 @@ async function handleChatEvent(payload: IntegrationChatEventPayload) {
         : payload.externalThreadId
   const threadRef: IntegrationThreadRef = {
     externalThreadId,
-    linearAgentSessionId: payload.linearAgentSessionId,
     linearOrganizationId:
       payload.provider === "linear" ? payload.externalId : undefined,
     provider: payload.provider,
     slackTeamId: payload.provider === "slack" ? payload.externalId : undefined,
   }
 
+  // Keep this call compatible with the original Convex validator. Trigger
+  // and Convex deploy independently, so adding optional request fields here
+  // can still break every event while the older validator is live. The new
+  // Convex implementation derives session identity from externalThreadId.
   const resolved = await client.query(api.integrations.workerResolveEvent, {
     authorEmail: payload.authorEmail,
     externalId: payload.externalId,
     externalThreadId,
-    linearAgentSessionId: payload.linearAgentSessionId,
-    linearOrganizationId:
-      payload.provider === "linear" ? payload.externalId : undefined,
     provider: payload.provider,
     workerSecret,
   })
@@ -107,16 +107,13 @@ async function handleChatEvent(payload: IntegrationChatEventPayload) {
     if (!bridge && !isSlackDm) {
       return { handled: false, reason: "no_bridge" as const }
     }
-    if (bridge?.activeRun) {
+    if (bridge?.activeRun && !bridge.requiresCanonicalization) {
       const queued = await client.mutation(
         api.integrations.workerQueuePendingMessage,
         {
           authorName: payload.authorName,
           content: payload.text,
           externalThreadId,
-          linearAgentSessionId: payload.linearAgentSessionId,
-          linearOrganizationId:
-            payload.provider === "linear" ? payload.externalId : undefined,
           provider: payload.provider,
           workerSecret,
         }
@@ -170,9 +167,6 @@ async function handleChatEvent(payload: IntegrationChatEventPayload) {
           authorName: payload.authorName,
           content: payload.text,
           externalThreadId,
-          linearAgentSessionId: payload.linearAgentSessionId,
-          linearOrganizationId:
-            payload.provider === "linear" ? payload.externalId : undefined,
           provider: payload.provider,
           workerSecret,
         }
