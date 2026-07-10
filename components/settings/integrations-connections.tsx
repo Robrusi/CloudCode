@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react"
 import { MenuSelect } from "@/components/automations/menu-select"
 import {
   fieldHint,
+  fieldLabel,
   statusBadge,
   statusIdle,
   statusOk,
@@ -68,23 +69,6 @@ function draftOf(installation: Installation): InstallationDraft {
   }
 }
 
-function SettingsField({
-  children,
-  label,
-}: {
-  children: React.ReactNode
-  label: string
-}) {
-  return (
-    <label className="block min-w-0">
-      <span className="mb-1 block text-[11px] font-medium text-muted-foreground">
-        {label}
-      </span>
-      {children}
-    </label>
-  )
-}
-
 /** Per-workspace session defaults: which repo, environment, and model a
  * session started from this integration uses. Inline !repo/!preset commands
  * in the triggering message override these per session. */
@@ -106,6 +90,17 @@ function InstallationSettings({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
   const saved = draftOf(installation)
+
+  // Resync when the server-side values change (a save can come back
+  // canonicalized, e.g. the repo URL gaining ".git"); unrelated refreshes
+  // leave in-progress edits alone.
+  const savedKey = JSON.stringify(saved)
+  const [syncedKey, setSyncedKey] = useState(savedKey)
+  if (syncedKey !== savedKey) {
+    setSyncedKey(savedKey)
+    setDraft(draftOf(installation))
+  }
+
   const dirty =
     draft.defaultBaseBranch.trim() !== saved.defaultBaseBranch ||
     draft.defaultModel !== saved.defaultModel ||
@@ -148,9 +143,10 @@ function InstallationSettings({
   }
 
   return (
-    <div className="mt-3 pl-8">
-      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-        <SettingsField label="Repository">
+    <div className="mt-4 pl-8">
+      <div className="grid grid-cols-1 gap-x-3 gap-y-4 sm:grid-cols-2">
+        <div className={cn(fieldLabel, "sm:col-span-2")}>
+          Repository
           <Input
             aria-label="Default repository"
             value={draft.defaultRepoUrl}
@@ -158,9 +154,11 @@ function InstallationSettings({
             placeholder="https://github.com/owner/repo.git"
             spellCheck={false}
             autoComplete="off"
+            className="font-normal"
           />
-        </SettingsField>
-        <SettingsField label="Base branch">
+        </div>
+        <div className={fieldLabel}>
+          Base branch
           <Input
             aria-label="Default base branch"
             value={draft.defaultBaseBranch}
@@ -168,12 +166,15 @@ function InstallationSettings({
             placeholder="Repository default"
             spellCheck={false}
             autoComplete="off"
+            className="font-normal"
           />
-        </SettingsField>
-        <SettingsField label="Environment setup">
+        </div>
+        <div className={fieldLabel}>
+          Environment setup
           <MenuSelect
             ariaLabel="Default sandbox preset"
             value={draft.defaultSandboxPresetId}
+            triggerClassName="h-9 px-3 font-normal"
             options={[
               { label: "Auto environment", value: "" },
               ...presets.map((preset) => ({
@@ -183,11 +184,13 @@ function InstallationSettings({
             ]}
             onChange={(value) => set("defaultSandboxPresetId", value)}
           />
-        </SettingsField>
-        <SettingsField label="Model">
+        </div>
+        <div className={fieldLabel}>
+          Model
           <MenuSelect
             ariaLabel="Default model"
             value={draft.defaultModel}
+            triggerClassName="h-9 px-3 font-normal"
             options={MODELS.map((value) => ({
               label:
                 value === SESSION_MODEL_DEFAULT
@@ -197,11 +200,13 @@ function InstallationSettings({
             }))}
             onChange={(value) => set("defaultModel", value)}
           />
-        </SettingsField>
-        <SettingsField label="Reasoning">
+        </div>
+        <div className={fieldLabel}>
+          Reasoning effort
           <MenuSelect
             ariaLabel="Default reasoning effort"
             value={draft.defaultReasoningEffort}
+            triggerClassName="h-9 px-3 font-normal"
             options={THINKINGS.map((value) => ({
               label:
                 value === SESSION_EFFORT_DEFAULT
@@ -211,25 +216,25 @@ function InstallationSettings({
             }))}
             onChange={(value) => set("defaultReasoningEffort", value)}
           />
-        </SettingsField>
-        <div className="flex items-end justify-end">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={!dirty || saving}
-            onClick={() => void save()}
-          >
-            {saving ? "Saving" : "Save"}
-          </Button>
         </div>
       </div>
-      <p className={fieldHint}>
-        New sessions from this workspace use these defaults; !repo and !preset
-        in the triggering message override them per session.
-      </p>
+
+      <div className="mt-4 flex items-center justify-between gap-3 border-t border-border/60 pt-4">
+        <p className={cn(fieldHint, "min-w-0")}>
+          New sessions use these defaults; !repo and !preset in a message
+          override them.
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          disabled={!dirty || saving}
+          onClick={() => void save()}
+        >
+          {saving ? "Saving" : "Save"}
+        </Button>
+      </div>
       {error ? (
-        <p className="mt-1 text-[11px] leading-4 text-destructive">{error}</p>
+        <p className="mt-2 text-[11px] leading-4 text-destructive">{error}</p>
       ) : null}
     </div>
   )
@@ -275,8 +280,8 @@ function IntegrationRow({
 
   return (
     <div>
-      <div className="flex items-center gap-3">
-        {icon}
+      <div className="flex items-start gap-3">
+        <span className="mt-px shrink-0">{icon}</span>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
             <span className="text-sm font-medium text-foreground">{name}</span>
@@ -443,7 +448,7 @@ export function IntegrationsConnections() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-9">
       <IntegrationRow
         name="Slack"
         icon={<SlackIcon className="size-5 shrink-0" />}

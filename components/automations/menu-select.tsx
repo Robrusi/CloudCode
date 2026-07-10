@@ -20,11 +20,15 @@ export function MenuSelect({
   ariaLabel,
   onChange,
   options,
+  triggerClassName,
   value,
 }: {
   ariaLabel: string
   onChange: (value: string) => void
   options: MenuSelectOption[]
+  // Height/typography overrides so the trigger can match its siblings
+  // (h-8 chips in the composer, h-9 fields in settings forms).
+  triggerClassName?: string
   value: string
 }) {
   const [open, setOpen] = useState(false)
@@ -44,7 +48,11 @@ export function MenuSelect({
         aria-expanded={open}
         aria-label={ariaLabel}
         onClick={() => setOpen(!open)}
-        className={cn(fieldBase, "flex items-center gap-2 px-2.5 text-left")}
+        className={cn(
+          fieldBase,
+          "flex items-center gap-2 px-2.5 text-left",
+          triggerClassName
+        )}
       >
         <span className="min-w-0 flex-1 truncate">
           {current?.label ?? value}
