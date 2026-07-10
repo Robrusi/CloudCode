@@ -649,6 +649,7 @@ export const workerGetRunNotification = query({
       provider: bridge.provider,
       prTitle: run.prTitle,
       prUrl: run.prUrl,
+      repoUrl: run.repoUrl,
       slackTeamId:
         bridge.provider === "slack" ? installation?.externalId : undefined,
       status: run.status,

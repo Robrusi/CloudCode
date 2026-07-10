@@ -12,18 +12,40 @@ export type IntegrationThreadRef = {
   slackTeamId?: string
 }
 
+/** Runs a Slack API call with the right bot token in scope: the stored
+ * workspace installation in OAuth mode, or the env token in token mode. Also
+ * initializes the Chat instance — webhook handling does that automatically,
+ * but the Trigger workers post outside webhook context and would otherwise
+ * hit "Adapter not initialized". */
+async function withSlackToken<T>(
+  ref: IntegrationThreadRef,
+  fn: () => Promise<T>
+): Promise<T> {
+  const { bot, slack } = getIntegrationsBot()
+  await bot.initialize()
+  if (!slack) throw new Error("The Slack integration is not configured.")
+
+  if (slackIntegrationEnv()?.mode === "oauth") {
+    if (!ref.slackTeamId) {
+      throw new Error("The Slack thread is missing its workspace.")
+    }
+    const installation = await slack.getInstallation(ref.slackTeamId)
+    if (!installation) {
+      throw new Error("The Slack workspace installation was not found.")
+    }
+    return await slack.withBotToken(installation.botToken, fn)
+  }
+
+  return await fn()
+}
+
 /** Posts markdown to an external Slack thread or Linear agent session from
- * outside webhook context (Trigger.dev workers). Both providers need their
- * stored per-workspace installation resolved into scope first when running
- * in OAuth mode; Slack token mode posts with the env token directly. */
+ * outside webhook context (Trigger.dev workers). */
 export async function postToIntegrationThread(
   ref: IntegrationThreadRef,
   markdown: string
 ) {
-  const { bot, linear, slack } = getIntegrationsBot()
-  // Webhook handling initializes the Chat instance automatically, but the
-  // Trigger workers post outside webhook context — without this, adapter
-  // installation lookups throw "Adapter not initialized". Idempotent.
+  const { bot, linear } = getIntegrationsBot()
   await bot.initialize()
   const post = () => bot.thread(ref.externalThreadId).post({ markdown })
 
@@ -36,20 +58,7 @@ export async function postToIntegrationThread(
     return
   }
 
-  if (slackIntegrationEnv()?.mode === "oauth") {
-    if (!slack) throw new Error("The Slack integration is not configured.")
-    if (!ref.slackTeamId) {
-      throw new Error("The Slack thread is missing its workspace.")
-    }
-    const installation = await slack.getInstallation(ref.slackTeamId)
-    if (!installation) {
-      throw new Error("The Slack workspace installation was not found.")
-    }
-    await slack.withBotToken(installation.botToken, post)
-    return
-  }
-
-  await post()
+  await withSlackToken(ref, post)
 }
 
 /** Persists an outbound delivery failure on the thread's bridge row so it is
@@ -86,25 +95,35 @@ export function runStartedMessage(threadId: string, isFollowUp: boolean) {
 // status line and link so the agent's actual answer is what gets read.
 const SUMMARY_MAX_LENGTH = 6000
 
-/** Completion message for the external thread: status, branch, PR, and the
- * tail of the run's final answer. */
-export function runFinishedMessage(run: {
+/** "owner/name" for the details line; falls back to the raw URL host-less
+ * form when the repo is not a canonical GitHub URL. */
+function repoLabelOf(repoUrl: string | undefined) {
+  if (!repoUrl) return undefined
+  const match = repoUrl.match(
+    /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?$/i
+  )
+  return match ? `${match[1]}/${match[2]}` : repoUrl
+}
+
+type RunFinishedInfo = {
   branchName?: string
   content?: string
   error?: string
   prTitle?: string
   prUrl?: string
+  repoUrl?: string
   status: string
   summary?: string
   threadId: string
-}) {
-  const url = appThreadUrl(run.threadId)
-  const link = url ? ` — [open in CloudCode](${url})` : ""
+}
 
-  if (run.status === "canceled") return `⏹️ Run canceled${link}`
+/** Completion body: the run's final answer, then status with repo, branch,
+ * and PR — without the thread link, which each surface attaches its own way
+ * (Slack: button; Linear and fallbacks: inline markdown link). */
+function runFinishedBody(run: RunFinishedInfo) {
+  if (run.status === "canceled") return "⏹️ Run canceled"
   if (run.status !== "succeeded") {
-    const reason = run.error ? `: ${run.error}` : "."
-    return `❌ Run failed${reason}${link}`
+    return `❌ Run failed${run.error ? `: ${run.error}` : "."}`
   }
 
   const lines: string[] = []
@@ -118,12 +137,84 @@ export function runFinishedMessage(run: {
     lines.push("")
   }
   const details: string[] = []
+  const repoLabel = repoLabelOf(run.repoUrl)
+  if (repoLabel) details.push(`repo \`${repoLabel}\``)
   if (run.branchName) details.push(`branch \`${run.branchName}\``)
   if (run.prUrl) {
     details.push(`PR: [${run.prTitle ?? run.prUrl}](${run.prUrl})`)
   }
-  lines.push(
-    `✅ Done${details.length ? ` — ${details.join(", ")}` : ""}${link}`
-  )
+  lines.push(`✅ Done${details.length ? ` — ${details.join(", ")}` : ""}`)
   return lines.join("\n")
+}
+
+export function runFinishedMessage(run: RunFinishedInfo) {
+  const url = appThreadUrl(run.threadId)
+  return `${runFinishedBody(run)}${url ? ` — [open in CloudCode](${url})` : ""}`
+}
+
+// Slack's markdown block caps at 12k characters.
+const SLACK_BLOCK_TEXT_MAX = 11500
+
+/** Slack-native completion post: the body as a markdown block plus an
+ * "Open in CloudCode" button. Buttons need Block Kit, which the generic
+ * markdown post cannot carry. */
+async function postSlackRunFinished(
+  ref: IntegrationThreadRef,
+  body: string,
+  threadUrl: string
+) {
+  const { slack } = getIntegrationsBot()
+  if (!slack) throw new Error("The Slack integration is not configured.")
+
+  await withSlackToken(ref, async () => {
+    const { channel, threadTs } = slack.decodeThreadId(ref.externalThreadId)
+    const blocks = [
+      { text: body.slice(0, SLACK_BLOCK_TEXT_MAX), type: "markdown" },
+      {
+        elements: [
+          {
+            text: {
+              emoji: true,
+              text: "Open in CloudCode",
+              type: "plain_text",
+            },
+            type: "button",
+            url: threadUrl,
+          },
+        ],
+        type: "actions",
+      },
+    ]
+    await slack.webClient.chat.postMessage({
+      // The markdown block type postdates the Web API typings.
+      blocks: blocks as never,
+      channel,
+      text: body.slice(0, 2900),
+      thread_ts: threadTs,
+      unfurl_links: false,
+    })
+  })
+}
+
+/** Posts the completion message: Slack gets Block Kit with a thread button,
+ * Linear (and any Slack Block Kit failure) gets markdown with an inline
+ * link. Throws only when every attempt failed. */
+export async function postRunFinished(
+  ref: IntegrationThreadRef,
+  run: RunFinishedInfo
+) {
+  const url = appThreadUrl(run.threadId)
+  if (ref.provider === "slack" && url) {
+    try {
+      await postSlackRunFinished(ref, runFinishedBody(run), url)
+      return
+    } catch (error) {
+      console.warn(
+        "Slack Block Kit completion post failed; falling back to markdown.",
+        error
+      )
+    }
+  }
+
+  await postToIntegrationThread(ref, runFinishedMessage(run))
 }

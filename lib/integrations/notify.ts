@@ -7,9 +7,9 @@ import { getWorkerSecret } from "@/lib/codex/run-worker"
 import { integrationsConfigured } from "@/lib/integrations/config"
 import { dispatchIntegrationRun } from "@/lib/integrations/dispatch"
 import {
+  postRunFinished,
   postToIntegrationThread,
   recordDeliveryFailure,
-  runFinishedMessage,
   type IntegrationThreadRef,
 } from "@/lib/integrations/outbound"
 
@@ -37,10 +37,7 @@ export async function notifyIntegrationRunFinished(
     const summary = info.content
       ? finalRunMessageFromContent(info.content).trim()
       : undefined
-    await postToIntegrationThread(
-      info,
-      runFinishedMessage({ ...info, summary })
-    )
+    await postRunFinished(info, { ...info, summary })
 
     if (info.pendingCount > 0 && info.status === "succeeded") {
       const drained = await client.mutation(
