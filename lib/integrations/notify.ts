@@ -8,7 +8,9 @@ import { integrationsConfigured } from "@/lib/integrations/config"
 import { dispatchIntegrationRun } from "@/lib/integrations/dispatch"
 import {
   postToIntegrationThread,
+  recordDeliveryFailure,
   runFinishedMessage,
+  type IntegrationThreadRef,
 } from "@/lib/integrations/outbound"
 
 /** Terminal-run seam for the cloudcode-run task: when the finished run's
@@ -22,6 +24,7 @@ export async function notifyIntegrationRunFinished(
 ) {
   if (!integrationsConfigured()) return
 
+  let threadRef: IntegrationThreadRef | null = null
   try {
     const workerSecret = getWorkerSecret()
     const info = await client.query(api.integrations.workerGetRunNotification, {
@@ -29,6 +32,7 @@ export async function notifyIntegrationRunFinished(
       workerSecret,
     })
     if (!info) return
+    threadRef = info
 
     const summary = info.content
       ? finalRunMessageFromContent(info.content).trim()
@@ -53,5 +57,6 @@ export async function notifyIntegrationRunFinished(
     }
   } catch (error) {
     console.warn("Unable to deliver the integration notification.", error)
+    if (threadRef) await recordDeliveryFailure(client, threadRef, error)
   }
 }

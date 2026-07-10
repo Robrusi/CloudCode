@@ -14,6 +14,7 @@ import {
 } from "@/lib/integrations/events"
 import {
   postToIntegrationThread,
+  recordDeliveryFailure,
   runStartedMessage,
   type IntegrationThreadRef,
 } from "@/lib/integrations/outbound"
@@ -29,8 +30,9 @@ function errorMessage(error: unknown) {
 }
 
 async function replyBestEffort(ref: IntegrationThreadRef, markdown: string) {
-  await postToIntegrationThread(ref, markdown).catch((error) => {
+  await postToIntegrationThread(ref, markdown).catch(async (error) => {
     console.warn("Unable to reply to the integration thread.", error)
+    await recordDeliveryFailure(workerConvexClient(), ref, error)
   })
 }
 

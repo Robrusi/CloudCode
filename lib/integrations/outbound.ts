@@ -1,3 +1,7 @@
+import type { ConvexHttpClient } from "convex/browser"
+
+import { api } from "@/convex/_generated/api"
+import { getWorkerSecret } from "@/lib/codex/run-worker"
 import { getIntegrationsBot } from "@/lib/integrations/bot"
 import { appThreadUrl, slackIntegrationEnv } from "@/lib/integrations/config"
 
@@ -42,6 +46,29 @@ export async function postToIntegrationThread(
   }
 
   await post()
+}
+
+/** Persists an outbound delivery failure on the thread's bridge row so it is
+ * visible outside the worker logs. Best-effort itself — never throws. */
+export async function recordDeliveryFailure(
+  client: ConvexHttpClient,
+  ref: IntegrationThreadRef,
+  error: unknown
+) {
+  const message =
+    error instanceof Error
+      ? [error.message, ...(error.stack?.split("\n").slice(1, 4) ?? [])].join(
+          "\n"
+        )
+      : String(error)
+  await client
+    .mutation(api.integrations.workerRecordDeliveryFailure, {
+      error: message,
+      externalThreadId: ref.externalThreadId,
+      provider: ref.provider,
+      workerSecret: getWorkerSecret(),
+    })
+    .catch(() => undefined)
 }
 
 /** One-line session-started note with the CloudCode deep link. */

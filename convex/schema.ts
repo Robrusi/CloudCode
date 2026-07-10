@@ -410,6 +410,11 @@ export default defineSchema({
   // messages, run updates, and completion notifications route through it.
   integrationThreads: defineTable({
     createdAt: v.number(),
+    // Last failed outbound post to the external thread. Outbound delivery is
+    // best-effort by design (a Slack outage must never fail a run), so the
+    // failure is recorded here where the UI and operators can see it.
+    deliveryError: v.optional(v.string()),
+    deliveryErrorAt: v.optional(v.number()),
     externalThreadId: v.string(),
     installationId: v.id("integrationInstallations"),
     lastRunId: v.optional(v.id("codexRuns")),

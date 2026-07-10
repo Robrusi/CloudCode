@@ -563,6 +563,32 @@ export const workerQueuePendingMessage = mutation({
   },
 })
 
+export const workerRecordDeliveryFailure = mutation({
+  args: {
+    error: v.string(),
+    externalThreadId: v.string(),
+    provider: integrationProvider,
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    const bridge = await bridgeForExternalThread(
+      ctx,
+      args.provider,
+      args.externalThreadId
+    )
+    if (!bridge) return { recorded: false }
+
+    await ctx.db.patch(bridge._id, {
+      deliveryError: args.error.slice(0, 2000),
+      deliveryErrorAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+    return { recorded: true }
+  },
+})
+
 export const workerSetMuted = mutation({
   args: {
     externalThreadId: v.string(),
