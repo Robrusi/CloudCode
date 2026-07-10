@@ -21,6 +21,10 @@ export async function postToIntegrationThread(
   markdown: string
 ) {
   const { bot, linear, slack } = getIntegrationsBot()
+  // Webhook handling initializes the Chat instance automatically, but the
+  // Trigger workers post outside webhook context — without this, adapter
+  // installation lookups throw "Adapter not initialized". Idempotent.
+  await bot.initialize()
   const post = () => bot.thread(ref.externalThreadId).post({ markdown })
 
   if (ref.provider === "linear") {
