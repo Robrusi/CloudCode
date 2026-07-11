@@ -7,9 +7,12 @@ const isProtectedRoute = createRouteMatcher([
   "/api/github(.*)",
   "/api/sandbox(.*)",
 ])
+const isGitHubWebhookRoute = createRouteMatcher(["/api/github/webhook"])
 
 export default clerkMiddleware(async (auth, request) => {
-  if (isProtectedRoute(request)) {
+  // GitHub cannot present a Clerk session. The webhook route authenticates
+  // deliveries with GitHub's HMAC signature over the raw request body.
+  if (isProtectedRoute(request) && !isGitHubWebhookRoute(request)) {
     await auth.protect()
   }
 })
