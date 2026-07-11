@@ -43,7 +43,6 @@ export async function GET(request: Request) {
         githubToken: githubAuth.token,
         githubUserEmail: githubAuth.gitUserEmail,
         githubUserName: githubAuth.gitUserName,
-        githubUsername: githubAuth.username,
         installGlobal: true,
         paths,
         repoUrl: sandboxAccess.repoUrl,

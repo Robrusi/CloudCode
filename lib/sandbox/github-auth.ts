@@ -51,15 +51,8 @@ function gitHubRemoteUrl(repoUrl: string) {
 
 function credentialPaths(paths: DaytonaSandboxPaths) {
   const dir = `${paths.runtimeHome}/.cloudcode-github`
-  const ghConfigDir = `${dir}/gh`
   return {
     dir,
-    ghConfigDir,
-    ghHostsPath: `${ghConfigDir}/hosts.yml`,
-    homeGhConfigDir: `${paths.home}/.config/gh`,
-    homeGhHostsPath: `${paths.home}/.config/gh/hosts.yml`,
-    runtimeGhConfigDir: `${paths.runtimeHome}/.config/gh`,
-    runtimeGhHostsPath: `${paths.runtimeHome}/.config/gh/hosts.yml`,
     helperPath: `${dir}/git-credential-cloudcode-github`,
     tokenPath: `${dir}/token`,
   }
@@ -125,11 +118,6 @@ function gitGlobalSetupCommands({
   ]
 }
 
-function cleanGitHubUsername(username?: string | null) {
-  const value = username?.trim()
-  return value && /^[A-Za-z0-9-]{1,39}$/.test(value) ? value : "x-access-token"
-}
-
 function credentialHelperCommand(tokenPath: string) {
   return [
     "!f() {",
@@ -170,20 +158,20 @@ function credentialHelperScript(tokenPath: string) {
   ].join("\n")
 }
 
-function ghHostsFile({
-  token,
-  username,
-}: {
-  token: string
-  username?: string | null
-}) {
+export function sandboxGitHubCliCleanupScript(
+  paths: Pick<DaytonaSandboxPaths, "home" | "runtimeHome">
+) {
+  const managedHostsPaths = uniquePaths([
+    `${paths.home}/.config/gh/hosts.yml`,
+    `${paths.runtimeHome}/.config/gh/hosts.yml`,
+  ])
+
   return [
-    "# Managed by Cloudcode. Removing this file signs gh out in this sandbox.",
-    "github.com:",
-    "    git_protocol: https",
-    `    oauth_token: ${token}`,
-    `    user: ${cleanGitHubUsername(username)}`,
-    "",
+    `rm -rf ${shellQuote(`${paths.runtimeHome}/.cloudcode-github/gh`)}`,
+    ...managedHostsPaths.map(
+      (path) =>
+        `if [ -f ${shellQuote(path)} ] && grep -q '^# Managed by Cloudcode\\.' ${shellQuote(path)}; then rm -f ${shellQuote(path)}; fi`
+    ),
   ].join("\n")
 }
 
@@ -225,26 +213,15 @@ async function cleanupSandboxGitHubAuth({
 }) {
   const pathsForAuth = credentialPaths(paths)
   const globalGitHomes = uniquePaths([paths.home, paths.runtimeHome])
-  const globalGhHostsPaths = uniquePaths([
-    pathsForAuth.homeGhHostsPath,
-    pathsForAuth.runtimeGhHostsPath,
-  ])
 
   await runDaytonaCommand(
     sandbox,
     [
       "set -e",
       installGlobal
-        ? [
-            ...globalGitHomes.flatMap(gitGlobalCleanupCommands),
-            ...globalGhHostsPaths.map(
-              (path) =>
-                `if [ -f ${shellQuote(path)} ] && grep -q '^# Managed by Cloudcode\\.' ${shellQuote(
-                  path
-                )}; then rm -f ${shellQuote(path)}; fi`
-            ),
-          ].join("\n")
+        ? globalGitHomes.flatMap(gitGlobalCleanupCommands).join("\n")
         : "",
+      sandboxGitHubCliCleanupScript(paths),
       `rm -rf ${shellQuote(pathsForAuth.dir)}`,
     ].join("\n"),
     { env: terminalHomeEnv(paths), timeoutMs: 10_000 }
@@ -255,7 +232,6 @@ export type SandboxGitHubAuthOptions = {
   githubToken?: string
   githubUserEmail?: string
   githubUserName?: string
-  githubUsername?: string | null
   installGlobal?: boolean
   persistCredentials?: boolean
   paths: DaytonaSandboxPaths
@@ -287,7 +263,6 @@ export async function prepareSandboxGitHubAuthPlan({
   githubToken,
   githubUserEmail,
   githubUserName,
-  githubUsername,
   installGlobal,
   persistCredentials,
   paths,
@@ -307,25 +282,11 @@ export async function prepareSandboxGitHubAuthPlan({
   const cleanGitUserEmail = githubUserEmail?.trim()
   const cleanGitUserName = githubUserName?.trim()
   const helperScript = credentialHelperScript(pathsForAuth.tokenPath)
-  const hostsFile = ghHostsFile({ token, username: githubUsername })
   const globalGitHomes = installGlobal
     ? uniquePaths([paths.home, paths.runtimeHome])
     : []
-  const globalGhConfigDirs = installGlobal
-    ? uniquePaths([
-        pathsForAuth.homeGhConfigDir,
-        pathsForAuth.runtimeGhConfigDir,
-      ])
-    : []
-  const globalGhHostsPaths = installGlobal
-    ? uniquePaths([
-        pathsForAuth.homeGhHostsPath,
-        pathsForAuth.runtimeGhHostsPath,
-      ])
-    : []
   const stageId = randomBytes(6).toString("hex")
   const tokenStagePath = `/tmp/cloudcode-gh-token-${stageId}`
-  const hostsStagePath = `/tmp/cloudcode-gh-hosts-${stageId}`
   const helperCommand = credentialHelperCommand(pathsForAuth.tokenPath)
   const gitConfigEnv: Record<string, string> = {
     GIT_CONFIG_COUNT: "4",
@@ -340,29 +301,15 @@ export async function prepareSandboxGitHubAuthPlan({
   }
 
   const script = [
-    ...uniquePaths([
-      pathsForAuth.dir,
-      pathsForAuth.ghConfigDir,
-      ...globalGhConfigDirs,
-    ]).map((path) => `mkdir -p ${shellQuote(path)}`),
-    ...uniquePaths([
-      pathsForAuth.dir,
-      pathsForAuth.ghConfigDir,
-      ...globalGhConfigDirs,
-    ]).map((path) => `chmod 700 ${shellQuote(path)}`),
+    sandboxGitHubCliCleanupScript(paths),
+    `mkdir -p ${shellQuote(pathsForAuth.dir)}`,
+    `chmod 700 ${shellQuote(pathsForAuth.dir)}`,
     `cat > ${shellQuote(pathsForAuth.helperPath)} <<'EOF'`,
     helperScript,
     "EOF",
     `chmod 700 ${shellQuote(pathsForAuth.helperPath)}`,
     `mv -f ${shellQuote(tokenStagePath)} ${shellQuote(pathsForAuth.tokenPath)}`,
     `chmod 600 ${shellQuote(pathsForAuth.tokenPath)}`,
-    ...globalGhHostsPaths.map(
-      (path) => `cp ${shellQuote(hostsStagePath)} ${shellQuote(path)}`
-    ),
-    `mv -f ${shellQuote(hostsStagePath)} ${shellQuote(pathsForAuth.ghHostsPath)}`,
-    ...[pathsForAuth.ghHostsPath, ...globalGhHostsPaths].map(
-      (path) => `chmod 600 ${shellQuote(path)}`
-    ),
     ...(installGlobal
       ? globalGitHomes.flatMap((home) =>
           gitGlobalSetupCommands({
@@ -389,7 +336,6 @@ export async function prepareSandboxGitHubAuthPlan({
       },
       env: {
         ...gitConfigEnv,
-        GH_CONFIG_DIR: pathsForAuth.ghConfigDir,
         ...(cleanGitUserEmail
           ? {
               GIT_AUTHOR_EMAIL: cleanGitUserEmail,
@@ -408,10 +354,7 @@ export async function prepareSandboxGitHubAuthPlan({
     },
     commandEnv: terminalHomeEnv(paths),
     script,
-    uploads: [
-      { content: token, path: tokenStagePath },
-      { content: hostsFile, path: hostsStagePath },
-    ],
+    uploads: [{ content: token, path: tokenStagePath }],
   }
 }
 

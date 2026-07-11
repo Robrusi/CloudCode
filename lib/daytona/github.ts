@@ -9,7 +9,7 @@ import {
   type DaytonaSandboxPaths,
 } from "@/lib/daytona/sandbox"
 
-const GITHUB_TOOL_VERSION = "2"
+const GITHUB_TOOL_VERSION = "3"
 
 type GitHubConfigInput = {
   enabled: boolean
@@ -42,14 +42,13 @@ export function cloudcodeGitHubStatePath(
 }
 
 export function cloudcodeGitHubToolFingerprint(
-  paths: Pick<DaytonaSandboxPaths, "codexHome" | "home">
+  paths: Pick<DaytonaSandboxPaths, "codexHome">
 ) {
   return sha256(
     [
       GITHUB_TOOL_VERSION,
       githubMcpServerScript(),
       `${paths.codexHome}/github/cloudcode-github-mcp.mjs`,
-      `${paths.home}/.local/bin/cloudcode-github`,
       cloudcodeGitHubStatePath(paths),
     ].join("\0")
   )
@@ -323,7 +322,7 @@ async function handle(message) {
           protocolVersion: params?.protocolVersion || "2025-06-18",
           capabilities: { tools: {} },
           serverInfo: { name: "cloudcode-github", version: "1.0.0" },
-          instructions: "Use these tools to create and inspect pull requests for the current Cloudcode repository. Commit and push with git first; pull_request_create uses the Cloudcode GitHub App bot.",
+          instructions: "Use this MCP server for every GitHub operation in the current Cloudcode repository. Ordinary git commands remain available for local repository work and authenticated fetch/push. Never use the gh CLI, call the GitHub API directly, or use another GitHub integration.",
         },
       });
       return;
@@ -392,7 +391,9 @@ export function cloudcodeGitHubAgentInstructions({
     authenticated
       ? "After pushing a branch, use `cloudcode_github.pull_request_create` to open a pull request as the Cloudcode GitHub App bot."
       : "If the user asks for a pull request, explain that GitHub must be connected for this repository before `cloudcode_github.pull_request_create` can succeed.",
-    "Do not use the `gh` CLI unless the user explicitly asks for it and `command -v gh` succeeds.",
+    "Use the `cloudcode_github` MCP server for every GitHub operation other than ordinary `git` repository work and authenticated fetch/push.",
+    "Never use the `gh` CLI, call the GitHub REST or GraphQL API directly (including through `curl`, `fetch`, or scripts), or use another GitHub MCP server or integration.",
+    "If `cloudcode_github` does not support a requested GitHub operation, do not fall back to another interface; explain the limitation to the user.",
   ].join("\n")
 }
 
@@ -408,7 +409,9 @@ export function cloudcodeGitHubAgentContext({
     authenticated
       ? "Use git for commit and push, then use `cloudcode_github.pull_request_create` to create pull requests as the Cloudcode GitHub App bot."
       : "If the user asks for a pull request, explain that GitHub must be connected for this repository before `cloudcode_github.pull_request_create` can succeed.",
-    "Do not assume the `gh` CLI is installed.",
+    "Use the `cloudcode_github` MCP server for every GitHub operation other than ordinary git repository work and authenticated fetch/push.",
+    "Never use the `gh` CLI, call the GitHub REST or GraphQL API directly, or use another GitHub MCP server or integration.",
+    "If the Cloudcode MCP does not support an operation, do not fall back to another GitHub interface.",
   ].join("\n")
 }
 
@@ -473,11 +476,11 @@ export async function installCloudcodeGitHubTools(
     [
       "set -e",
       `fingerprint=${shellQuote(fingerprint)}`,
-      `if [ -x ${shellQuote(scriptPath)} ] && [ -L ${shellQuote(binPath)} ] && grep -qxF -- "$fingerprint" ${shellQuote(markerPath)} 2>/dev/null; then exit 0; fi`,
-      `mkdir -p ${shellQuote(`${paths.codexHome}/github`)} ${shellQuote(`${paths.home}/.local/bin`)}`,
+      `if [ -x ${shellQuote(scriptPath)} ] && grep -qxF -- "$fingerprint" ${shellQuote(markerPath)} 2>/dev/null; then exit 0; fi`,
+      `mkdir -p ${shellQuote(`${paths.codexHome}/github`)}`,
       base64FileCommand(scriptPath, script),
-      `ln -sf ${shellQuote(scriptPath)} ${shellQuote(binPath)}`,
-      `chmod +x ${shellQuote(scriptPath)} ${shellQuote(binPath)}`,
+      `chmod +x ${shellQuote(scriptPath)}`,
+      `if [ -L ${shellQuote(binPath)} ] && [ "$(readlink ${shellQuote(binPath)})" = ${shellQuote(scriptPath)} ]; then rm -f ${shellQuote(binPath)}; fi`,
       `printf '%s\\n' "$fingerprint" > ${shellQuote(markerPath)}`,
     ].join("\n"),
     { signal, timeoutMs: 10_000 }

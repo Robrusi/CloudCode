@@ -212,7 +212,6 @@ export async function refreshDaytonaTerminalGitHubAuth({
   githubTokenExpiresAt,
   githubUserEmail,
   githubUserName,
-  githubUsername,
   paths: providedPaths,
   repoUrl,
   sandbox: providedSandbox,
@@ -223,7 +222,6 @@ export async function refreshDaytonaTerminalGitHubAuth({
   githubTokenExpiresAt?: string
   githubUserEmail?: string
   githubUserName?: string
-  githubUsername?: string | null
   paths?: DaytonaTerminalPaths
   repoUrl?: string
   sandbox?: RunningDaytonaSandbox
@@ -254,7 +252,6 @@ export async function refreshDaytonaTerminalGitHubAuth({
     githubToken,
     githubUserEmail,
     githubUserName,
-    githubUsername,
     installGlobal: true,
     persistCredentials: true,
     paths,
@@ -283,7 +280,6 @@ export async function connectDaytonaTerminal({
   githubTokenExpiresAt,
   githubUserEmail,
   githubUserName,
-  githubUsername,
   onData,
   repoUrl,
   rows,
@@ -295,7 +291,6 @@ export async function connectDaytonaTerminal({
   githubTokenExpiresAt?: string
   githubUserEmail?: string
   githubUserName?: string
-  githubUsername?: string | null
   onData: (data: Uint8Array) => void | Promise<void>
   repoUrl?: string
   rows?: number
@@ -345,7 +340,6 @@ export async function connectDaytonaTerminal({
       githubTokenExpiresAt,
       githubUserEmail,
       githubUserName,
-      githubUsername,
       paths: context?.paths,
       repoUrl,
       sandbox: context?.sandbox,

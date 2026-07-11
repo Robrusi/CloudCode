@@ -64,7 +64,6 @@ export async function GET(request: Request) {
             githubTokenExpiresAt: credential?.expiresAt,
             githubUserEmail: credential?.gitUserEmail,
             githubUserName: credential?.gitUserName,
-            githubUsername: credential?.username,
             repoUrl: access.sandboxAccess.repoUrl,
             sandboxId,
             terminalId,

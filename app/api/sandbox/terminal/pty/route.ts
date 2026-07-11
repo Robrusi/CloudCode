@@ -67,7 +67,6 @@ async function refreshTerminalGitHubAuthFromCredential({
     githubTokenExpiresAt: githubAuth?.expiresAt,
     githubUserEmail: githubAuth?.gitUserEmail,
     githubUserName: githubAuth?.gitUserName,
-    githubUsername: githubAuth?.username,
     repoUrl,
     sandboxId,
     terminalId,
@@ -121,7 +120,6 @@ export async function GET(request: Request) {
           githubTokenExpiresAt: githubAuth?.expiresAt,
           githubUserEmail: githubAuth?.gitUserEmail,
           githubUserName: githubAuth?.gitUserName,
-          githubUsername: githubAuth?.username,
           onData: (data) => {
             enqueue(terminalData(data))
           },

@@ -276,7 +276,6 @@ async function buildAutoEnvironmentSandbox({
       githubToken: input.githubToken,
       githubUserEmail: input.githubUserEmail,
       githubUserName: input.githubUserName,
-      githubUsername: input.githubUsername,
       paths,
       repoUrl: input.repoUrl,
       sandbox,

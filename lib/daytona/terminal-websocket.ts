@@ -241,7 +241,6 @@ export async function refreshDaytonaTerminalWebSocketGitHubAuth({
   githubTokenExpiresAt,
   githubUserEmail,
   githubUserName,
-  githubUsername,
   repoUrl,
   sandboxId,
   terminalId,
@@ -250,7 +249,6 @@ export async function refreshDaytonaTerminalWebSocketGitHubAuth({
   githubTokenExpiresAt?: string
   githubUserEmail?: string
   githubUserName?: string
-  githubUsername?: string | null
   repoUrl?: string
   sandboxId: string
   terminalId: string
@@ -263,7 +261,6 @@ export async function refreshDaytonaTerminalWebSocketGitHubAuth({
     githubTokenExpiresAt,
     githubUserEmail,
     githubUserName,
-    githubUsername,
     paths,
     repoUrl,
     sandbox,

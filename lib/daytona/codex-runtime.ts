@@ -154,6 +154,35 @@ export function userMcpCodexConfig(servers: McpServerInput[] | undefined) {
   return buildMcpConfig(runtimeMcpServers(servers))
 }
 
+function isExternalGitHubMcpServer(server: McpServerInput) {
+  const identity = [
+    server.name,
+    server.command,
+    server.url,
+    server.bearerTokenEnvVar,
+    ...(server.args ?? []),
+    ...(server.envVars ?? []),
+    ...server.secrets.map((secret) => secret.name),
+  ]
+    .filter(Boolean)
+    .join("\n")
+
+  return (
+    /github/i.test(identity) || /(^|[^a-z0-9])gh([^a-z0-9]|$)/i.test(identity)
+  )
+}
+
+export function withoutExternalGitHubMcpServers(
+  servers: McpServerInput[] | undefined
+) {
+  if (!servers?.length) return servers
+
+  const filtered = servers.filter(
+    (server) => !isExternalGitHubMcpServer(server)
+  )
+  return filtered.length === servers.length ? servers : filtered
+}
+
 export function linkSandboxPathToolsCommand(paths: DaytonaSandboxPaths) {
   const dirs = [
     ...daytonaUserPathEntries(paths.home),

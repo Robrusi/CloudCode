@@ -54,6 +54,10 @@ import { codexAppServerStderrLogForLine } from "@/lib/codex/app-server-stderr"
 import { redactCodexAppServerAuthPayloads } from "@/lib/daytona/codex-app-server-run"
 import { replayMissingDaytonaCommandOutput } from "@/lib/daytona/sandbox-command"
 import type { RunCodexInSandboxResult } from "@/lib/daytona/codex-agent-types"
+import {
+  withoutExternalGitHubMcpServers,
+  type McpServerInput,
+} from "@/lib/daytona/codex-runtime"
 
 const testPaths = {
   baseRefPath: "/tmp/base-ref",
@@ -232,11 +236,11 @@ assert.match(
   /prepareSandboxGitHubAuthPlan\(\{[\s\S]*installGlobal: true,[\s\S]*persistCredentials: true/
 )
 assert.ok(!sandboxGithubAuthSource.includes("if (!remoteUrl) return null"))
-assert.ok(
-  sandboxGithubAuthSource.includes("GH_CONFIG_DIR: pathsForAuth.ghConfigDir")
-)
+assert.ok(!sandboxGithubAuthSource.includes("GH_CONFIG_DIR"))
+assert.ok(!sandboxGithubAuthSource.includes("function ghHostsFile"))
+assert.ok(sandboxGithubAuthSource.includes("sandboxGitHubCliCleanupScript"))
 assert.ok(sandboxGithubAuthSource.includes("function terminalHomeEnv"))
-assert.ok(sandboxGithubAuthSource.includes("runtimeGhHostsPath"))
+assert.ok(!sandboxGithubAuthSource.includes("runtimeGhHostsPath"))
 assert.ok(sandboxGithubAuthSource.includes("[paths.home, paths.runtimeHome]"))
 assert.ok(sandboxGithubAuthSource.includes("env: terminalHomeEnv(paths)"))
 assert.ok(terminalSessionsSource.includes("HOME: paths.home"))
@@ -277,9 +281,12 @@ const terminalWsPrepareIndex = terminalWsRouteSource.indexOf(
 assert.ok(terminalWsAuthIndex > 0)
 assert.ok(terminalWsPrepareIndex > terminalWsAuthIndex)
 assert.ok(daytonaDesktopSource.includes("Use ordinary `git` commands"))
-assert.ok(daytonaDesktopSource.includes("It may not be installed."))
+assert.ok(daytonaDesktopSource.includes("Never use the `gh` CLI"))
+assert.ok(daytonaDesktopSource.includes("GitHub REST or GraphQL API directly"))
 assert.ok(daytonaGitHubSource.includes("pull_request_create"))
 assert.ok(daytonaGitHubSource.includes("Cloudcode GitHub App bot"))
+assert.ok(daytonaGitHubSource.includes("Never use the `gh` CLI"))
+assert.ok(daytonaGitHubSource.includes("GitHub REST or GraphQL API directly"))
 assert.ok(daytonaGitHubSource.includes("missingGitHubTokenMessage"))
 assert.ok(daytonaGitHubSource.includes("tokenPath?: string"))
 assert.ok(daytonaCodexAgentSource.includes("installCloudcodeGitHubTools"))
@@ -542,6 +549,34 @@ assert.equal(
   }),
   ""
 )
+const linearMcpServer = {
+  name: "linear",
+  secrets: [],
+  tools: [],
+  transport: "http",
+  url: "https://mcp.linear.app/mcp",
+} satisfies McpServerInput
+const externalGitHubMcpServers = [
+  linearMcpServer,
+  {
+    args: ["run", "ghcr.io/github/github-mcp-server"],
+    command: "docker",
+    name: "source_control",
+    secrets: [],
+    tools: [],
+    transport: "stdio",
+  },
+  {
+    name: "github",
+    secrets: [],
+    tools: [],
+    transport: "http",
+    url: "https://api.githubcopilot.com/mcp/",
+  },
+] satisfies McpServerInput[]
+assert.deepEqual(withoutExternalGitHubMcpServers(externalGitHubMcpServers), [
+  linearMcpServer,
+])
 assert.deepEqual(
   codexAppServerNotificationRoute({
     method: "turn/completed",

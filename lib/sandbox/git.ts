@@ -105,7 +105,6 @@ export async function withSandboxGitHubAuth<T>(
       githubToken: credential.token,
       githubUserEmail: credential.gitUserEmail,
       githubUserName: credential.gitUserName,
-      githubUsername: credential.username,
       paths: ctx.paths,
       repoUrl: ctx.repoUrl,
       sandbox: ctx.sandbox,

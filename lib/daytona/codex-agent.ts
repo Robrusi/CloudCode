@@ -90,6 +90,7 @@ import { cloudcodeYamlAgentContext } from "@/lib/cloudcode/yaml"
 import {
   configureSandboxGitHubRemote,
   prepareSandboxGitHubAuthPlan,
+  sandboxGitHubCliCleanupScript,
   uploadSandboxGitHubAuthFiles,
   type SandboxGitHubAuth,
 } from "@/lib/sandbox/github-auth"
@@ -97,6 +98,7 @@ import { parseGitHubRepoUrl } from "@/lib/github/repo"
 import {
   presetSecretEnv,
   userMcpCodexConfig,
+  withoutExternalGitHubMcpServers,
 } from "@/lib/daytona/codex-runtime"
 import {
   runPathInstallScript,
@@ -427,6 +429,9 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
   let branchName = requestedBranchName ?? defaultBranchName()
   const githubToken = input.githubToken?.trim()
   const githubMcpEnabled = Boolean(parseGitHubRepoUrl(repoUrl))
+  const mcpServers = withoutExternalGitHubMcpServers(input.mcpServers)
+  const runtimeInput =
+    mcpServers === input.mcpServers ? input : { ...input, mcpServers }
   const speed = parseCodexSpeedOrThrow(input.speed)
   const existingCodexThreadId = parseOpaqueId(
     input.codexThreadId,
@@ -504,7 +509,6 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       githubToken,
       githubUserEmail: input.githubUserEmail,
       githubUserName: input.githubUserName,
-      githubUsername: input.githubUsername,
       installGlobal: true,
       persistCredentials: true,
       paths,
@@ -574,7 +578,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       githubConfig,
       contextConfig,
       factoryConfig,
-      userMcpCodexConfig(input.mcpServers),
+      userMcpCodexConfig(mcpServers),
     ]
       .filter(Boolean)
       .join("\n")
@@ -617,7 +621,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         builtInMcpConfig: mcpConfig,
         codexThreadIdToResume,
         gitAuth,
-        input,
+        input: runtimeInput,
         model,
         paths,
         prompt,
@@ -692,6 +696,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       sandbox,
       [
         "set -e",
+        sandboxGitHubCliCleanupScript(paths),
         gitAuthPlan?.script ?? "",
         desktopAgentRunStateScript(paths, input.runId),
         hotContinuationEnabled
