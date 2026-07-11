@@ -381,7 +381,11 @@ export const cloudcodeRun = task({
         result
       )
       await queueFactoryWakeRuns(completeResponse.factoryWakeRuns)
-      await notifyIntegrationRunFinished(client, payload.runId)
+      await notifyIntegrationRunFinished(
+        client,
+        payload.runId,
+        result.lastMessage
+      )
       streamPublisher?.publishDone(
         result.exitCode === 0 ? "succeeded" : "failed"
       )

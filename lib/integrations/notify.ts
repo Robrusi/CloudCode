@@ -2,10 +2,10 @@ import type { ConvexHttpClient } from "convex/browser"
 
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import { finalRunMessageFromContent } from "@/lib/codex/run-log"
 import { getWorkerSecret } from "@/lib/codex/run-worker"
 import { integrationsConfigured } from "@/lib/integrations/config"
 import { dispatchIntegrationRun } from "@/lib/integrations/dispatch"
+import { finalIntegrationResponse } from "@/lib/integrations/final-response"
 import {
   postRunFinished,
   postToIntegrationThread,
@@ -20,7 +20,8 @@ import {
  * durable and outbound delivery must not affect it. */
 export async function notifyIntegrationRunFinished(
   client: ConvexHttpClient,
-  runId: Id<"codexRuns">
+  runId: Id<"codexRuns">,
+  finalResponse?: string
 ) {
   if (!integrationsConfigured()) return
 
@@ -34,9 +35,7 @@ export async function notifyIntegrationRunFinished(
     if (!info) return
     threadRef = info
 
-    const summary = info.content
-      ? finalRunMessageFromContent(info.content).trim()
-      : undefined
+    const summary = finalIntegrationResponse(info.status, finalResponse)
     await postRunFinished(info, { ...info, summary })
 
     if (info.pendingCount > 0 && info.status === "succeeded") {
