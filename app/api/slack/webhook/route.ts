@@ -7,8 +7,8 @@ import {
   slackIntegrationEnv,
 } from "@/lib/integrations/config"
 import {
-  slackTeamIdFromWebhookRequest,
-  withSlackWebhookTeam,
+  slackWebhookContextFromRequest,
+  withSlackWebhookContext,
 } from "@/lib/integrations/slack-webhook-context"
 
 export const runtime = "nodejs"
@@ -22,9 +22,9 @@ export async function POST(request: Request) {
     return jsonError("The Slack integration is not configured.", 503)
   }
 
-  const teamId = await slackTeamIdFromWebhookRequest(request)
+  const context = await slackWebhookContextFromRequest(request)
   const { bot } = getIntegrationsBot()
-  return await withSlackWebhookTeam(teamId, () =>
+  return await withSlackWebhookContext(context, () =>
     bot.webhooks.slack(request, {
       waitUntil: (task) => after(() => task),
     })

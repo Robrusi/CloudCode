@@ -18,7 +18,10 @@ import {
 } from "@/lib/integrations/keywords"
 import { linearAgentSessionThreadId } from "@/lib/integrations/linear-threads"
 import { normalizeSlackDmThreadId } from "@/lib/integrations/slack-threads"
-import { currentSlackWebhookTeamId } from "@/lib/integrations/slack-webhook-context"
+import {
+  currentSlackWebhookTeamId,
+  isSlackEventFromCurrentApp,
+} from "@/lib/integrations/slack-webhook-context"
 import { getWorkerSecret } from "@/lib/security/worker-secret"
 import type { integrationEvent } from "@/trigger/integrations"
 
@@ -176,9 +179,15 @@ export function registerIntegrationHandlers(
     message: Message,
     kind: "mention" | "follow_up"
   ) => {
-    if (message.author.isBot === true || message.author.isMe) return
     const provider = providerOfThread(thread.id)
     if (!provider) return
+    if (
+      message.author.isBot === true ||
+      message.author.isMe ||
+      (provider === "slack" && isSlackEventFromCurrentApp(message.raw))
+    ) {
+      return
+    }
 
     const parsed = parseIntegrationMessage(
       message.text,
@@ -266,6 +275,7 @@ export function registerIntegrationHandlers(
     if (message.author.isBot === true || message.author.isMe) return
     if (message.isMention || thread.isDM) return
     if (providerOfThread(thread.id) !== "slack") return
+    if (isSlackEventFromCurrentApp(message.raw)) return
 
     const raw = message.raw as SlackEvent | undefined
     const externalId = raw?.team_id ?? raw?.team
