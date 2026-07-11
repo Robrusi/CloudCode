@@ -1,6 +1,6 @@
-// Slack and Linear are intentionally absent: they are first-class chat
-// integrations (lib/integrations/*) with their own webhooks, agent sessions,
-// and automation triggers, not MCP tool servers.
+// Slack and Linear are intentionally absent: their first-class Connections
+// OAuth flow provisions both chat behavior and a managed official MCP server,
+// so listing them here would create a duplicate authorization path.
 export type McpOauthProviderId =
   | "airtable"
   | "apollo_io"

@@ -7,6 +7,12 @@ import {
   SLACK_OAUTH_STATE_COOKIE,
   slackIntegrationEnv,
 } from "@/lib/integrations/config"
+import {
+  exchangeSlackIntegrationCode,
+  revokeSlackToken,
+} from "@/lib/integrations/slack-oauth"
+import { encryptSecret } from "@/lib/security/secret-crypto"
+import { getWorkerSecret } from "@/lib/security/worker-secret"
 import { escapeHtml } from "@/lib/shared/html-escape"
 
 export const runtime = "nodejs"
@@ -40,20 +46,50 @@ export async function GET(request: NextRequest) {
     const { slack } = await getInitializedIntegrationsBot()
     if (!slack) return errorPage("The Slack integration is not configured.")
 
-    // Exchanges the code and persists the workspace installation (bot token,
-    // encrypted when SLACK_ENCRYPTION_KEY is set) in the Chat SDK state
-    // store; Convex keeps only the settings row.
-    const { installation, teamId } = await slack.handleOAuthCallback(request, {
-      redirectUri: `${url.origin}/api/slack/oauth/callback`,
-    })
+    const code = url.searchParams.get("code")
+    if (!code) return errorPage("Slack did not return an authorization code.")
+    // One exchange returns the bot token used by chat/webhooks and the user
+    // token used by Slack's official MCP server.
+    const { installation, mcpCredential, teamId } =
+      await exchangeSlackIntegrationCode({
+        clientId: env.clientId,
+        clientSecret: env.clientSecret,
+        code,
+        redirectUri: `${url.origin}/api/slack/oauth/callback`,
+      })
+    // Encrypt before any persistent writes so a missing deployment key cannot
+    // leave a half-connected Slack installation.
+    const encryptedAccessToken = encryptSecret(mcpCredential.accessToken)
+    const encryptedRefreshToken = mcpCredential.refreshToken
+      ? encryptSecret(mcpCredential.refreshToken)
+      : undefined
+    await slack.setInstallation(teamId, installation)
 
     const client = await currentUserConvexHttpClient()
-    await client.mutation(api.integrations.saveInstallation, {
+    const saved = await client.mutation(api.integrations.saveInstallation, {
       botUserId: installation.botUserId,
       externalId: teamId,
       externalName: installation.teamName,
       provider: "slack",
     })
+    await client
+      .mutation(api.integrations.saveMcpCredential, {
+        encryptedAccessToken,
+        encryptedRefreshToken,
+        expiresAt: mcpCredential.expiresAt,
+        externalUserId: mcpCredential.externalUserId,
+        installationId: saved.installationId,
+        provider: "slack",
+        scopes: mcpCredential.scopes,
+        workerSecret: getWorkerSecret(),
+      })
+      .catch(async (error) => {
+        // Chat remains connected if the web deployment reaches production
+        // before the additive Convex credential mutation. Reconnecting after
+        // Convex catches up completes MCP authorization.
+        console.warn("Unable to persist Slack MCP authorization.", error)
+        await revokeSlackToken(mcpCredential.accessToken).catch(() => undefined)
+      })
 
     const response = NextResponse.redirect(new URL(SETTINGS_URL, url.origin))
     response.cookies.set(SLACK_OAUTH_STATE_COOKIE, "", {

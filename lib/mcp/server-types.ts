@@ -10,6 +10,8 @@ export type McpServerRecord = {
   enabled: boolean
   envVars?: string[]
   id: Id<"mcpServers">
+  integrationInstallationId?: Id<"integrationInstallations">
+  managedIntegrationProvider?: "slack" | "linear"
   name: string
   oauthProvider?: string
   secrets: Array<{

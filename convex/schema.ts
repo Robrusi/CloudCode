@@ -385,9 +385,9 @@ export default defineSchema({
     .index("by_user_sandbox", ["userId", "sandboxId"]),
 
   // One row per connected external workspace (Slack workspace or Linear
-  // organization). Holds settings and metadata only: the Slack bot token
-  // lives in env (single-workspace mode) and Linear OAuth tokens live in the
-  // Chat SDK's encrypted state store, so no credentials are stored here.
+  // organization). Holds settings and metadata only: provider tokens live in
+  // env/the encrypted Chat SDK state, while Slack's distinct MCP user token
+  // lives encrypted in integrationMcpCredentials.
   integrationInstallations: defineTable({
     botUserId: v.optional(v.string()),
     createdAt: v.number(),
@@ -399,6 +399,9 @@ export default defineSchema({
     enabled: v.boolean(),
     externalId: v.string(),
     externalName: v.optional(v.string()),
+    // Managed official MCP server. Undefined means enabled for installations
+    // created before this field was introduced.
+    mcpEnabled: v.optional(v.boolean()),
     provider: integrationProvider,
     updatedAt: v.number(),
     // The connecting user: runs from external users without a matching
@@ -406,6 +409,26 @@ export default defineSchema({
     userId: v.id("users"),
   })
     .index("by_provider_external", ["provider", "externalId"])
+    .index("by_user_provider", ["userId", "provider"]),
+
+  // Provider credentials needed only by the managed MCP surface. Slack's
+  // user token is distinct from its bot token; Linear reuses the adapter's
+  // installation and therefore needs no row here.
+  integrationMcpCredentials: defineTable({
+    createdAt: v.number(),
+    encryptedAccessToken: v.string(),
+    encryptedRefreshToken: v.optional(v.string()),
+    expiresAt: v.optional(v.number()),
+    externalUserId: v.optional(v.string()),
+    installationId: v.id("integrationInstallations"),
+    provider: integrationProvider,
+    refreshLeaseExpiresAt: v.optional(v.number()),
+    refreshLeaseId: v.optional(v.string()),
+    scopes: v.optional(v.array(v.string())),
+    updatedAt: v.number(),
+    userId: v.id("users"),
+  })
+    .index("by_installation", ["installationId"])
     .index("by_user_provider", ["userId", "provider"]),
 
   // Bridge between an external chat thread (Slack thread / Linear agent
@@ -562,6 +585,7 @@ export default defineSchema({
     description: v.optional(v.string()),
     enabled: v.boolean(),
     envVars: v.optional(v.array(v.string())),
+    integrationInstallationId: v.optional(v.id("integrationInstallations")),
     name: v.string(),
     serverName: v.string(),
     startupTimeoutSec: v.optional(v.number()),
@@ -571,6 +595,7 @@ export default defineSchema({
     url: v.optional(v.string()),
     userId: v.id("users"),
   })
+    .index("by_integration_installation", ["integrationInstallationId"])
     .index("by_user_updated", ["userId", "updatedAt"])
     .index("by_user_server_name", ["userId", "serverName"]),
 

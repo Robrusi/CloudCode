@@ -12,6 +12,11 @@ import { findCodexAuth } from "./lib/codexRunAuth"
 import { activeRunForThread } from "./lib/codexRunLifecycle"
 import { model, thinking } from "./lib/codexRunValidators"
 import { insertFactoryRunRecords } from "./lib/factoryRuns"
+import {
+  deleteManagedIntegrationMcpServer,
+  ensureManagedIntegrationMcpServer,
+  ensureManagedIntegrationMcpServersForUser,
+} from "./lib/integrationMcp"
 import { integrationProvider } from "./lib/integrationTriggers"
 import { resolveOwnedPresetOrAutoDefault } from "./lib/sandboxPresets"
 import { threadContinuationInput } from "./lib/threadContinuation"
@@ -177,20 +182,36 @@ export const list = query({
       .withIndex("by_user_provider", (q) => q.eq("userId", user._id))
       .collect()
 
-    return installations.map((installation) => ({
-      botUserId: installation.botUserId,
-      defaultBaseBranch: installation.defaultBaseBranch,
-      defaultModel: installation.defaultModel,
-      defaultReasoningEffort: installation.defaultReasoningEffort,
-      defaultRepoUrl: installation.defaultRepoUrl,
-      defaultSandboxPresetId: installation.defaultSandboxPresetId,
-      enabled: installation.enabled,
-      externalId: installation.externalId,
-      externalName: installation.externalName,
-      id: installation._id,
-      provider: installation.provider,
-      updatedAt: installation.updatedAt,
-    }))
+    return await Promise.all(
+      installations.map(async (installation) => {
+        const credential =
+          installation.provider === "slack"
+            ? await ctx.db
+                .query("integrationMcpCredentials")
+                .withIndex("by_installation", (q) =>
+                  q.eq("installationId", installation._id)
+                )
+                .unique()
+            : null
+        return {
+          botUserId: installation.botUserId,
+          defaultBaseBranch: installation.defaultBaseBranch,
+          defaultModel: installation.defaultModel,
+          defaultReasoningEffort: installation.defaultReasoningEffort,
+          defaultRepoUrl: installation.defaultRepoUrl,
+          defaultSandboxPresetId: installation.defaultSandboxPresetId,
+          enabled: installation.enabled,
+          externalId: installation.externalId,
+          externalName: installation.externalName,
+          id: installation._id,
+          mcpEnabled: installation.mcpEnabled !== false,
+          mcpReady: installation.provider === "linear" || Boolean(credential),
+          mcpScopes: credential?.scopes,
+          provider: installation.provider,
+          updatedAt: installation.updatedAt,
+        }
+      })
+    )
   },
 })
 
@@ -225,6 +246,8 @@ export const saveInstallation = mutation({
         externalName: args.externalName ?? existing.externalName,
         updatedAt: now,
       })
+      const updated = await ctx.db.get(existing._id)
+      if (updated) await ensureManagedIntegrationMcpServer(ctx, updated)
       return { installationId: existing._id }
     }
 
@@ -234,10 +257,13 @@ export const saveInstallation = mutation({
       enabled: true,
       externalId,
       externalName: args.externalName,
+      mcpEnabled: true,
       provider: args.provider,
       updatedAt: now,
       userId,
     })
+    const installation = await ctx.db.get(installationId)
+    if (installation) await ensureManagedIntegrationMcpServer(ctx, installation)
     return { installationId }
   },
 })
@@ -253,6 +279,7 @@ export const updateSettings = mutation({
     defaultSandboxPresetId: v.optional(v.id("sandboxPresets")),
     enabled: v.optional(v.boolean()),
     installationId: v.id("integrationInstallations"),
+    mcpEnabled: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
@@ -296,8 +323,12 @@ export const updateSettings = mutation({
           ? { defaultSandboxPresetId: args.defaultSandboxPresetId }
           : {}),
       ...(args.enabled !== undefined ? { enabled: args.enabled } : {}),
+      ...(args.mcpEnabled !== undefined ? { mcpEnabled: args.mcpEnabled } : {}),
       updatedAt: Date.now(),
     })
+
+    const updated = await ctx.db.get(installation._id)
+    if (updated) await ensureManagedIntegrationMcpServer(ctx, updated)
 
     if (args.enabled === false) {
       await disableInstallationAutomations(
@@ -326,9 +357,258 @@ export const removeInstallation = mutation({
       installation,
       "The connected integration was removed. Reconnect it and edit the automation to resume."
     )
+    const credential = await ctx.db
+      .query("integrationMcpCredentials")
+      .withIndex("by_installation", (q) =>
+        q.eq("installationId", installation._id)
+      )
+      .unique()
+    if (credential) await ctx.db.delete(credential._id)
+    await deleteManagedIntegrationMcpServer(ctx, installation._id)
     // Bridges stay: their threads keep their history, they just stop
     // receiving events once the installation row is gone.
     await ctx.db.delete(installation._id)
+  },
+})
+
+export const saveMcpCredential = mutation({
+  args: {
+    encryptedAccessToken: v.string(),
+    encryptedRefreshToken: v.optional(v.string()),
+    expiresAt: v.optional(v.number()),
+    externalUserId: v.optional(v.string()),
+    installationId: v.id("integrationInstallations"),
+    provider: integrationProvider,
+    scopes: v.optional(v.array(v.string())),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const userId = await ensureCurrentUser(ctx)
+    const installation = await requireOwnedInstallation(
+      ctx,
+      args.installationId,
+      userId
+    )
+    if (installation.provider !== args.provider) {
+      throw new Error("Integration provider does not match the credential.")
+    }
+
+    const existing = await ctx.db
+      .query("integrationMcpCredentials")
+      .withIndex("by_installation", (q) =>
+        q.eq("installationId", installation._id)
+      )
+      .unique()
+    const now = Date.now()
+    const fields = {
+      encryptedAccessToken: args.encryptedAccessToken,
+      encryptedRefreshToken: args.encryptedRefreshToken,
+      expiresAt: args.expiresAt,
+      externalUserId: args.externalUserId,
+      provider: args.provider,
+      refreshLeaseExpiresAt: undefined,
+      refreshLeaseId: undefined,
+      scopes: args.scopes,
+      updatedAt: now,
+    }
+    if (existing) {
+      await ctx.db.patch(existing._id, fields)
+      return existing._id
+    }
+    return await ctx.db.insert("integrationMcpCredentials", {
+      ...fields,
+      createdAt: now,
+      installationId: installation._id,
+      userId,
+    })
+  },
+})
+
+export const getInstallationForDisconnect = query({
+  args: {
+    installationId: v.id("integrationInstallations"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const user = await getCurrentUser(ctx)
+    if (!user) return null
+    const installation = await ctx.db.get(args.installationId)
+    if (!installation || installation.userId !== user._id) return null
+    const credential = await ctx.db
+      .query("integrationMcpCredentials")
+      .withIndex("by_installation", (q) =>
+        q.eq("installationId", installation._id)
+      )
+      .unique()
+    return {
+      encryptedMcpAccessToken: credential?.encryptedAccessToken,
+      externalId: installation.externalId,
+      provider: installation.provider,
+    }
+  },
+})
+
+const INTEGRATION_MCP_REFRESH_LEASE_MS = 60_000
+
+export const workerBeginMcpCredentialRefresh = mutation({
+  args: {
+    installationId: v.id("integrationInstallations"),
+    leaseId: v.string(),
+    refreshBefore: v.number(),
+    runId: v.id("codexRuns"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const [run, installation] = await Promise.all([
+      ctx.db.get(args.runId),
+      ctx.db.get(args.installationId),
+    ])
+    if (!run || !installation || run.userId !== installation.userId) {
+      throw new Error("Integration MCP credential not found.")
+    }
+    const credential = await ctx.db
+      .query("integrationMcpCredentials")
+      .withIndex("by_installation", (q) =>
+        q.eq("installationId", installation._id)
+      )
+      .unique()
+    if (!credential) throw new Error("Integration MCP credential not found.")
+
+    const current = {
+      encryptedAccessToken: credential.encryptedAccessToken,
+      encryptedRefreshToken: credential.encryptedRefreshToken,
+      expiresAt: credential.expiresAt,
+    }
+    if (
+      credential.expiresAt === undefined ||
+      credential.expiresAt > args.refreshBefore
+    ) {
+      return { credential: current, status: "current" as const }
+    }
+
+    const now = Date.now()
+    if (
+      credential.refreshLeaseId &&
+      credential.refreshLeaseId !== args.leaseId &&
+      (credential.refreshLeaseExpiresAt ?? 0) > now
+    ) {
+      return {
+        retryAfterMs: Math.min(
+          5_000,
+          Math.max(250, (credential.refreshLeaseExpiresAt ?? now) - now)
+        ),
+        status: "wait" as const,
+      }
+    }
+
+    await ctx.db.patch(credential._id, {
+      refreshLeaseExpiresAt: now + INTEGRATION_MCP_REFRESH_LEASE_MS,
+      refreshLeaseId: args.leaseId,
+      updatedAt: now,
+    })
+    return { credential: current, status: "acquired" as const }
+  },
+})
+
+export const workerCompleteMcpCredentialRefresh = mutation({
+  args: {
+    encryptedAccessToken: v.string(),
+    encryptedRefreshToken: v.optional(v.string()),
+    expiresAt: v.optional(v.number()),
+    installationId: v.id("integrationInstallations"),
+    leaseId: v.string(),
+    runId: v.id("codexRuns"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const [run, installation] = await Promise.all([
+      ctx.db.get(args.runId),
+      ctx.db.get(args.installationId),
+    ])
+    if (!run || !installation || run.userId !== installation.userId) {
+      throw new Error("Integration MCP credential not found.")
+    }
+    const credential = await ctx.db
+      .query("integrationMcpCredentials")
+      .withIndex("by_installation", (q) =>
+        q.eq("installationId", installation._id)
+      )
+      .unique()
+    if (!credential || credential.refreshLeaseId !== args.leaseId) {
+      throw new Error("Integration MCP refresh lease was lost.")
+    }
+    await ctx.db.patch(credential._id, {
+      encryptedAccessToken: args.encryptedAccessToken,
+      encryptedRefreshToken:
+        args.encryptedRefreshToken ?? credential.encryptedRefreshToken,
+      expiresAt: args.expiresAt,
+      refreshLeaseExpiresAt: undefined,
+      refreshLeaseId: undefined,
+      updatedAt: Date.now(),
+    })
+    return { saved: true }
+  },
+})
+
+export const workerReleaseMcpCredentialRefresh = mutation({
+  args: {
+    installationId: v.id("integrationInstallations"),
+    leaseId: v.string(),
+    runId: v.id("codexRuns"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const [run, installation] = await Promise.all([
+      ctx.db.get(args.runId),
+      ctx.db.get(args.installationId),
+    ])
+    if (!run || !installation || run.userId !== installation.userId) {
+      return { released: false }
+    }
+    const credential = await ctx.db
+      .query("integrationMcpCredentials")
+      .withIndex("by_installation", (q) =>
+        q.eq("installationId", installation._id)
+      )
+      .unique()
+    if (!credential || credential.refreshLeaseId !== args.leaseId) {
+      return { released: false }
+    }
+    await ctx.db.patch(credential._id, {
+      refreshLeaseExpiresAt: undefined,
+      refreshLeaseId: undefined,
+      updatedAt: Date.now(),
+    })
+    return { released: true }
+  },
+})
+
+export const ensureManagedMcpServers = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await ensureCurrentUser(ctx)
+    await ensureManagedIntegrationMcpServersForUser(ctx, userId)
+    return { ensured: true }
+  },
+})
+
+// Deployment backfill for existing connections. Safe to rerun; the helper
+// only writes when a managed server is missing or its fixed metadata changed.
+export const backfillManagedMcpServers = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const installations = await ctx.db
+      .query("integrationInstallations")
+      .collect()
+    for (const installation of installations) {
+      await ensureManagedIntegrationMcpServer(ctx, installation)
+    }
+    return { ensured: installations.length }
   },
 })
 

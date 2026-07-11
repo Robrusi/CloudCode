@@ -32,6 +32,7 @@ import type * as lib_envNameValidation from "../lib/envNameValidation.js";
 import type * as lib_factoryAccess from "../lib/factoryAccess.js";
 import type * as lib_factoryRuns from "../lib/factoryRuns.js";
 import type * as lib_factoryWake from "../lib/factoryWake.js";
+import type * as lib_integrationMcp from "../lib/integrationMcp.js";
 import type * as lib_integrationTriggers from "../lib/integrationTriggers.js";
 import type * as lib_mcpServerRecords from "../lib/mcpServerRecords.js";
 import type * as lib_mcpServerValidation from "../lib/mcpServerValidation.js";
@@ -86,6 +87,7 @@ declare const fullApi: ApiFromModules<{
   "lib/factoryAccess": typeof lib_factoryAccess;
   "lib/factoryRuns": typeof lib_factoryRuns;
   "lib/factoryWake": typeof lib_factoryWake;
+  "lib/integrationMcp": typeof lib_integrationMcp;
   "lib/integrationTriggers": typeof lib_integrationTriggers;
   "lib/mcpServerRecords": typeof lib_mcpServerRecords;
   "lib/mcpServerValidation": typeof lib_mcpServerValidation;

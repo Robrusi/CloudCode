@@ -36,6 +36,9 @@ import type { ChatImageAttachment } from "@/lib/chat/attachments"
 import type { SandboxPresetForRun } from "@/lib/sandbox/presets"
 import { refreshMcpOauthToken } from "@/lib/mcp/oauth"
 import { mcpOauthProvider } from "@/lib/mcp/oauth-providers"
+import { getInitializedIntegrationsBot } from "@/lib/integrations/bot"
+import { slackIntegrationEnv } from "@/lib/integrations/config"
+import { refreshSlackMcpToken } from "@/lib/integrations/slack-oauth"
 import { decryptSecret, encryptSecret } from "@/lib/security/secret-crypto"
 import type {
   BillingUsageSource,
@@ -111,7 +114,19 @@ type WorkerMcpOauthRecord = {
   tokenEndpoint: string
 }
 
+type WorkerIntegrationMcpRecord = {
+  credential?: {
+    encryptedAccessToken: string
+    encryptedRefreshToken?: string
+    expiresAt?: number
+  }
+  externalId: string
+  installationId: Id<"integrationInstallations">
+  provider: "slack" | "linear"
+}
+
 type WorkerMcpServerRecord = Omit<McpServerInput, "secrets"> & {
+  integration?: WorkerIntegrationMcpRecord
   oauth?: WorkerMcpOauthRecord
   secrets: Array<{
     kind: "env" | "httpHeader" | "envHttpHeader"
@@ -187,6 +202,7 @@ function decryptPreset(
 }
 
 const MCP_OAUTH_REFRESH_WINDOW_MS = 120_000
+const INTEGRATION_MCP_REFRESH_MAX_WAIT_MS = 70_000
 
 // Resolves the OAuth-backed access token for a server, refreshing it (and
 // persisting the rotated tokens) when it expires within the refresh window.
@@ -245,6 +261,149 @@ async function resolveMcpOauthAccessToken(
   }
 }
 
+async function resolveSlackIntegrationMcpAccessToken(
+  client: ConvexHttpClient,
+  runId: Id<"codexRuns">,
+  integration: WorkerIntegrationMcpRecord
+) {
+  const credential = integration.credential
+  if (!credential) return null
+  const expiresSoon =
+    credential.expiresAt !== undefined &&
+    credential.expiresAt < Date.now() + MCP_OAUTH_REFRESH_WINDOW_MS
+  if (!expiresSoon) return decryptSecret(credential.encryptedAccessToken)
+  if (!credential.encryptedRefreshToken) {
+    console.warn(
+      "Skipping Slack MCP: the user authorization expired without a refresh token. Reconnect Slack in Settings."
+    )
+    return null
+  }
+
+  const env = slackIntegrationEnv()
+  if (!env || env.mode !== "oauth") return null
+  const leaseId = randomUUID()
+  const deadline = Date.now() + INTEGRATION_MCP_REFRESH_MAX_WAIT_MS
+
+  while (Date.now() < deadline) {
+    const lease = await client.mutation(
+      api.integrations.workerBeginMcpCredentialRefresh,
+      {
+        installationId: integration.installationId,
+        leaseId,
+        refreshBefore: Date.now() + MCP_OAUTH_REFRESH_WINDOW_MS,
+        runId,
+        workerSecret: getWorkerSecret(),
+      }
+    )
+    if (lease.status === "current") {
+      return decryptSecret(lease.credential.encryptedAccessToken)
+    }
+    if (lease.status === "wait") {
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, lease.retryAfterMs)
+      )
+      continue
+    }
+
+    try {
+      const refreshToken = lease.credential.encryptedRefreshToken
+        ? decryptSecret(lease.credential.encryptedRefreshToken)
+        : undefined
+      if (!refreshToken) {
+        await client.mutation(
+          api.integrations.workerReleaseMcpCredentialRefresh,
+          {
+            installationId: integration.installationId,
+            leaseId,
+            runId,
+            workerSecret: getWorkerSecret(),
+          }
+        )
+        return null
+      }
+      const refreshed = await refreshSlackMcpToken({
+        clientId: env.clientId,
+        clientSecret: env.clientSecret,
+        refreshToken,
+      })
+      await client.mutation(
+        api.integrations.workerCompleteMcpCredentialRefresh,
+        {
+          encryptedAccessToken: encryptSecret(refreshed.accessToken),
+          encryptedRefreshToken: refreshed.refreshToken
+            ? encryptSecret(refreshed.refreshToken)
+            : undefined,
+          expiresAt: refreshed.expiresAt,
+          installationId: integration.installationId,
+          leaseId,
+          runId,
+          workerSecret: getWorkerSecret(),
+        }
+      )
+      return refreshed.accessToken
+    } catch (error) {
+      await client
+        .mutation(api.integrations.workerReleaseMcpCredentialRefresh, {
+          installationId: integration.installationId,
+          leaseId,
+          runId,
+          workerSecret: getWorkerSecret(),
+        })
+        .catch(() => undefined)
+      console.warn(
+        "Skipping Slack MCP: refreshing the user authorization failed. Reconnect Slack in Settings.",
+        error
+      )
+      return null
+    }
+  }
+
+  console.warn("Skipping Slack MCP: timed out waiting for token refresh.")
+  return null
+}
+
+async function resolveIntegrationMcpAccessToken(
+  client: ConvexHttpClient,
+  runId: Id<"codexRuns">,
+  integration: WorkerIntegrationMcpRecord
+) {
+  if (integration.provider === "slack") {
+    return await resolveSlackIntegrationMcpAccessToken(
+      client,
+      runId,
+      integration
+    )
+  }
+
+  const { linear } = await getInitializedIntegrationsBot()
+  if (!linear) return null
+  await linear.withInstallation(integration.externalId, async () => undefined)
+  const installation = await linear.getInstallation(integration.externalId)
+  return installation?.accessToken ?? null
+}
+
+function serverWithAuthorization(
+  server: Omit<WorkerMcpServerRecord, "integration" | "oauth">,
+  secrets: McpServerInput["secrets"],
+  accessToken: string
+): McpServerInput {
+  return {
+    ...server,
+    secrets: [
+      ...secrets.filter(
+        (secret) =>
+          secret.kind !== "httpHeader" ||
+          secret.name.toLowerCase() !== "authorization"
+      ),
+      {
+        kind: "httpHeader",
+        name: "Authorization",
+        value: `Bearer ${accessToken}`,
+      },
+    ],
+  }
+}
+
 async function resolveWorkerMcpServers(
   client: ConvexHttpClient,
   runId: Id<"codexRuns">,
@@ -253,12 +412,30 @@ async function resolveWorkerMcpServers(
   if (!servers?.length) return undefined
 
   const resolved: McpServerInput[] = []
-  for (const { oauth, ...server } of servers) {
+  for (const { integration, oauth, ...server } of servers) {
     const secrets = server.secrets.map((secret) => ({
       kind: secret.kind,
       name: secret.name,
       value: decryptSecret(secret.value),
     }))
+
+    if (integration) {
+      const accessToken = await resolveIntegrationMcpAccessToken(
+        client,
+        runId,
+        integration
+      ).catch((error) => {
+        console.warn(
+          `Skipping MCP server ${server.name}: integration authorization failed.`,
+          error
+        )
+        return null
+      })
+      if (accessToken) {
+        resolved.push(serverWithAuthorization(server, secrets, accessToken))
+      }
+      continue
+    }
 
     if (!oauth) {
       resolved.push({ ...server, secrets })
@@ -273,21 +450,7 @@ async function resolveWorkerMcpServers(
     )
     if (accessToken === null) continue
 
-    resolved.push({
-      ...server,
-      secrets: [
-        ...secrets.filter(
-          (secret) =>
-            secret.kind !== "httpHeader" ||
-            secret.name.toLowerCase() !== "authorization"
-        ),
-        {
-          kind: "httpHeader",
-          name: "Authorization",
-          value: `Bearer ${accessToken}`,
-        },
-      ],
-    })
+    resolved.push(serverWithAuthorization(server, secrets, accessToken))
   }
 
   return resolved.length ? resolved : undefined

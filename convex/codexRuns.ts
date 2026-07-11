@@ -22,6 +22,7 @@ import {
 } from "./lib/codexRunRecords"
 import { findCodexAuth } from "./lib/codexRunAuth"
 import { workerInputForRun } from "./lib/codexRunWorkerInput"
+import { ensureManagedIntegrationMcpServersForUser } from "./lib/integrationMcp"
 import { factoryWakeRunsAfterFinish } from "./lib/factoryWake"
 import {
   codexAuthMissingMessage,
@@ -595,6 +596,7 @@ export const workerStartAndGetInput = mutation({
     const updatedRun = await ctx.db.get(args.runId)
     if (!updatedRun) throw new Error("Run not found.")
 
+    await ensureManagedIntegrationMcpServersForUser(ctx, updatedRun.userId)
     return await workerInputForRun(ctx, updatedRun)
   },
 })

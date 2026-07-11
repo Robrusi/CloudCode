@@ -8,6 +8,7 @@ import {
   SLACK_OAUTH_STATE_COOKIE,
   slackIntegrationEnv,
 } from "@/lib/integrations/config"
+import { SLACK_MCP_USER_SCOPES } from "@/lib/integrations/mcp"
 
 export const runtime = "nodejs"
 
@@ -39,6 +40,7 @@ export async function GET(request: Request) {
   authorizeUrl.searchParams.set("client_id", env.clientId)
   authorizeUrl.searchParams.set("redirect_uri", redirectUri)
   authorizeUrl.searchParams.set("scope", SLACK_BOT_SCOPES.join(","))
+  authorizeUrl.searchParams.set("user_scope", SLACK_MCP_USER_SCOPES.join(","))
   authorizeUrl.searchParams.set("state", state)
 
   const response = NextResponse.redirect(authorizeUrl)

@@ -34,6 +34,9 @@ type Installation = {
   enabled: boolean
   externalName?: string
   id: string
+  mcpEnabled: boolean
+  mcpReady: boolean
+  mcpScopes?: string[]
   provider: "slack" | "linear"
 }
 
@@ -249,6 +252,7 @@ function IntegrationRow({
   installation,
   name,
   onChanged,
+  supportsMcpAuthorization,
 }: {
   configured: boolean
   configureHint: string
@@ -258,6 +262,7 @@ function IntegrationRow({
   installation: Installation | undefined
   name: string
   onChanged: () => void | Promise<void>
+  supportsMcpAuthorization: boolean
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
@@ -380,6 +385,60 @@ function IntegrationRow({
         <p className={cn(fieldHint, "pl-8")}>{configureHint}</p>
       ) : null}
       {installation ? (
+        <div className="mt-3 flex items-center justify-between gap-3 pl-8">
+          <div className="min-w-0">
+            <div className="text-xs font-medium text-foreground/90">
+              Official MCP tools
+            </div>
+            <p className={fieldHint}>
+              {!installation.mcpReady
+                ? supportsMcpAuthorization
+                  ? "Reconnect once to grant MCP access in the same provider consent."
+                  : "MCP requires the OAuth integration mode."
+                : installation.mcpEnabled && installation.enabled
+                  ? "Available to new Codex runs using this connection."
+                  : "Not included in new Codex runs."}
+            </p>
+          </div>
+          {!installation.mcpReady && supportsMcpAuthorization ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => void run(async () => await connectAction())}
+            >
+              Reconnect for MCP
+            </Button>
+          ) : installation.mcpReady ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() =>
+                void run(() =>
+                  fetchJson(
+                    "/api/integrations",
+                    {
+                      body: JSON.stringify({
+                        installationId: installation.id,
+                        mcpEnabled: !installation.mcpEnabled,
+                      }),
+                      headers: { "Content-Type": "application/json" },
+                      method: "PATCH",
+                    },
+                    { fallbackError: `Unable to update ${name} MCP tools.` }
+                  )
+                )
+              }
+            >
+              {installation.mcpEnabled ? "Disable MCP" : "Enable MCP"}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      {installation ? (
         <InstallationSettings installation={installation} onSaved={onChanged} />
       ) : null}
       {error ? (
@@ -452,7 +511,7 @@ export function IntegrationsConnections() {
       <IntegrationRow
         name="Slack"
         icon={<SlackIcon className="size-5 shrink-0" />}
-        description="Mention @cloudcode in a channel to start a session; replies land in the thread."
+        description="Mention @cloudcode for sessions and use official Slack MCP tools in runs."
         configured={Boolean(status?.slackConfigured && status.stateConfigured)}
         configureHint="Set SLACK_CLIENT_ID, SLACK_CLIENT_SECRET, SLACK_SIGNING_SECRET, and INTEGRATIONS_REDIS_URL on the server, then reload."
         installation={slackInstallation}
@@ -471,11 +530,12 @@ export function IntegrationsConnections() {
           )
         }}
         onChanged={refresh}
+        supportsMcpAuthorization={status?.slackMode === "oauth"}
       />
       <IntegrationRow
         name="Linear"
         icon={<LinearIcon className="size-5 shrink-0" />}
-        description="Delegate issues or mention the agent to start sessions with activity updates."
+        description="Delegate issues, receive activity updates, and use official Linear MCP tools in runs."
         configured={Boolean(status?.linearConfigured && status.stateConfigured)}
         configureHint="Set LINEAR_CLIENT_ID, LINEAR_CLIENT_SECRET, LINEAR_WEBHOOK_SECRET, and INTEGRATIONS_REDIS_URL on the server, then reload."
         installation={linearInstallation}
@@ -483,6 +543,7 @@ export function IntegrationsConnections() {
           window.location.href = "/api/linear/oauth/start"
         }}
         onChanged={refresh}
+        supportsMcpAuthorization
       />
     </div>
   )

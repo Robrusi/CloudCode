@@ -69,7 +69,12 @@ export async function serverChildren(ctx: QueryCtx, server: McpServerDoc) {
 }
 
 export async function mcpServerListRow(ctx: QueryCtx, server: McpServerDoc) {
-  const oauthConnection = await serverOauthConnection(ctx, server)
+  const [oauthConnection, integrationInstallation] = await Promise.all([
+    serverOauthConnection(ctx, server),
+    server.integrationInstallationId
+      ? ctx.db.get(server.integrationInstallationId)
+      : null,
+  ])
 
   return {
     oauthProvider: oauthConnection?.provider,
@@ -82,6 +87,8 @@ export async function mcpServerListRow(ctx: QueryCtx, server: McpServerDoc) {
     enabled: server.enabled,
     envVars: server.envVars,
     id: server._id,
+    integrationInstallationId: server.integrationInstallationId,
+    managedIntegrationProvider: integrationInstallation?.provider,
     name: server.name,
     serverName: server.serverName,
     startupTimeoutSec: server.startupTimeoutSec,

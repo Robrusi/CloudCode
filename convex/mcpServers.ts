@@ -71,6 +71,18 @@ async function requireOwnedServer(
   return server
 }
 
+async function requireEditableServer(
+  ctx: MutationCtx,
+  serverId: Id<"mcpServers">,
+  userId: Id<"users">
+) {
+  const server = await requireOwnedServer(ctx, serverId, userId)
+  if (server.integrationInstallationId) {
+    throw new Error("Manage this MCP server from its integration connection.")
+  }
+  return server
+}
+
 async function insertSecrets(
   ctx: MutationCtx,
   serverId: Id<"mcpServers">,
@@ -193,7 +205,7 @@ export const saveCustom = mutation({
 
     let serverId = args.serverId
     if (serverId) {
-      await requireOwnedServer(ctx, serverId, userId)
+      await requireEditableServer(ctx, serverId, userId)
     } else {
       const existing = await ctx.db
         .query("mcpServers")
@@ -252,7 +264,7 @@ export const updateCustom = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
-    await requireOwnedServer(ctx, args.serverId, userId)
+    await requireEditableServer(ctx, args.serverId, userId)
     const now = Date.now()
     const { fields, serverName } = buildCustomServerFields(args, now)
 
@@ -329,7 +341,7 @@ export const setEnabled = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
-    await requireOwnedServer(ctx, args.serverId, userId)
+    await requireEditableServer(ctx, args.serverId, userId)
     await ctx.db.patch(args.serverId, {
       enabled: args.enabled,
       updatedAt: Date.now(),
@@ -409,7 +421,7 @@ export const remove = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
-    await requireOwnedServer(ctx, args.serverId, userId)
+    await requireEditableServer(ctx, args.serverId, userId)
     await deleteMcpServerCascade(ctx, args.serverId)
   },
 })

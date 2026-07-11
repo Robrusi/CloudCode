@@ -244,6 +244,14 @@ export function McpSettings({
                         OAuth
                       </span>
                     ) : null}
+                    {server.managedIntegrationProvider ? (
+                      <span
+                        className={metaPill}
+                        title="Managed by the Slack or Linear connection"
+                      >
+                        Connection
+                      </span>
+                    ) : null}
                     <span className={metaPill}>
                       {server.transport === "http" ? "HTTP" : "STDIO"}
                     </span>
@@ -259,24 +267,38 @@ export function McpSettings({
 
                   {active ? (
                     <div className="border-t border-border/60 px-3 pt-3 pb-3">
-                      <div className="mb-4 flex items-center justify-between gap-3">
-                        <div className="min-w-0">
+                      {server.managedIntegrationProvider ? (
+                        <div className="mb-4">
                           <div className="text-sm font-medium text-foreground">
-                            Available to Codex
+                            Managed by Connections
                           </div>
                           <p className={fieldHint}>
-                            When off, this server is excluded from new Codex
-                            runs.
+                            Authorization, availability, and disconnects are
+                            controlled by the {server.name} connection. Tools
+                            discovered from the official MCP server default to
+                            approval required.
                           </p>
                         </div>
-                        <Switch
-                          aria-label="Available to Codex"
-                          checked={server.enabled}
-                          onCheckedChange={(enabled) =>
-                            void toggleEnabled(server.id, enabled)
-                          }
-                        />
-                      </div>
+                      ) : (
+                        <div className="mb-4 flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-foreground">
+                              Available to Codex
+                            </div>
+                            <p className={fieldHint}>
+                              When off, this server is excluded from new Codex
+                              runs.
+                            </p>
+                          </div>
+                          <Switch
+                            aria-label="Available to Codex"
+                            checked={server.enabled}
+                            onCheckedChange={(enabled) =>
+                              void toggleEnabled(server.id, enabled)
+                            }
+                          />
+                        </div>
+                      )}
 
                       {toggleError ? (
                         <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
@@ -284,16 +306,38 @@ export function McpSettings({
                         </div>
                       ) : null}
 
-                      <McpServerForm
-                        key={server.id}
-                        server={server}
-                        onCancel={() => setSelectedId(null)}
-                        onRemove={() => deleteServer(server.id)}
-                        onSaved={async () => {
-                          setSelectedId(null)
-                          await onReload()
-                        }}
-                      />
+                      {server.managedIntegrationProvider ? (
+                        server.tools.length ? (
+                          <div className="space-y-1.5">
+                            {server.tools.map((tool) => (
+                              <div
+                                key={tool.id}
+                                className="flex items-center justify-between gap-3 rounded-lg bg-muted/50 px-3 py-2"
+                              >
+                                <span className="truncate font-[family-name:var(--font-mono)] text-xs text-foreground/80">
+                                  {tool.name}
+                                </span>
+                                <span className={metaPill}>{tool.policy}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className={fieldHint}>
+                            Tools will appear after the first successful run.
+                          </p>
+                        )
+                      ) : (
+                        <McpServerForm
+                          key={server.id}
+                          server={server}
+                          onCancel={() => setSelectedId(null)}
+                          onRemove={() => deleteServer(server.id)}
+                          onSaved={async () => {
+                            setSelectedId(null)
+                            await onReload()
+                          }}
+                        />
+                      )}
                     </div>
                   ) : null}
                 </div>

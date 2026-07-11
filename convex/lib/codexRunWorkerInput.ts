@@ -16,7 +16,14 @@ async function mcpServersForRun(
 
   const loadedServers = await Promise.all(
     enabledServers.map(async (server) => {
-      const [serverSecrets, serverTools, oauthConnection] = await Promise.all([
+      const integrationInstallationId = server.integrationInstallationId
+      const [
+        serverSecrets,
+        serverTools,
+        oauthConnection,
+        integrationInstallation,
+        integrationCredential,
+      ] = await Promise.all([
         ctx.db
           .query("mcpServerSecrets")
           .withIndex("by_server", (q) => q.eq("serverId", server._id))
@@ -29,6 +36,17 @@ async function mcpServersForRun(
           .query("mcpOauthConnections")
           .withIndex("by_server", (q) => q.eq("serverId", server._id))
           .unique(),
+        integrationInstallationId
+          ? ctx.db.get(integrationInstallationId)
+          : null,
+        integrationInstallationId
+          ? ctx.db
+              .query("integrationMcpCredentials")
+              .withIndex("by_installation", (q) =>
+                q.eq("installationId", integrationInstallationId)
+              )
+              .unique()
+          : null,
       ])
 
       // OAuth-managed servers without a token cannot authenticate; exclude
@@ -36,6 +54,19 @@ async function mcpServersForRun(
       // only attached when the stored URL still matches the authorized one so
       // a later URL edit can never leak the token to another host.
       if (oauthConnection && !oauthConnection.encryptedAccessToken) return null
+      if (
+        integrationInstallationId &&
+        (!integrationInstallation ||
+          integrationInstallation.userId !== userId ||
+          !integrationInstallation.enabled ||
+          integrationInstallation.mcpEnabled === false ||
+          (integrationInstallation.provider === "slack" &&
+            (!integrationCredential ||
+              integrationCredential.userId !== userId ||
+              integrationCredential.provider !== "slack")))
+      ) {
+        return null
+      }
       const oauth =
         oauthConnection?.encryptedAccessToken &&
         oauthConnection.serverUrl === server.url
@@ -53,6 +84,22 @@ async function mcpServersForRun(
           : undefined
 
       return {
+        integration: integrationInstallation
+          ? {
+              credential: integrationCredential
+                ? {
+                    encryptedAccessToken:
+                      integrationCredential.encryptedAccessToken,
+                    encryptedRefreshToken:
+                      integrationCredential.encryptedRefreshToken,
+                    expiresAt: integrationCredential.expiresAt,
+                  }
+                : undefined,
+              externalId: integrationInstallation.externalId,
+              installationId: integrationInstallation._id,
+              provider: integrationInstallation.provider,
+            }
+          : undefined,
         oauth,
         args: server.args,
         bearerTokenEnvVar: server.bearerTokenEnvVar,

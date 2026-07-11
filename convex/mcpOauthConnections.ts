@@ -214,9 +214,9 @@ export const disconnect = mutation({
   },
 })
 
-// One-time cleanup after Slack and Linear moved from MCP providers to the
-// dedicated chat integrations: without it, previously connected rows keep
-// injecting those MCP servers into sandbox runs. Idempotent; run with
+// One-time cleanup after Slack and Linear moved from generic MCP OAuth to
+// integration-managed MCP servers: without it, old rows create duplicate
+// servers and a second authorization path. Idempotent; run with
 //   npx convex run mcpOauthConnections:removeDiscontinuedProviders
 export const removeDiscontinuedProviders = internalMutation({
   args: {},
