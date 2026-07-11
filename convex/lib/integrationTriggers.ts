@@ -30,7 +30,11 @@ export const automationTrigger = v.union(
     kind: v.literal("slack"),
   }),
   v.object({
-    event: v.union(v.literal("labelAdded"), v.literal("statusChanged")),
+    event: v.union(
+      v.literal("issueCreated"),
+      v.literal("labelAdded"),
+      v.literal("statusChanged")
+    ),
     installationId: v.id("integrationInstallations"),
     kind: v.literal("linear"),
     labelId: v.optional(v.string()),

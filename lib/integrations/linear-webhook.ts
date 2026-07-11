@@ -149,20 +149,24 @@ export function parseCommentlessLinearDelegation(
   }
 }
 
-/** Extracts automation-relevant Issue data changes (labels added, workflow
- * state changed) from a raw Linear webhook payload. Non-Issue events and
- * unrelated updates return an empty list. */
+/** Extracts automation-relevant Issue data changes (creation, labels added,
+ * workflow state changed) from a raw Linear webhook payload. Non-Issue events
+ * and unrelated updates return an empty list. */
 export function parseLinearIssueAutomationEvents(payload: unknown): {
   events: LinearIssueAutomationEvent[]
   organizationId?: string
 } {
   const parsed = payload as LinearIssuePayload
-  if (!parsed || parsed.type !== "Issue" || parsed.action !== "update") {
+  if (
+    !parsed ||
+    parsed.type !== "Issue" ||
+    (parsed.action !== "create" && parsed.action !== "update")
+  ) {
     return { events: [] }
   }
   const data = parsed.data
   const updatedFrom = parsed.updatedFrom
-  if (!data?.id || !updatedFrom) return { events: [] }
+  if (!data?.id) return { events: [] }
 
   const labelNames = new Map(
     (data.labels ?? [])
@@ -187,6 +191,15 @@ export function parseLinearIssueAutomationEvents(payload: unknown): {
   }
 
   const events: LinearIssueAutomationEvent[] = []
+
+  if (parsed.action === "create") {
+    return {
+      events: [{ event: "issueCreated", issue }],
+      organizationId: parsed.organizationId,
+    }
+  }
+
+  if (!updatedFrom) return { events: [] }
 
   if (updatedFrom.labelIds) {
     const previous = new Set(updatedFrom.labelIds)

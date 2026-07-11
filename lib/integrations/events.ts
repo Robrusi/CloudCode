@@ -46,7 +46,7 @@ export type SlackAutomationEventPayload = {
 
 export type LinearIssueAutomationEvent = {
   addedLabels?: Array<{ id: string; name?: string }>
-  event: "labelAdded" | "statusChanged"
+  event: "issueCreated" | "labelAdded" | "statusChanged"
   issue: {
     description?: string
     id: string
@@ -60,8 +60,8 @@ export type LinearIssueAutomationEvent = {
   }
 }
 
-/** Linear Issue data-change events (labels, workflow state) parsed from the
- * raw webhook before the Chat SDK adapter sees the request. */
+/** Linear Issue data-change events (creation, labels, workflow state) parsed
+ * from the raw webhook before the Chat SDK adapter sees the request. */
 export type LinearAutomationEventPayload = {
   deliveryId?: string
   events: LinearIssueAutomationEvent[]
@@ -148,6 +148,7 @@ export function linearAutomationEventVars(
     addedLabels: (event.addedLabels ?? [])
       .map((label) => label.name ?? label.id)
       .join(", "),
+    event: event.event,
     issueDescription: event.issue.description ?? "",
     issueId: event.issue.identifier ?? event.issue.id,
     issueStatus: event.issue.stateName ?? "",

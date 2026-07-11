@@ -30,7 +30,7 @@ export type TriggerDraft =
       kind: "slack"
     }
   | {
-      event: "labelAdded" | "statusChanged"
+      event: "issueCreated" | "labelAdded" | "statusChanged"
       installationId: string
       kind: "linear"
       labelId: string
@@ -272,6 +272,9 @@ export function automationTriggerLabel(automation: AutomationRecord) {
       : `On “${trigger.keyword}”${where}`
   }
   const scope = trigger.teamName ? ` in ${trigger.teamName}` : ""
+  if (trigger.event === "issueCreated") {
+    return `On new issue${scope}`
+  }
   if (trigger.event === "labelAdded") {
     return `On label “${trigger.labelName || trigger.labelId}”${scope}`
   }

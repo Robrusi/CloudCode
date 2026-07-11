@@ -251,13 +251,15 @@ export function LinearTriggerChip({
   ]
 
   const label =
-    trigger.event === "labelAdded"
-      ? trigger.labelName
-        ? `On label “${trigger.labelName}”`
-        : "On label added"
-      : trigger.stateName
-        ? `On status → ${trigger.stateName}`
-        : "On status change"
+    trigger.event === "issueCreated"
+      ? "On new issue"
+      : trigger.event === "labelAdded"
+        ? trigger.labelName
+          ? `On label “${trigger.labelName}”`
+          : "On label added"
+        : trigger.stateName
+          ? `On status → ${trigger.stateName}`
+          : "On status change"
 
   return (
     <TriggerPopover
@@ -270,6 +272,7 @@ export function LinearTriggerChip({
         ariaLabel="Linear event"
         value={trigger.event}
         options={[
+          { label: "New issue created", value: "issueCreated" },
           { label: "Label added to an issue", value: "labelAdded" },
           { label: "Issue status changed", value: "statusChanged" },
         ]}
@@ -326,7 +329,7 @@ export function LinearTriggerChip({
             })
           }
         />
-      ) : (
+      ) : trigger.event === "statusChanged" ? (
         <MenuSelect
           ariaLabel="Status"
           value={trigger.stateId}
@@ -342,7 +345,7 @@ export function LinearTriggerChip({
             })
           }
         />
-      )}
+      ) : null}
       {loadError ? (
         <p className="px-0.5 text-xs text-destructive">{loadError}</p>
       ) : null}
