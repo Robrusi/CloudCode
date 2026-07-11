@@ -62,7 +62,16 @@ export type CodexAppServerRequestParams = {
   "turn/start": {
     approvalPolicy?: "never" | "on-failure" | "on-request" | "untrusted"
     cwd?: string
-    effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | null
+    effort?:
+      | "none"
+      | "minimal"
+      | "low"
+      | "medium"
+      | "high"
+      | "xhigh"
+      | "max"
+      | "ultra"
+      | null
     input: Array<{ text: string; text_elements: []; type: "text" }>
     model?: string
     sandboxPolicy?: { type: "dangerFullAccess" }

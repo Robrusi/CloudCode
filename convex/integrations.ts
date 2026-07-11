@@ -26,6 +26,7 @@ import {
   codexAuthMissingMessage,
   codexAuthReconnectMessage,
 } from "@/lib/codex/auth-errors"
+import { assertModelSupportsThinking } from "@/lib/chat/options"
 import { canonicalGitHubRepoUrl } from "@/lib/github/repo"
 import { linearAgentSessionThreadParts } from "@/lib/integrations/linear-threads"
 
@@ -287,6 +288,12 @@ export const updateSettings = mutation({
       ctx,
       args.installationId,
       userId
+    )
+    assertModelSupportsThinking(
+      args.defaultModel ?? installation.defaultModel ?? INTEGRATION_RUN_MODEL,
+      args.defaultReasoningEffort ??
+        installation.defaultReasoningEffort ??
+        INTEGRATION_RUN_EFFORT
     )
 
     if (args.defaultSandboxPresetId) {

@@ -33,6 +33,7 @@ import {
   codexAuthMissingMessage,
   codexAuthReconnectMessage,
 } from "@/lib/codex/auth-errors"
+import { assertModelSupportsThinking } from "@/lib/chat/options"
 
 // Guard against a stale client clock or a stale form submitting a nextRunAt
 // that is already far in the past, which would fire immediately.
@@ -148,6 +149,7 @@ function validateAutomationConfig(args: AutomationConfigArgs) {
   if (!args.name.trim()) throw new Error("name is required.")
   if (!args.prompt.trim()) throw new Error("prompt is required.")
   if (!args.repoUrl.trim()) throw new Error("repoUrl is required.")
+  assertModelSupportsThinking(args.model, args.reasoningEffort)
 }
 
 function validateNextRunAt(nextRunAt: number) {

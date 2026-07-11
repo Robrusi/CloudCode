@@ -9,6 +9,12 @@ import { currentUserConvexHttpClient } from "@/lib/convex/http"
 import { syncDiscoveredSandbox } from "@/lib/codex/run-sandbox-sync"
 import { parseChatImageAttachments } from "@/lib/chat/attachments"
 import {
+  MODELS,
+  modelSupportsThinking,
+  modelThinkingCompatibilityError,
+  parseModel,
+} from "@/lib/chat/options"
+import {
   CODEX_REASONING_EFFORT_ERROR,
   CODEX_SPEED_ERROR,
   parseCodexReasoningEffort,
@@ -67,13 +73,21 @@ export async function POST(request: Request) {
       body.assistantMessageId,
       "assistantMessageId"
     ) as Id<"messages">
-    const model = requiredString(body.model, "model")
+    const model = parseModel(body.model)
+    if (!model)
+      return jsonError(`model must be one of ${MODELS.join(", ")}.`, 400)
     const reasoningEffort = parseCodexReasoningEffort(body.reasoningEffort)
     const speed = parseCodexSpeed(body.speed)
     const imageAttachments = parseChatImageAttachments(body.imageAttachments)
 
     if (!reasoningEffort) {
       return jsonError(CODEX_REASONING_EFFORT_ERROR, 400)
+    }
+    if (!modelSupportsThinking(model, reasoningEffort)) {
+      return jsonError(
+        modelThinkingCompatibilityError(model, reasoningEffort),
+        400
+      )
     }
     if (!speed) {
       return jsonError(CODEX_SPEED_ERROR, 400)
@@ -117,7 +131,7 @@ export async function POST(request: Request) {
       githubUserName: githubCredential?.gitUserName,
       githubUsername: githubCredential?.username ?? undefined,
       imageAttachments: imageAttachments.length ? imageAttachments : undefined,
-      model: model as "gpt-5.5" | "gpt-5.4" | "gpt-5.4-mini",
+      model,
       notesAccessToken: randomUUID(),
       previousDiff: jsonRawStringField(body, "previousDiff"),
       profile: jsonRawStringField(body, "profile"),

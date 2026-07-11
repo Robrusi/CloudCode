@@ -14,9 +14,10 @@ import { requireSameOrigin } from "@/lib/http/request-security"
 import {
   MODELS,
   THINKINGS,
-  type Model,
-  type Thinking,
+  assertModelSupportsThinking,
+  parseModel,
 } from "@/lib/chat/options"
+import { parseCodexReasoningEffort } from "@/lib/codex/run-options"
 import {
   integrationsStateRedisUrl,
   linearIntegrationEnv,
@@ -77,15 +78,22 @@ export async function PATCH(request: Request) {
     if (!installationId) return jsonError("installationId is required.", 400)
 
     const rawModel = jsonStringField(body, "defaultModel")
-    if (rawModel && !(MODELS as readonly string[]).includes(rawModel)) {
+    const parsedModel = rawModel ? parseModel(rawModel) : undefined
+    if (rawModel && !parsedModel) {
       return jsonError(`model must be one of ${MODELS.join(", ")}.`, 400)
     }
     const rawEffort = jsonStringField(body, "defaultReasoningEffort")
-    if (rawEffort && !(THINKINGS as readonly string[]).includes(rawEffort)) {
+    const parsedEffort = rawEffort
+      ? parseCodexReasoningEffort(rawEffort)
+      : undefined
+    if (rawEffort && !parsedEffort) {
       return jsonError(
         `reasoningEffort must be one of ${THINKINGS.join(", ")}.`,
         400
       )
+    }
+    if (parsedModel && parsedEffort) {
+      assertModelSupportsThinking(parsedModel, parsedEffort)
     }
     // "" for the preset means "clear back to the auto default".
     const rawPreset = jsonRawStringField(body, "defaultSandboxPresetId")
@@ -94,8 +102,8 @@ export async function PATCH(request: Request) {
     await client.mutation(api.integrations.updateSettings, {
       clearDefaultSandboxPreset: rawPreset === "" ? true : undefined,
       defaultBaseBranch: jsonRawStringField(body, "defaultBaseBranch"),
-      defaultModel: rawModel as Model | undefined,
-      defaultReasoningEffort: rawEffort as Thinking | undefined,
+      defaultModel: parsedModel,
+      defaultReasoningEffort: parsedEffort,
       defaultRepoUrl: jsonRawStringField(body, "defaultRepoUrl"),
       defaultSandboxPresetId: rawPreset
         ? (rawPreset as Id<"sandboxPresets">)

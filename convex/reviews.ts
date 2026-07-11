@@ -25,6 +25,7 @@ import {
   codexAuthMissingMessage,
   codexAuthReconnectMessage,
 } from "@/lib/codex/auth-errors"
+import { assertModelSupportsThinking } from "@/lib/chat/options"
 import { canonicalGitHubRepoUrl } from "@/lib/github/repo"
 import { parseReviewAuthorFilters } from "@/lib/reviews/config"
 import { buildReviewPrompt } from "@/lib/reviews/prompt"
@@ -81,6 +82,7 @@ const reviewPullRequestArgs = v.object({
 // stored in canonical form for the webhook's repository lookup to match.
 function validateReviewConfig(args: ReviewConfigArgs) {
   if (!args.name.trim()) throw new Error("name is required.")
+  assertModelSupportsThinking(args.model, args.reasoningEffort)
   const repoUrl = canonicalGitHubRepoUrl(args.repoUrl)
   if (!repoUrl) throw new Error("repoUrl must be a GitHub repository URL.")
 

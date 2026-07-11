@@ -28,6 +28,7 @@ import {
   codexAuthMissingMessage,
   codexAuthReconnectMessage,
 } from "@/lib/codex/auth-errors"
+import { assertModelSupportsThinking } from "@/lib/chat/options"
 import {
   branchMode,
   imageAttachment,
@@ -209,6 +210,7 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const userId = await ensureCurrentUser(ctx)
     requireWorkerSecret(args.workerSecret)
+    assertModelSupportsThinking(args.model, args.reasoningEffort)
     const thread = await requireOwnedThread(ctx, args.threadId, userId)
     if (thread.hasPendingMessage) {
       const activeRun = await activeRunForThread(ctx, args.threadId)

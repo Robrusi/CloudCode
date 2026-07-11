@@ -2,6 +2,9 @@ import { v } from "convex/values"
 
 export const model = v.union(
   v.literal("gpt-5.5"),
+  v.literal("gpt-5.6-sol"),
+  v.literal("gpt-5.6-terra"),
+  v.literal("gpt-5.6-luna"),
   v.literal("gpt-5.4"),
   v.literal("gpt-5.4-mini")
 )
@@ -31,7 +34,9 @@ export const thinking = v.union(
   v.literal("low"),
   v.literal("medium"),
   v.literal("high"),
-  v.literal("xhigh")
+  v.literal("xhigh"),
+  v.literal("max"),
+  v.literal("ultra")
 )
 
 export const threadSandboxState = v.union(

@@ -40,7 +40,13 @@ import {
   validateAutomationCron,
   validateAutomationTimezone,
 } from "@/lib/automations/schedule"
-import { MODELS, type Model } from "@/lib/chat/options"
+import {
+  MODELS,
+  assertModelSupportsThinking,
+  normalizeThinkingForModel,
+  parseModel,
+  type Model,
+} from "@/lib/chat/options"
 import {
   codexAuthMissingMessage,
   codexAuthReconnectMessage,
@@ -100,17 +106,20 @@ const FACTORY_BRANCH_MODES = ["auto", "base", "custom"] as const
 
 function parseFactoryModel(value: string | undefined, fallback: Model): Model {
   if (!value) return fallback
-  if ((MODELS as readonly string[]).includes(value)) return value as Model
+  const parsed = parseModel(value)
+  if (parsed) return parsed
   throw new Error(`model must be one of ${MODELS.join(", ")}.`)
 }
 
 function parseFactoryEffort(
   value: string | undefined,
-  fallback: ReasoningEffort
+  fallback: ReasoningEffort,
+  model: Model
 ): ReasoningEffort {
-  if (!value) return fallback
+  if (!value) return normalizeThinkingForModel(model, fallback)
   const parsed = parseCodexReasoningEffort(value)
   if (!parsed) throw new Error(CODEX_REASONING_EFFORT_ERROR)
+  assertModelSupportsThinking(model, parsed)
   return parsed
 }
 
@@ -344,7 +353,8 @@ export const createAutomation = mutation({
     const model = parseFactoryModel(args.model, run.model)
     const reasoningEffort = parseFactoryEffort(
       args.reasoningEffort,
-      run.reasoningEffort
+      run.reasoningEffort,
+      model
     )
     const speed = parseFactorySpeed(args.speed, run.speed)
     const threadMode = parseFactoryChoice(
@@ -499,7 +509,8 @@ export const workerCreateDispatchedRun = internalMutation({
     const model = parseFactoryModel(args.model, parent.model)
     const reasoningEffort = parseFactoryEffort(
       args.reasoningEffort,
-      parent.reasoningEffort
+      parent.reasoningEffort,
+      model
     )
     const speed = parseFactorySpeed(args.speed, parent.speed)
     // Children keep their sandbox by default (it pauses on the user's idle
@@ -593,7 +604,8 @@ export const workerCreateFollowUpRun = internalMutation({
     const model = parseFactoryModel(args.model, latest.model)
     const reasoningEffort = parseFactoryEffort(
       args.reasoningEffort,
-      latest.reasoningEffort
+      latest.reasoningEffort,
+      model
     )
     const speed = parseFactorySpeed(args.speed, latest.speed)
 

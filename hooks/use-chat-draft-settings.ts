@@ -18,6 +18,7 @@ import {
   MODELS,
   SPEEDS,
   THINKINGS,
+  normalizeThinkingForModel,
   type BranchMode,
   type Model,
   type Speed,
@@ -70,9 +71,11 @@ export function useChatDraftSettings({
   })
   const [draftThinking, setDraftThinking] = useState<Thinking>(() => {
     const stored = readBrowserStorage(THINKING_KEY)
-    return stored && (THINKINGS as readonly string[]).includes(stored)
-      ? (stored as Thinking)
-      : "medium"
+    const thinking =
+      stored && (THINKINGS as readonly string[]).includes(stored)
+        ? (stored as Thinking)
+        : "medium"
+    return normalizeThinkingForModel(draftModel, thinking)
   })
   const [draftSandboxPresetId, setDraftSandboxPresetId] = useState<
     Id<"sandboxPresets"> | ""

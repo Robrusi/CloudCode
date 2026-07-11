@@ -11,7 +11,8 @@ import {
   SPEED_LABEL,
   SPEEDS,
   THINKING_LABEL,
-  THINKINGS,
+  normalizeThinkingForModel,
+  thinkingOptionsForModel,
   type Model,
   type Speed,
   type Thinking,
@@ -86,11 +87,15 @@ export function ComposerSubmitRow({
           formatOption={(value) => MODEL_LABEL[value]}
           open={modelOpen}
           setOpen={setModelOpen}
-          onSelect={onModelSelect}
+          onSelect={(nextModel) => {
+            onModelSelect(nextModel)
+            const nextThinking = normalizeThinkingForModel(nextModel, thinking)
+            if (nextThinking !== thinking) onThinkingSelect(nextThinking)
+          }}
         />
         <ThinkingSpeedPill
           thinking={thinking}
-          thinkingOptions={THINKINGS}
+          thinkingOptions={thinkingOptionsForModel(model)}
           formatThinking={(value) => THINKING_LABEL[value]}
           onSelectThinking={onThinkingSelect}
           speed={speed}

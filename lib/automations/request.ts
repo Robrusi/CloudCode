@@ -11,7 +11,12 @@ import {
   validateAutomationCron,
   validateAutomationTimezone,
 } from "@/lib/automations/schedule"
-import { MODELS, type Model } from "@/lib/chat/options"
+import {
+  MODELS,
+  assertModelSupportsThinking,
+  parseModel,
+  type Model,
+} from "@/lib/chat/options"
 import { parseBranchMode, type BranchMode } from "@/lib/codex/branch-names"
 import type { Id } from "@/convex/_generated/dataModel"
 import type { AutomationTrigger } from "@/convex/lib/integrationTriggers"
@@ -121,15 +126,12 @@ export function parseAutomationRequestConfig(
     typeof body.repoUrl === "string" ? body.repoUrl.trim() : undefined
   if (!repoUrl) throw new Error("repoUrl is required.")
 
-  const model =
-    typeof body.model === "string" &&
-    (MODELS as readonly string[]).includes(body.model)
-      ? (body.model as Model)
-      : undefined
+  const model = parseModel(body.model)
   if (!model) throw new Error(`model must be one of ${MODELS.join(", ")}.`)
 
   const reasoningEffort = parseCodexReasoningEffort(body.reasoningEffort)
   if (!reasoningEffort) throw new Error(CODEX_REASONING_EFFORT_ERROR)
+  assertModelSupportsThinking(model, reasoningEffort)
 
   const speed = parseCodexSpeed(body.speed)
   if (!speed) throw new Error(CODEX_SPEED_ERROR)

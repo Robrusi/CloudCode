@@ -13,7 +13,8 @@ import {
   MODEL_LABEL,
   MODELS,
   THINKING_LABEL,
-  THINKINGS,
+  normalizeThinkingForModel,
+  thinkingOptionsForModel,
   type Model,
   type Thinking,
 } from "@/lib/chat/options"
@@ -132,7 +133,13 @@ export function ModelChip({
             <button
               key={option}
               type="button"
-              onClick={() => onSelectModel(option)}
+              onClick={() => {
+                onSelectModel(option)
+                const nextThinking = normalizeThinkingForModel(option, thinking)
+                if (nextThinking !== thinking) {
+                  onSelectThinking(nextThinking)
+                }
+              }}
               className={cn(popoverItem, "pl-5")}
             >
               <span>{MODEL_LABEL[option]}</span>
@@ -145,7 +152,7 @@ export function ModelChip({
           <div className="px-2.5 pt-1 pb-1 text-left text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">
             Thinking
           </div>
-          {THINKINGS.map((option) => (
+          {thinkingOptionsForModel(model).map((option) => (
             <button
               key={option}
               type="button"

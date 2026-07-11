@@ -1,6 +1,7 @@
 import type { Doc, Id } from "../_generated/dataModel"
 import type { MutationCtx } from "../_generated/server"
 import { appendCodexRunLogs, upsertCodexRunCheckpoint } from "./codexRunRecords"
+import { assertModelSupportsThinking } from "@/lib/chat/options"
 
 export type FactoryRunCreated = {
   runId: Id<"codexRuns">
@@ -42,6 +43,7 @@ export async function insertFactoryRunRecords(
   ctx: MutationCtx,
   input: FactoryRunInsertInput
 ): Promise<FactoryRunCreated> {
+  assertModelSupportsThinking(input.model, input.reasoningEffort)
   const now = Date.now()
   const userId = input.userId
 

@@ -19,7 +19,12 @@ import {
   MODEL_LABEL,
   MODELS,
   THINKING_LABEL,
-  THINKINGS,
+  normalizeThinkingForModel,
+  parseModel,
+  parseThinking,
+  thinkingOptionsForModel,
+  type Model,
+  type Thinking,
 } from "@/lib/chat/options"
 import { fetchJson, postJson } from "@/lib/http/client-json"
 import type { SandboxPresetRecord } from "@/lib/sandbox/preset-types"
@@ -55,18 +60,25 @@ type IntegrationsStatus = {
 
 type InstallationDraft = {
   defaultBaseBranch: string
-  defaultModel: string
-  defaultReasoningEffort: string
+  defaultModel: Model
+  defaultReasoningEffort: Thinking
   defaultRepoUrl: string
   defaultSandboxPresetId: string
 }
 
 function draftOf(installation: Installation): InstallationDraft {
+  const defaultModel =
+    parseModel(installation.defaultModel) ?? SESSION_MODEL_DEFAULT
+  const defaultReasoningEffort =
+    parseThinking(installation.defaultReasoningEffort) ?? SESSION_EFFORT_DEFAULT
+
   return {
     defaultBaseBranch: installation.defaultBaseBranch ?? "",
-    defaultModel: installation.defaultModel ?? SESSION_MODEL_DEFAULT,
-    defaultReasoningEffort:
-      installation.defaultReasoningEffort ?? SESSION_EFFORT_DEFAULT,
+    defaultModel,
+    defaultReasoningEffort: normalizeThinkingForModel(
+      defaultModel,
+      defaultReasoningEffort
+    ),
     defaultRepoUrl: installation.defaultRepoUrl ?? "",
     defaultSandboxPresetId: installation.defaultSandboxPresetId ?? "",
   }
@@ -111,8 +123,10 @@ function InstallationSettings({
     draft.defaultRepoUrl.trim() !== saved.defaultRepoUrl ||
     draft.defaultSandboxPresetId !== saved.defaultSandboxPresetId
 
-  const set = <K extends keyof InstallationDraft>(key: K, value: string) =>
-    setDraft((current) => ({ ...current, [key]: value }))
+  const set = <K extends keyof InstallationDraft>(
+    key: K,
+    value: InstallationDraft[K]
+  ) => setDraft((current) => ({ ...current, [key]: value }))
 
   async function save() {
     if (!dirty || saving) return
@@ -201,7 +215,18 @@ function InstallationSettings({
                   : MODEL_LABEL[value],
               value,
             }))}
-            onChange={(value) => set("defaultModel", value)}
+            onChange={(value) => {
+              const model = parseModel(value)
+              if (!model) return
+              setDraft((current) => ({
+                ...current,
+                defaultModel: model,
+                defaultReasoningEffort: normalizeThinkingForModel(
+                  model,
+                  current.defaultReasoningEffort
+                ),
+              }))
+            }}
           />
         </div>
         <div className={fieldLabel}>
@@ -210,14 +235,19 @@ function InstallationSettings({
             ariaLabel="Default reasoning effort"
             value={draft.defaultReasoningEffort}
             triggerClassName="h-9 px-3"
-            options={THINKINGS.map((value) => ({
+            options={thinkingOptionsForModel(
+              parseModel(draft.defaultModel) ?? SESSION_MODEL_DEFAULT
+            ).map((value) => ({
               label:
                 value === SESSION_EFFORT_DEFAULT
                   ? `${THINKING_LABEL[value]} (default)`
                   : THINKING_LABEL[value],
               value,
             }))}
-            onChange={(value) => set("defaultReasoningEffort", value)}
+            onChange={(value) => {
+              const thinking = parseThinking(value)
+              if (thinking) set("defaultReasoningEffort", thinking)
+            }}
           />
         </div>
       </div>

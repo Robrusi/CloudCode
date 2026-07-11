@@ -1,4 +1,9 @@
-import { MODELS, type Model } from "@/lib/chat/options"
+import {
+  MODELS,
+  assertModelSupportsThinking,
+  parseModel,
+  type Model,
+} from "@/lib/chat/options"
 import {
   CODEX_REASONING_EFFORT_ERROR,
   CODEX_SPEED_ERROR,
@@ -50,15 +55,12 @@ export function parseReviewRequestConfig(
     throw new Error("repoUrl is required and must be a GitHub repository URL.")
   }
 
-  const model =
-    typeof body.model === "string" &&
-    (MODELS as readonly string[]).includes(body.model)
-      ? (body.model as Model)
-      : undefined
+  const model = parseModel(body.model)
   if (!model) throw new Error(`model must be one of ${MODELS.join(", ")}.`)
 
   const reasoningEffort = parseCodexReasoningEffort(body.reasoningEffort)
   if (!reasoningEffort) throw new Error(CODEX_REASONING_EFFORT_ERROR)
+  assertModelSupportsThinking(model, reasoningEffort)
 
   const speed = parseCodexSpeed(body.speed)
   if (!speed) throw new Error(CODEX_SPEED_ERROR)

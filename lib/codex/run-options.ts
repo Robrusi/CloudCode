@@ -1,15 +1,8 @@
-const CODEX_REASONING_EFFORTS = [
-  "none",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-] as const
+import { THINKINGS, parseThinking, type Thinking } from "@/lib/chat/options"
 
-export const CODEX_REASONING_EFFORT_ERROR =
-  "reasoningEffort must be none, low, medium, high, or xhigh."
+export const CODEX_REASONING_EFFORT_ERROR = `reasoningEffort must be one of ${THINKINGS.join(", ")}.`
 
-export type ReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number]
+export type ReasoningEffort = Thinking
 
 const CODEX_SPEEDS = ["standard", "fast"] as const
 
@@ -20,10 +13,7 @@ export type CodexSpeed = (typeof CODEX_SPEEDS)[number]
 export function parseCodexReasoningEffort(
   value: unknown
 ): ReasoningEffort | undefined {
-  return typeof value === "string" &&
-    (CODEX_REASONING_EFFORTS as readonly string[]).includes(value)
-    ? (value as ReasoningEffort)
-    : undefined
+  return parseThinking(value)
 }
 
 export function parseCodexReasoningEffortOrThrow(
