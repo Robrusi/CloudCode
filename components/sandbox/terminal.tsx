@@ -3,6 +3,8 @@
 import {
   CircleDot,
   Loader2,
+  Maximize2,
+  Minimize2,
   OctagonX,
   Plus,
   RefreshCw,
@@ -63,6 +65,12 @@ export function SandboxTerminalPanel({
     x: number
     y: number
   } | null>(null)
+  const [maximized, setMaximized] = useState(false)
+
+  // Reopening the dock always starts at its regular height.
+  useEffect(() => {
+    if (!open) setMaximized(false)
+  }, [open])
   const nextTerminalNumberRef = useRef<Record<string, number> | null>(null)
   if (nextTerminalNumberRef.current === null) {
     nextTerminalNumberRef.current = terminalNumbersFromDock(dock)
@@ -262,27 +270,40 @@ export function SandboxTerminalPanel({
   const statusIsError = !waitingForSandbox && activeState?.status === "error"
   const statusIsReady = !waitingForSandbox && activeState?.status === "ready"
 
+  // Full screen fills the chat area up to the bottom edge of the top bar
+  // (3.25rem, matching `TopBar`); the panel's offset parent includes it.
+  const fullscreen = open && maximized
+
   return (
     <section
       aria-hidden={!open}
-      className="absolute inset-x-0 bottom-0 z-20 flex max-h-[85dvh] min-h-0 flex-col overflow-hidden border-t border-border/60 bg-background text-foreground"
+      className={cn(
+        "absolute inset-x-0 bottom-0 z-20 flex min-h-0 flex-col overflow-hidden bg-background text-foreground",
+        // Full screen meets the top bar's own border-b, so it drops its border-t.
+        fullscreen
+          ? "top-[calc(3.25rem+env(safe-area-inset-top))]"
+          : "max-h-[85dvh] border-t border-border/60"
+      )}
       style={{
-        height: open ? height : 0,
+        height: open ? (fullscreen ? undefined : height) : 0,
         visibility: open ? "visible" : "hidden",
         pointerEvents: open ? undefined : "none",
       }}
     >
-      <button
-        type="button"
-        aria-label="Resize terminal"
-        onMouseDown={handleResizeStart}
-        className="group absolute top-0 right-0 left-0 z-30 h-2 -translate-y-1 cursor-row-resize border-0 bg-transparent p-0"
-      >
-        <span
-          aria-hidden
-          className="pointer-events-none absolute top-1 right-0 left-0 h-px bg-border/60 transition-colors group-hover:bg-primary/40"
-        />
-      </button>
+      {fullscreen ? null : (
+        <button
+          type="button"
+          aria-label="Resize terminal"
+          onMouseDown={handleResizeStart}
+          onDoubleClick={() => setMaximized(true)}
+          className="group absolute top-0 right-0 left-0 z-30 h-2 -translate-y-1 cursor-row-resize border-0 bg-transparent p-0"
+        >
+          <span
+            aria-hidden
+            className="pointer-events-none absolute top-1 right-0 left-0 h-px bg-border/60 transition-colors group-hover:bg-primary/40"
+          />
+        </button>
+      )}
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/60 px-2">
         <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
           {sessions.map((session) => (
@@ -361,6 +382,17 @@ export function SandboxTerminalPanel({
             title="Reconnect terminal"
           >
             <RefreshCw className="size-3.5" />
+          </IconButton>
+          <IconButton
+            onClick={() => setMaximized((current) => !current)}
+            aria-label={maximized ? "Exit full screen" : "Full screen"}
+            title={maximized ? "Exit full screen" : "Full screen"}
+          >
+            {maximized ? (
+              <Minimize2 className="size-3.5" />
+            ) : (
+              <Maximize2 className="size-3.5" />
+            )}
           </IconButton>
           <IconButton
             onClick={onClose}

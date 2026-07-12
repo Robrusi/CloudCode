@@ -6,9 +6,6 @@ import { Button } from "@/components/ui/button"
 import { popoverSurfaceClass } from "@/components/ui/surface"
 import { cn } from "@/lib/shared/utils"
 
-export const iconBtn =
-  "inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-
 export const inputClass =
   "h-9 w-full rounded-lg border border-field bg-background px-3 text-sm transition-colors outline-none placeholder:text-muted-foreground/60 focus:border-ring focus:ring-3 focus:ring-ring/20 disabled:pointer-events-none disabled:opacity-60"
 

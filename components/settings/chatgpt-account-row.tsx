@@ -12,7 +12,7 @@ import {
   codexAccountSubtitle,
   codexAccountTitle,
 } from "@/components/settings/chatgpt-model"
-import { iconBtn } from "@/components/settings/shared"
+import { IconButton } from "@/components/ui/icon-button"
 import type { CodexAuthAccountStatus } from "@/lib/codex/auth-types"
 import { cn } from "@/lib/shared/utils"
 
@@ -67,26 +67,23 @@ export function ChatGPTAccountRow({
         </span>
       </button>
       <div className="flex shrink-0 items-center gap-0.5">
-        <button
-          type="button"
-          className={iconBtn}
+        <IconButton
           disabled={busy || editingDisabled}
           title="Rename account"
           aria-label={`Rename ${title}`}
           onClick={onRename}
         >
           <Pencil className="size-3.5" />
-        </button>
-        <button
-          type="button"
-          className={cn(iconBtn, "hover:text-destructive")}
+        </IconButton>
+        <IconButton
           disabled={busy || editingDisabled}
+          className="hover:text-destructive"
           title="Disconnect account"
           aria-label={`Disconnect ${title}`}
           onClick={onDisconnect}
         >
           <Trash2 className="size-3.5" />
-        </button>
+        </IconButton>
       </div>
     </div>
   )

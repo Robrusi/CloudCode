@@ -2,7 +2,7 @@
 
 import { CornerDownRight, Pencil, Trash2 } from "lucide-react"
 
-import { IconButton } from "@/components/chat/controls"
+import { ComposerIconButton } from "@/components/chat/controls"
 import type { QueuedMessage } from "@/components/chat/types"
 
 export function QueuedMessages({
@@ -46,20 +46,20 @@ export function QueuedMessages({
               <CornerDownRight className="size-3.5" />
               Steer
             </button>
-            <IconButton
+            <ComposerIconButton
               onClick={() => onEdit(threadKey, queued.id)}
               aria-label="Edit queued message"
               title="Edit"
             >
               <Pencil className="size-4" />
-            </IconButton>
-            <IconButton
+            </ComposerIconButton>
+            <ComposerIconButton
               onClick={() => onRemove(threadKey, queued.id)}
               aria-label="Delete queued message"
               title="Delete"
             >
               <Trash2 className="size-4" />
-            </IconButton>
+            </ComposerIconButton>
           </div>
         )
       })}

@@ -258,6 +258,7 @@ export function AutomationComposer({
                 mode={draft.branchMode}
                 branchName={draft.branchName}
                 baseBranch={draft.baseBranch}
+                menuPlacement="down"
                 open={branchTargetOpen}
                 setOpen={setBranchTargetOpen}
                 onChangeMode={(branchMode) => set("branchMode", branchMode)}

@@ -54,9 +54,11 @@ export async function recordReviewFailure(
   const failureCount = review.failureCount + 1
   const disable =
     review.enabled && failureCount >= REVIEW_MAX_CONSECUTIVE_FAILURES
+  const now = Date.now()
 
   await ctx.db.patch(review._id, {
     failureCount,
+    lastRunAt: now,
     lastRunError: truncateError(error),
     lastRunStatus: status,
     ...(disable
@@ -65,7 +67,7 @@ export async function recordReviewFailure(
           enabled: false,
         }
       : {}),
-    updatedAt: Date.now(),
+    updatedAt: now,
   })
 }
 

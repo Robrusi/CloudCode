@@ -3,8 +3,8 @@
 import { Popover } from "@base-ui/react/popover"
 import { useEffect, useRef, useState } from "react"
 
+import { buttonVariants } from "@/components/ui/button-variants"
 import { popoverSurfaceClass } from "@/components/ui/surface"
-import { contrastForeground } from "@/lib/theme/accent"
 import { hexToHsv, hsvToHex, type Hsv } from "@/lib/theme/color"
 import { cn } from "@/lib/shared/utils"
 
@@ -93,20 +93,23 @@ export function ColorPicker({
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger
         aria-label={ariaLabel}
-        style={{ backgroundColor: value, color: contrastForeground(value) }}
         className={cn(
-          "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg pr-3 pl-2.5 text-xs font-medium tabular-nums transition-[filter] outline-none hover:brightness-105 focus-visible:ring-3 focus-visible:ring-ring/30",
+          buttonVariants({ variant: "outline", size: "sm" }),
+          "tabular-nums",
           className
         )}
       >
-        <span className="size-3.5 rounded-full border-[1.5px] border-current opacity-70" />
+        <span
+          className="size-3.5 shrink-0 rounded-full ring-1 ring-foreground/15 ring-inset"
+          style={{ backgroundColor: value }}
+        />
         {value.toUpperCase()}
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Positioner side="bottom" align="end" sideOffset={8}>
           <Popover.Popup
             className={cn(
-              "z-50 flex w-56 flex-col gap-3 p-3 shadow-lg outline-none",
+              "z-50 flex w-56 flex-col gap-3 p-3 outline-none",
               popoverSurfaceClass
             )}
           >

@@ -25,12 +25,14 @@ function dispatchPayloadForEvent(
     const parsed = parsePullRequestWebhookEvent(payload)
     if (!parsed) return null
 
-    // "opened" and "synchronize" skip drafts; drafts get their review from
-    // "ready_for_review". Which configs react to ready_for_review and
-    // synchronize is enforced in the dispatch task, which has config data.
+    // An opened PR always gets its initial review, including a draft. Otherwise
+    // an "Opened PRs" config would ignore the draft on open and then ignore its
+    // ready_for_review event too. Synchronize still waits until a draft is ready.
+    // Which configs react to ready_for_review and synchronize is enforced in
+    // the dispatch task, which has config data.
     const shouldDispatch =
-      ((parsed.action === "opened" || parsed.action === "synchronize") &&
-        !parsed.pr.draft) ||
+      parsed.action === "opened" ||
+      (parsed.action === "synchronize" && !parsed.pr.draft) ||
       parsed.action === "ready_for_review"
     if (!shouldDispatch) return null
 

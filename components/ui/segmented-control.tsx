@@ -49,7 +49,7 @@ function SegmentedControl<T extends string>({
             title={option.title}
             onClick={() => onChange(option.value)}
             className={cn(
-              "inline-flex h-6 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30",
+              "inline-flex items-center justify-center gap-1.5 self-stretch rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30",
               fill && "flex-1",
               active && "bg-background text-foreground dark:shadow-xs",
               itemClassName

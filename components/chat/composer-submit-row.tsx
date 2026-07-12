@@ -2,7 +2,11 @@
 
 import { ArrowUp, ImagePlus, Square } from "lucide-react"
 
-import { IconButton, Pill, ThinkingSpeedPill } from "@/components/chat/controls"
+import {
+  ComposerIconButton,
+  Pill,
+  ThinkingSpeedPill,
+} from "@/components/chat/controls"
 import { Button } from "@/components/ui/button"
 import { MAX_CHAT_IMAGE_ATTACHMENTS } from "@/lib/chat/attachments"
 import {
@@ -62,7 +66,7 @@ export function ComposerSubmitRow({
 }) {
   return (
     <div className="flex items-center gap-1.5 px-2.5 pt-1 pb-2.5">
-      <IconButton
+      <ComposerIconButton
         type="button"
         aria-label="Attach images"
         title="Attach images"
@@ -71,7 +75,7 @@ export function ComposerSubmitRow({
         className="grid"
       >
         <ImagePlus className="size-[18px]" />
-      </IconButton>
+      </ComposerIconButton>
 
       <div
         className={cn(

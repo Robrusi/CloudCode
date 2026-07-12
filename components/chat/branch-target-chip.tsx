@@ -5,6 +5,7 @@ import { useCallback, useRef } from "react"
 
 import {
   chipTrigger,
+  popoverHeading,
   popoverItem,
   popoverPanel,
 } from "@/components/chat/control-styles"
@@ -20,6 +21,7 @@ export function BranchTargetChip({
   baseBranch,
   branchName,
   locked,
+  menuPlacement = "up",
   mode,
   onChangeBranchName,
   onChangeMode,
@@ -29,6 +31,7 @@ export function BranchTargetChip({
   baseBranch?: string
   branchName: string
   locked?: boolean
+  menuPlacement?: "up" | "down"
   mode: BranchMode
   onChangeBranchName: (name: string) => void
   onChangeMode: (mode: BranchMode) => void
@@ -64,6 +67,7 @@ export function BranchTargetChip({
         }}
         disabled={locked}
         aria-haspopup="dialog"
+        aria-expanded={open && !locked}
         title={
           locked
             ? "Branch target is locked once a chat starts"
@@ -79,12 +83,11 @@ export function BranchTargetChip({
         <div
           className={cn(
             popoverPanel,
-            "right-0 bottom-10 w-64 sm:right-auto sm:left-0"
+            "right-0 w-64 sm:right-auto sm:left-0",
+            menuPlacement === "down" ? "top-10" : "bottom-10"
           )}
         >
-          <div className="px-3 pt-1.5 pb-1 text-xs text-muted-foreground">
-            Branch
-          </div>
+          <div className={popoverHeading}>Branch</div>
           {BRANCH_MODES.map((option) => {
             const active = option === mode
             return (

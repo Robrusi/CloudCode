@@ -42,7 +42,7 @@ export function McpServerForm({
         onChange={form.setTransport}
         options={MCP_TRANSPORT_OPTIONS}
         className="h-9"
-        itemClassName="h-8 text-sm"
+        itemClassName="text-sm"
       />
 
       {form.transport === "stdio" ? (

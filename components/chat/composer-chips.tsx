@@ -5,6 +5,7 @@ import { useRef, useState, type ReactNode } from "react"
 
 import {
   chipTrigger,
+  popoverHeading,
   popoverItem,
   popoverPanel,
 } from "@/components/chat/control-styles"
@@ -126,9 +127,7 @@ export function ModelChip({
       </button>
       {open ? (
         <div className={cn(popoverPanel, "top-10 right-0 min-w-52")}>
-          <div className="px-2.5 pt-1.5 pb-1 text-left text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">
-            Model
-          </div>
+          <div className={popoverHeading}>Model</div>
           {MODELS.map((option) => (
             <button
               key={option}
@@ -149,9 +148,7 @@ export function ModelChip({
             </button>
           ))}
           <div className="my-1 h-px bg-border/60" />
-          <div className="px-2.5 pt-1 pb-1 text-left text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">
-            Thinking
-          </div>
+          <div className={cn(popoverHeading, "pt-1")}>Thinking</div>
           {thinkingOptionsForModel(model).map((option) => (
             <button
               key={option}

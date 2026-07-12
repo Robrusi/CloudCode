@@ -5,6 +5,7 @@ import { type ButtonHTMLAttributes, useRef } from "react"
 
 import {
   chipTrigger,
+  popoverHeading,
   popoverItem,
   popoverPanel,
 } from "@/components/chat/control-styles"
@@ -17,7 +18,9 @@ type SandboxPresetOption = {
   name: string
 }
 
-export function IconButton({
+/** Round icon button for the composer rows; the app-wide square icon button
+ * lives in `components/ui/icon-button`. */
+export function ComposerIconButton({
   className,
   children,
   ...props
@@ -68,10 +71,18 @@ export function PresetPill({
           if (!locked) setOpen(!open)
         }}
         disabled={locked}
+        aria-haspopup="menu"
+        aria-expanded={open && !locked}
         title={
           locked ? "Preset is chosen when a chat starts" : "Sandbox preset"
         }
-        className={cn(chipTrigger, "max-w-[11rem] text-muted-foreground")}
+        className={cn(
+          chipTrigger,
+          "max-w-[11rem]",
+          selected || activeLabel
+            ? "text-foreground/80"
+            : "text-muted-foreground"
+        )}
       >
         <Package className="size-3.5 shrink-0" />
         <span className="truncate">{label}</span>
@@ -85,9 +96,7 @@ export function PresetPill({
             menuPlacement === "down" ? "top-10" : "bottom-10"
           )}
         >
-          <div className="px-3 pt-1.5 pb-1 text-xs text-muted-foreground">
-            Preset
-          </div>
+          <div className={popoverHeading}>Preset</div>
           {presets.map((preset) => (
             <button
               key={preset.id}
@@ -141,24 +150,12 @@ export function Pill<T extends string>({
       <button
         type="button"
         onClick={() => setOpen(!open)}
+        aria-haspopup="menu"
+        aria-expanded={open}
         className={cn(chipTrigger, "gap-1 text-foreground", triggerClassName)}
       >
         {formatTrigger(value)}
-        <svg
-          width="10"
-          height="10"
-          viewBox="0 0 12 12"
-          fill="none"
-          className="opacity-60"
-        >
-          <path
-            d="M3 4.5L6 7.5L9 4.5"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
+        <ChevronDown className="size-3 opacity-60" />
       </button>
       {open ? (
         <div
@@ -168,9 +165,7 @@ export function Pill<T extends string>({
             menuPlacement === "down" ? "top-10" : "bottom-10"
           )}
         >
-          <div className="px-3 pt-1.5 pb-1 text-xs text-muted-foreground">
-            {header}
-          </div>
+          <div className={popoverHeading}>{header}</div>
           {options.map((opt) => {
             const selected = opt === value
             return (
@@ -232,6 +227,8 @@ export function ThinkingSpeedPill<
       <button
         type="button"
         onClick={() => setOpen(!open)}
+        aria-haspopup="menu"
+        aria-expanded={open}
         className={cn(chipTrigger, "gap-1.5 text-foreground")}
       >
         <span className="text-foreground/80">{formatThinking(thinking)}</span>
@@ -249,9 +246,7 @@ export function ThinkingSpeedPill<
             menuPlacement === "down" ? "top-10" : "bottom-10"
           )}
         >
-          <div className="px-2.5 pt-1.5 pb-1 text-left text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">
-            Thinking
-          </div>
+          <div className={popoverHeading}>Thinking</div>
           {thinkingOptions.map((opt) => {
             const selected = opt === thinking
             return (
@@ -272,9 +267,7 @@ export function ThinkingSpeedPill<
             )
           })}
           <div className="my-1 h-px bg-border/60" />
-          <div className="px-2.5 pt-1 pb-1 text-left text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">
-            Speed
-          </div>
+          <div className={cn(popoverHeading, "pt-1")}>Speed</div>
           {speedOptions.map((opt) => {
             const selected = opt === speed
             return (

@@ -312,6 +312,8 @@ function ReviewRow({
           <p className="mt-1 text-xs text-destructive">
             {review.disabledReason}
           </p>
+        ) : statusFailed && review.lastRunError ? (
+          <p className="mt-1 text-xs text-destructive">{review.lastRunError}</p>
         ) : null}
 
         {expanded ? (

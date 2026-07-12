@@ -66,7 +66,7 @@ function WeekdayPicker({
   onChange: (days: number[]) => void
 }) {
   return (
-    <fieldset className="flex w-full items-center gap-0.5 rounded-lg border border-field bg-muted/40 p-0.5">
+    <fieldset className="flex h-8 w-full items-center gap-0.5 rounded-lg border border-field bg-muted/40 p-0.5">
       <legend className="sr-only">Days of the week</legend>
       {WEEKDAY_SHORT.map((short, day) => {
         const active = days.includes(day)
@@ -85,7 +85,7 @@ function WeekdayPicker({
               onChange(next)
             }}
             className={cn(
-              "h-7 flex-1 rounded-md text-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
+              "flex-1 self-stretch rounded-md text-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
               active
                 ? "bg-foreground text-background"
                 : "text-muted-foreground hover:bg-background hover:text-foreground"
