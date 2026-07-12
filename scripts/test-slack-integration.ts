@@ -60,9 +60,27 @@ assert.deepEqual(
   ),
   {
     control: null,
+    effortOverride: undefined,
+    modelOverride: undefined,
     presetOverride: undefined,
     repoOverride: undefined,
     text: "check with <@UOTHER>",
+  }
+)
+
+assert.deepEqual(
+  parseIntegrationMessage(
+    '<@U0BG3L6054P> !repo=owner/repo !preset="Node 20" !model=GPT-5.6-SOL !effort=high investigate this',
+    "cloudcode",
+    "U0BG3L6054P"
+  ),
+  {
+    control: null,
+    effortOverride: "high",
+    modelOverride: "GPT-5.6-SOL",
+    presetOverride: "Node 20",
+    repoOverride: "https://github.com/owner/repo.git",
+    text: "investigate this",
   }
 )
 

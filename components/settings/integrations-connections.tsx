@@ -84,9 +84,8 @@ function draftOf(installation: Installation): InstallationDraft {
   }
 }
 
-/** Per-workspace session defaults: which repo, environment, and model a
- * session started from this integration uses. Inline !repo/!preset commands
- * in the triggering message override these per session. */
+/** Per-workspace defaults for sessions started from this integration. Inline
+ * controls in the triggering message can override them. */
 function InstallationSettings({
   installation,
   onSaved,
@@ -254,8 +253,8 @@ function InstallationSettings({
 
       <div className="mt-4 flex items-center justify-between gap-3 border-t border-border/60 pt-4">
         <p className={cn(fieldHint, "min-w-0")}>
-          New sessions use these defaults; !repo and !preset in a message
-          override them.
+          Override with !repo, !preset, !model, or !effort in a message. Model
+          and effort also apply to follow-ups.
         </p>
         <Button
           type="button"

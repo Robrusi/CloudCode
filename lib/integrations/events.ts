@@ -17,12 +17,14 @@ export type IntegrationEventSubject = {
 export type IntegrationChatEventPayload = {
   authorEmail?: string
   authorName: string
+  effortOverride?: string
   externalId?: string
   externalThreadId: string
   kind: "mention" | "follow_up"
   linearAgentSessionId?: string
   linearIssueId?: string
   messageId: string
+  modelOverride?: string
   presetOverride?: string
   provider: "slack" | "linear"
   repoOverride?: string

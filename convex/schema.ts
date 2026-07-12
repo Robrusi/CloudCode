@@ -459,6 +459,8 @@ export default defineSchema({
         v.object({
           authorName: v.string(),
           content: v.string(),
+          model: v.optional(model),
+          reasoningEffort: v.optional(thinking),
           receivedAt: v.number(),
         })
       )

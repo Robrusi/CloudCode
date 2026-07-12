@@ -117,16 +117,24 @@ async function chatEventPayload(
   thread: Thread,
   message: Message,
   kind: "mention" | "follow_up",
-  parsed: { presetOverride?: string; repoOverride?: string; text: string },
+  parsed: {
+    effortOverride?: string
+    modelOverride?: string
+    presetOverride?: string
+    repoOverride?: string
+    text: string
+  },
   threadContext: ExternalThreadContext
 ): Promise<IntegrationChatEventPayload> {
   const payload: IntegrationChatEventPayload = {
     authorName: message.author.fullName || message.author.userName,
+    effortOverride: parsed.effortOverride,
     externalThreadId: threadContext.externalThreadId,
     kind,
     linearAgentSessionId: threadContext.linearAgentSessionId,
     linearIssueId: threadContext.linearIssueId,
     messageId: message.id,
+    modelOverride: parsed.modelOverride,
     presetOverride: parsed.presetOverride,
     provider,
     repoOverride: parsed.repoOverride,

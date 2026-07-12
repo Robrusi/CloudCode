@@ -2,20 +2,26 @@
  *
  *   @cloudcode !repo=owner/name fix the flaky auth test
  *   @cloudcode !preset="node 20" run the benchmarks
+ *   @cloudcode !model=gpt-5.6-sol !effort=high investigate the outage
  *   @cloudcode mute
  *
  * Control words only count when they are the entire instruction, so a task
  * that merely contains the word "help" never triggers anything. */
 
+import { MODELS, THINKINGS } from "@/lib/chat/options"
 import { canonicalGitHubRepoUrl } from "@/lib/github/repo"
 import { stripSlackBotMention } from "@/lib/integrations/slack-threads"
 
 const REPO_KEYWORD_RE = /(?:^|\s)!repo=(\S+)/i
 // Preset names may contain spaces; accept a quoted value or a bare token.
 const PRESET_KEYWORD_RE = /(?:^|\s)!preset=(?:"([^"]+)"|“([^”]+)”|(\S+))/i
+const MODEL_KEYWORD_RE = /(?:^|\s)!model=(\S+)/i
+const EFFORT_KEYWORD_RE = /(?:^|\s)!effort=(\S+)/i
 
 export type ParsedIntegrationMessage = {
   control: "help" | "mute" | "unmute" | null
+  effortOverride?: string
+  modelOverride?: string
   presetOverride?: string
   repoOverride?: string
   text: string
@@ -68,26 +74,70 @@ export function parseIntegrationMessage(
     text = text.replace(PRESET_KEYWORD_RE, " ")
   }
 
+  let modelOverride: string | undefined
+  const modelMatch = text.match(MODEL_KEYWORD_RE)
+  if (modelMatch) {
+    modelOverride = modelMatch[1]?.trim() || undefined
+    text = text.replace(MODEL_KEYWORD_RE, " ")
+  }
+
+  let effortOverride: string | undefined
+  const effortMatch = text.match(EFFORT_KEYWORD_RE)
+  if (effortMatch) {
+    effortOverride = effortMatch[1]?.trim() || undefined
+    text = text.replace(EFFORT_KEYWORD_RE, " ")
+  }
+
   text = text.replace(/\s+/g, " ").trim()
 
   const lowered = text.toLowerCase()
   if (lowered === "mute") {
-    return { control: "mute", presetOverride, repoOverride, text: "" }
+    return {
+      control: "mute",
+      effortOverride,
+      modelOverride,
+      presetOverride,
+      repoOverride,
+      text: "",
+    }
   }
   if (lowered === "unmute") {
-    return { control: "unmute", presetOverride, repoOverride, text: "" }
+    return {
+      control: "unmute",
+      effortOverride,
+      modelOverride,
+      presetOverride,
+      repoOverride,
+      text: "",
+    }
   }
   if (lowered === "help" || lowered === "commands") {
-    return { control: "help", presetOverride, repoOverride, text: "" }
+    return {
+      control: "help",
+      effortOverride,
+      modelOverride,
+      presetOverride,
+      repoOverride,
+      text: "",
+    }
   }
 
-  return { control: null, presetOverride, repoOverride, text }
+  return {
+    control: null,
+    effortOverride,
+    modelOverride,
+    presetOverride,
+    repoOverride,
+    text,
+  }
 }
 
 export const INTEGRATION_HELP_MESSAGE = [
   "*Commands*",
   "• `!repo=owner/name` — run against a specific repository",
   '• `!preset=name` (or `!preset="name with spaces"`, `!preset=auto`) — pick the sandbox preset for a new session',
+  `• \`!model=${MODELS[0]}\` — select the model (${MODELS.map((value) => `\`${value}\``).join(", ")})`,
+  `• \`!effort=high\` — select reasoning effort (${THINKINGS.map((value) => `\`${value}\``).join(", ")})`,
   "• `mute` / `unmute` — pause or resume follow-ups in this thread",
   "",
   "Mention me with a task to start a session, reply in the thread to follow up, or DM me directly.",

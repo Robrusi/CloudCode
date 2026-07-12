@@ -26,7 +26,14 @@ import {
   codexAuthMissingMessage,
   codexAuthReconnectMessage,
 } from "@/lib/codex/auth-errors"
-import { assertModelSupportsThinking } from "@/lib/chat/options"
+import {
+  assertModelSupportsThinking,
+  modelThinkingCompatibilityError,
+  modelSupportsThinking,
+  normalizeThinkingForModel,
+  type Model,
+  type Thinking,
+} from "@/lib/chat/options"
 import { canonicalGitHubRepoUrl } from "@/lib/github/repo"
 import { linearAgentSessionThreadParts } from "@/lib/integrations/linear-threads"
 
@@ -47,6 +54,32 @@ function integrationThreadTitle(title: string) {
   return base.length > THREAD_TITLE_MAX_LENGTH
     ? `${base.slice(0, THREAD_TITLE_MAX_LENGTH)}…`
     : base
+}
+
+function integrationRunOptions(
+  modelOverride: Model | undefined,
+  effortOverride: Thinking | undefined,
+  fallbackModel: Model,
+  fallbackEffort: Thinking
+) {
+  const selectedModel = modelOverride ?? fallbackModel
+  const selectedEffort =
+    effortOverride ??
+    (modelOverride
+      ? normalizeThinkingForModel(selectedModel, fallbackEffort)
+      : fallbackEffort)
+
+  if (!modelSupportsThinking(selectedModel, selectedEffort)) {
+    return {
+      message: modelThinkingCompatibilityError(selectedModel, selectedEffort),
+      ok: false as const,
+    }
+  }
+  return {
+    model: selectedModel,
+    ok: true as const,
+    reasoningEffort: selectedEffort,
+  }
 }
 
 async function installationForProviderExternal(
@@ -800,11 +833,13 @@ export const workerCreateSessionRun = mutation({
     linearAgentSessionId: v.optional(v.string()),
     linearIssueId: v.optional(v.string()),
     linearOrganizationId: v.optional(v.string()),
+    model: v.optional(model),
     prompt: v.string(),
     provider: integrationProvider,
     // Required for new sessions; follow-ups on an existing bridge continue
     // on the bridged thread's repository instead.
     repoUrl: v.optional(v.string()),
+    reasoningEffort: v.optional(thinking),
     // !preset=name override: matched case-insensitively against the owner's
     // preset names; "auto" forces the auto environment. New sessions only.
     sandboxPresetName: v.optional(v.string()),
@@ -878,6 +913,19 @@ export const workerCreateSessionRun = mutation({
 
       const continuation = await threadContinuationInput(ctx, thread)
       const latest = continuation.latest
+      const options = integrationRunOptions(
+        args.model,
+        args.reasoningEffort,
+        latest?.model ?? thread.model,
+        latest?.reasoningEffort ?? INTEGRATION_RUN_EFFORT
+      )
+      if (!options.ok) {
+        return {
+          ok: false as const,
+          message: options.message,
+          status: "invalid_options" as const,
+        }
+      }
       const created = await insertFactoryRunRecords(ctx, {
         baseBranch: thread.baseBranch ?? latest?.baseBranch,
         branchMode:
@@ -887,11 +935,11 @@ export const workerCreateSessionRun = mutation({
         branchName: latest?.branchName,
         codexThreadId: continuation.codexThreadId,
         logMessage: QUEUED_LOG_MESSAGE,
-        model: latest?.model ?? thread.model,
+        model: options.model,
         previousDiff: continuation.previousDiff,
         profile: auth.profile,
         prompt,
-        reasoningEffort: latest?.reasoningEffort ?? INTEGRATION_RUN_EFFORT,
+        reasoningEffort: options.reasoningEffort,
         repoUrl: latest?.repoUrl ?? thread.repoUrl,
         sandboxId: continuation.sandboxId,
         sandboxPresetId: latest?.sandboxPresetId ?? thread.sandboxPresetId,
@@ -951,15 +999,25 @@ export const workerCreateSessionRun = mutation({
       requestedPresetId,
       args.userId
     )
-    const sessionModel = installation.defaultModel ?? INTEGRATION_RUN_MODEL
-    const sessionEffort =
+    const options = integrationRunOptions(
+      args.model,
+      args.reasoningEffort,
+      installation.defaultModel ?? INTEGRATION_RUN_MODEL,
       installation.defaultReasoningEffort ?? INTEGRATION_RUN_EFFORT
+    )
+    if (!options.ok) {
+      return {
+        ok: false as const,
+        message: options.message,
+        status: "invalid_options" as const,
+      }
+    }
     const baseBranch = installation.defaultBaseBranch?.trim() || undefined
     const threadId = await ctx.db.insert("threads", {
       ...(baseBranch ? { baseBranch } : {}),
       branchMode: INTEGRATION_RUN_BRANCH_MODE,
       createdAt: now,
-      model: sessionModel,
+      model: options.model,
       repoUrl,
       sandboxPresetId,
       title: integrationThreadTitle(args.title),
@@ -970,10 +1028,10 @@ export const workerCreateSessionRun = mutation({
       baseBranch,
       branchMode: INTEGRATION_RUN_BRANCH_MODE,
       logMessage: QUEUED_LOG_MESSAGE,
-      model: sessionModel,
+      model: options.model,
       profile: auth.profile,
       prompt,
-      reasoningEffort: sessionEffort,
+      reasoningEffort: options.reasoningEffort,
       repoUrl,
       sandboxPresetId,
       speed: INTEGRATION_RUN_SPEED,
@@ -1004,7 +1062,9 @@ export const workerQueuePendingMessage = mutation({
     authorName: v.string(),
     content: v.string(),
     externalThreadId: v.string(),
+    model: v.optional(model),
     provider: integrationProvider,
+    reasoningEffort: v.optional(thinking),
     workerSecret: v.string(),
   },
   handler: async (ctx, args) => {
@@ -1017,11 +1077,33 @@ export const workerQueuePendingMessage = mutation({
     )
     if (!bridge || bridge.muted) return { queued: false }
 
+    const thread = await ctx.db.get(bridge.threadId)
+    if (!thread) return { queued: false }
+    const previousSelection = bridge.pendingMessages?.at(-1)
+    const activeRun = await activeRunForThread(ctx, bridge.threadId)
+    const options = integrationRunOptions(
+      args.model,
+      args.reasoningEffort,
+      previousSelection?.model ?? activeRun?.model ?? thread.model,
+      previousSelection?.reasoningEffort ??
+        activeRun?.reasoningEffort ??
+        INTEGRATION_RUN_EFFORT
+    )
+    if (!options.ok) {
+      return {
+        message: options.message,
+        queued: false,
+        status: "invalid_options" as const,
+      }
+    }
+
     const pending = [
       ...(bridge.pendingMessages ?? []),
       {
         authorName: args.authorName,
         content: args.content,
+        model: options.model,
+        reasoningEffort: options.reasoningEffort,
         receivedAt: Date.now(),
       },
     ].slice(-PENDING_MESSAGES_MAX)
@@ -1161,6 +1243,14 @@ export const workerDrainPendingMessages = mutation({
       .join("\n\n")
     const continuation = await threadContinuationInput(ctx, thread)
     const latest = continuation.latest
+    const queuedSelection = bridge.pendingMessages.at(-1)
+    const options = integrationRunOptions(
+      queuedSelection?.model,
+      queuedSelection?.reasoningEffort,
+      latest?.model ?? thread.model,
+      latest?.reasoningEffort ?? INTEGRATION_RUN_EFFORT
+    )
+    if (!options.ok) return null
 
     const created = await insertFactoryRunRecords(ctx, {
       baseBranch: thread.baseBranch ?? latest?.baseBranch,
@@ -1169,11 +1259,11 @@ export const workerDrainPendingMessages = mutation({
       branchName: latest?.branchName,
       codexThreadId: continuation.codexThreadId,
       logMessage: QUEUED_LOG_MESSAGE,
-      model: latest?.model ?? thread.model,
+      model: options.model,
       previousDiff: continuation.previousDiff,
       profile: auth.profile,
       prompt,
-      reasoningEffort: latest?.reasoningEffort ?? INTEGRATION_RUN_EFFORT,
+      reasoningEffort: options.reasoningEffort,
       repoUrl: latest?.repoUrl ?? thread.repoUrl,
       sandboxId: continuation.sandboxId,
       sandboxPresetId: latest?.sandboxPresetId ?? thread.sandboxPresetId,

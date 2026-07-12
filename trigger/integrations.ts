@@ -1,6 +1,12 @@
 import { task, tasks } from "@trigger.dev/sdk"
 
 import { api } from "@/convex/_generated/api"
+import {
+  MODELS,
+  THINKINGS,
+  parseModel,
+  parseThinking,
+} from "@/lib/chat/options"
 import { getWorkerSecret, workerConvexClient } from "@/lib/codex/run-worker"
 import { dispatchIntegrationRun } from "@/lib/integrations/dispatch"
 import {
@@ -27,6 +33,26 @@ const BILLING_EXHAUSTED_MESSAGE =
   "CloudCode's infrastructure usage is exhausted for this account. Upgrade or wait for the included usage to reset."
 const MISSING_REPO_MESSAGE =
   "No repository is configured for this integration. Set a default repository in CloudCode → Settings → Connections, or include `!repo=owner/name` in your message."
+
+function parseRequestedRunOptions(payload: IntegrationChatEventPayload) {
+  const modelValue = payload.modelOverride?.trim().toLowerCase()
+  const model = modelValue ? parseModel(modelValue) : undefined
+  if (modelValue && !model) {
+    return {
+      error: `Unknown model \`${payload.modelOverride}\`. Available: ${MODELS.map((value) => `\`${value}\``).join(", ")}.`,
+    }
+  }
+
+  const effortValue = payload.effortOverride?.trim().toLowerCase()
+  const reasoningEffort = effortValue ? parseThinking(effortValue) : undefined
+  if (effortValue && !reasoningEffort) {
+    return {
+      error: `Unknown reasoning effort \`${payload.effortOverride}\`. Available: ${THINKINGS.map((value) => `\`${value}\``).join(", ")}.`,
+    }
+  }
+
+  return { model, reasoningEffort }
+}
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Integration event failed."
@@ -97,6 +123,12 @@ async function handleChatEvent(payload: IntegrationChatEventPayload) {
   // does, and OAuth-mode outbound posts need it to look the token up.
   if (payload.provider === "slack") threadRef.slackTeamId = resolved.externalId
 
+  const requestedOptions = parseRequestedRunOptions(payload)
+  if (requestedOptions.error) {
+    await replyBestEffort(threadRef, `❌ ${requestedOptions.error}`)
+    return { handled: false, reason: "invalid_options" as const }
+  }
+
   const bridge = resolved.bridge
   // Every DM message addresses the bot, so a DM without a session bridge
   // starts a session no matter how the webhook generation classified it
@@ -114,11 +146,17 @@ async function handleChatEvent(payload: IntegrationChatEventPayload) {
         {
           authorName: payload.authorName,
           content: payload.text,
+          model: requestedOptions.model,
+          reasoningEffort: requestedOptions.reasoningEffort,
           externalThreadId,
           provider: payload.provider,
           workerSecret,
         }
       )
+      if ("message" in queued) {
+        await replyBestEffort(threadRef, `❌ ${queued.message}`)
+        return { handled: false, reason: queued.status }
+      }
       return { handled: queued.queued, reason: "queued" as const }
     }
   }
@@ -152,6 +190,8 @@ async function handleChatEvent(payload: IntegrationChatEventPayload) {
         payload.provider === "linear" ? payload.externalId : undefined,
       prompt: chatEventPrompt(payload),
       provider: payload.provider,
+      model: requestedOptions.model,
+      reasoningEffort: requestedOptions.reasoningEffort,
       repoUrl,
       sandboxPresetName: payload.presetOverride,
       title: payload.subject?.title ?? payload.text,
@@ -167,11 +207,17 @@ async function handleChatEvent(payload: IntegrationChatEventPayload) {
         {
           authorName: payload.authorName,
           content: payload.text,
+          model: requestedOptions.model,
+          reasoningEffort: requestedOptions.reasoningEffort,
           externalThreadId,
           provider: payload.provider,
           workerSecret,
         }
       )
+      if ("message" in queued) {
+        await replyBestEffort(threadRef, `❌ ${queued.message}`)
+        return { handled: false, reason: queued.status }
+      }
       if (queued.queued) {
         await replyBestEffort(
           threadRef,
@@ -183,6 +229,7 @@ async function handleChatEvent(payload: IntegrationChatEventPayload) {
     if (
       created.status === "missing_auth" ||
       created.status === "auth_reconnect_required" ||
+      created.status === "invalid_options" ||
       created.status === "unknown_preset"
     ) {
       await replyBestEffort(threadRef, `❌ ${created.message}`)
