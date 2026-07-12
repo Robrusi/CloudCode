@@ -15,6 +15,7 @@ import {
   CODEX_APP_SERVER_DAEMON_SCRIPT,
   CODEX_APP_SERVER_DAEMON_VERSION,
 } from "@/lib/codex/app-server-daemon-script"
+import { desiredCodexCliVersion } from "@/lib/codex/cli-version"
 import { compactLine } from "@/lib/shared/compact-line"
 import {
   repoCommandEnv,
@@ -112,6 +113,7 @@ function codexAppServerDaemonEnv({
     CLOUDCODE_APP_SERVER_REQUEST_TIMEOUT_MS: String(
       CODEX_APP_SERVER_REQUEST_TIMEOUT_MS
     ),
+    CLOUDCODE_CODEX_CLI_VERSION: desiredCodexCliVersion(),
     CLOUDCODE_CODEX_LAUNCHER: paths.codexLauncherPath,
     CLOUDCODE_CONTEXT_TOOL_VERSION: cloudcodeContextToolVersion(),
     CLOUDCODE_DAEMON_SOCKET: daemonPaths.socketPath,

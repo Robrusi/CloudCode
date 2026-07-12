@@ -8,7 +8,7 @@ import { Daytona, Image } from "@daytona/sdk"
 const DEFAULT_SNAPSHOT_NAME = "cloudcode-batteries-included"
 const DEFAULT_BASE_IMAGE = "daytonaio/sandbox:0.8.0"
 const CODEX_CLI_VERSION =
-  process.env.CLOUDCODE_CODEX_CLI_VERSION?.trim() || "0.136.0"
+  process.env.CLOUDCODE_CODEX_CLI_VERSION?.trim() || "0.144.1"
 const DESKTOP_BROWSER_SETUP_VERSION = "cloudcode-browser-v3"
 const DESKTOP_BROWSER_LAUNCHER = `#!/usr/bin/env bash
 set -euo pipefail
@@ -244,7 +244,7 @@ function cloudcodeImage(baseImage) {
       "xz-utils",
       "zlib1g-dev",
       "zip",
-      "&& rm -rf /var/lib/apt/lists/*",
+      "&& rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/info/* /usr/share/man/*",
     ].join(" "),
     [
       "RUN for novnc_proxy_source in /usr/share/novnc/utils/novnc_proxy /usr/share/novnc/utils/launch.sh; do",
@@ -296,11 +296,12 @@ function cloudcodeImage(baseImage) {
     ].join(" "),
     [
       "RUN if command -v npm >/dev/null 2>&1; then",
-      "npm install -g --force",
+      "NPM_CONFIG_CACHE=/tmp/cloudcode-npm-cache npm install -g --force",
       `@openai/codex@${CODEX_CLI_VERSION}`,
       "pnpm@latest",
       "typescript@latest",
-      "tsx@latest;",
+      "tsx@latest",
+      "&& rm -rf /tmp/cloudcode-npm-cache;",
       "fi",
     ].join(" "),
     [
@@ -363,9 +364,9 @@ function cloudcodeImage(baseImage) {
       'SWIFTLY_TARBALL="swiftly-${SWIFTLY_ARCH}.tar.gz";',
       '( curl -fsSLO "https://download.swift.org/swiftly/linux/${SWIFTLY_TARBALL}"',
       '&& tar zxf "${SWIFTLY_TARBALL}"',
-      "&& ./swiftly init --quiet-shell-followup --no-modify-profile",
-      "&& swift --version )",
-      "|| echo 'Swift install failed; continuing without Swift.' >&2;",
+      "&& ./swiftly init --assume-yes --skip-install --quiet-shell-followup --no-modify-profile",
+      "&& swiftly --version )",
+      '|| { rm -rf "${SWIFTLY_HOME_DIR}" "${SWIFTLY_TOOLCHAINS_DIR}"; rm -f /usr/local/bin/swiftly; echo \'Swiftly install failed; continuing without Swift.\' >&2; };',
       'rm -f "${SWIFTLY_TARBALL}" swiftly core core.*',
     ].join(" "),
     "WORKDIR /workspace",
