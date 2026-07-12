@@ -104,6 +104,9 @@ function parseAutomationTrigger(body: JsonRecord): AutomationTrigger {
       )
     }
     return {
+      assigneeId: jsonRawStringField(raw, "assigneeId")?.trim() || undefined,
+      assigneeName:
+        jsonRawStringField(raw, "assigneeName")?.trim() || undefined,
       event,
       installationId: installationId as Id<"integrationInstallations">,
       labelId: jsonRawStringField(raw, "labelId")?.trim() || undefined,

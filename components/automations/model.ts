@@ -30,6 +30,8 @@ export type TriggerDraft =
       kind: "slack"
     }
   | {
+      assigneeId: string
+      assigneeName: string
       event: "issueCreated" | "issueAssigned" | "labelAdded" | "statusChanged"
       installationId: string
       kind: "linear"
@@ -55,6 +57,8 @@ export function emptySlackTrigger(installationId: string): TriggerDraft {
 
 export function emptyLinearTrigger(installationId: string): TriggerDraft {
   return {
+    assigneeId: "",
+    assigneeName: "",
     event: "labelAdded",
     installationId,
     kind: "linear",
@@ -149,6 +153,8 @@ function triggerDraftFromRecord(automation: AutomationRecord): TriggerDraft {
     }
   }
   return {
+    assigneeId: trigger.assigneeId ?? "",
+    assigneeName: trigger.assigneeName ?? "",
     event: trigger.event,
     installationId: trigger.installationId,
     kind: "linear",
@@ -225,6 +231,8 @@ function triggerRequestBody(draft: AutomationDraft) {
     }
   }
   return {
+    assigneeId: trigger.assigneeId || undefined,
+    assigneeName: trigger.assigneeName || undefined,
     event: trigger.event,
     installationId: trigger.installationId,
     kind: "linear" as const,
@@ -276,7 +284,10 @@ export function automationTriggerLabel(automation: AutomationRecord) {
     return `On new issue${scope}`
   }
   if (trigger.event === "issueAssigned") {
-    return `On issue assigned${scope}`
+    const assignee = trigger.assigneeName || trigger.assigneeId
+    return assignee
+      ? `On assigned to ${assignee}${scope}`
+      : `On issue assigned${scope}`
   }
   if (trigger.event === "labelAdded") {
     return `On label “${trigger.labelName || trigger.labelId}”${scope}`

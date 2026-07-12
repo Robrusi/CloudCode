@@ -30,6 +30,9 @@ export const automationTrigger = v.union(
     kind: v.literal("slack"),
   }),
   v.object({
+    // Required for issueAssigned; stored with the name for readable labels.
+    assigneeId: v.optional(v.string()),
+    assigneeName: v.optional(v.string()),
     event: v.union(
       v.literal("issueCreated"),
       v.literal("issueAssigned"),

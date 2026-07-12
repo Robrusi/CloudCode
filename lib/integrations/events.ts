@@ -1,4 +1,5 @@
 import type { Id } from "@/convex/_generated/dataModel"
+import type { AutomationTrigger } from "@/convex/lib/integrationTriggers"
 
 /** Subject context captured with a chat event: the Linear issue behind an
  * agent session, normalized from the Chat SDK's MessageSubject. */
@@ -160,4 +161,34 @@ export function linearAutomationEventVars(
     issueUrl: event.issue.url ?? "",
     source: "linear",
   }
+}
+
+/** Fine-grained predicate applied after the source-key lookup. IDs are used
+ * for matching so renamed labels, statuses, teams, or people stay stable. */
+export function linearAutomationEventMatches(
+  trigger: Extract<AutomationTrigger, { kind: "linear" }>,
+  event: LinearIssueAutomationEvent
+) {
+  if (trigger.event !== event.event) return false
+  if (trigger.teamId && trigger.teamId !== event.issue.teamId) return false
+  if (
+    trigger.event === "issueAssigned" &&
+    trigger.assigneeId !== event.issue.assigneeId
+  ) {
+    return false
+  }
+  if (
+    trigger.event === "labelAdded" &&
+    !event.addedLabels?.some((label) => label.id === trigger.labelId)
+  ) {
+    return false
+  }
+  if (
+    trigger.event === "statusChanged" &&
+    trigger.stateId &&
+    trigger.stateId !== event.issue.stateId
+  ) {
+    return false
+  }
+  return true
 }

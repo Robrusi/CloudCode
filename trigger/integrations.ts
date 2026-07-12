@@ -5,6 +5,7 @@ import { getWorkerSecret, workerConvexClient } from "@/lib/codex/run-worker"
 import { dispatchIntegrationRun } from "@/lib/integrations/dispatch"
 import {
   chatEventPrompt,
+  linearAutomationEventMatches,
   linearAutomationEventVars,
   slackAutomationEventVars,
   type IntegrationChatEventPayload,
@@ -271,21 +272,8 @@ async function handleLinearAutomationEvent(
   for (const event of payload.events) {
     for (const automation of automations) {
       const trigger = automation.trigger
-      if (trigger.kind !== "linear" || trigger.event !== event.event) continue
-      if (trigger.teamId && trigger.teamId !== event.issue.teamId) continue
-      if (
-        trigger.event === "labelAdded" &&
-        !event.addedLabels?.some((label) => label.id === trigger.labelId)
-      ) {
-        continue
-      }
-      if (
-        trigger.event === "statusChanged" &&
-        trigger.stateId &&
-        trigger.stateId !== event.issue.stateId
-      ) {
-        continue
-      }
+      if (trigger.kind !== "linear") continue
+      if (!linearAutomationEventMatches(trigger, event)) continue
 
       const claim = await client.mutation(
         api.automations.workerClaimEventFire,

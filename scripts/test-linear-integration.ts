@@ -1,9 +1,11 @@
 import assert from "node:assert/strict"
 
+import type { Id } from "../convex/_generated/dataModel"
 import {
   parseCommentlessLinearDelegation,
   parseLinearIssueAutomationEvents,
 } from "../lib/integrations/linear-webhook"
+import { linearAutomationEventMatches } from "../lib/integrations/events"
 import {
   linearAgentSessionThreadId,
   linearAgentSessionThreadParts,
@@ -249,6 +251,46 @@ assert.deepEqual(
     updatedFrom: { assigneeId: "user-2" },
   }),
   { events: [], organizationId: "organization-1" }
+)
+
+const assignmentEvent = parseLinearIssueAutomationEvents({
+  action: "update",
+  data: {
+    assignee: { id: "user-2", name: "Ada Lovelace" },
+    assigneeId: "user-2",
+    id: "issue-4",
+    teamId: "team-1",
+  },
+  type: "Issue",
+  updatedFrom: { assigneeId: "user-1" },
+}).events[0]
+assert.ok(assignmentEvent)
+
+const assignmentTrigger = {
+  assigneeId: "user-2",
+  assigneeName: "Ada Lovelace",
+  event: "issueAssigned" as const,
+  installationId: "installation-1" as Id<"integrationInstallations">,
+  kind: "linear" as const,
+  teamId: "team-1",
+}
+assert.equal(
+  linearAutomationEventMatches(assignmentTrigger, assignmentEvent),
+  true
+)
+assert.equal(
+  linearAutomationEventMatches(
+    { ...assignmentTrigger, assigneeId: "user-3" },
+    assignmentEvent
+  ),
+  false
+)
+assert.equal(
+  linearAutomationEventMatches(
+    { ...assignmentTrigger, teamId: "team-2" },
+    assignmentEvent
+  ),
+  false
 )
 
 console.log("Linear integration routing checks passed.")

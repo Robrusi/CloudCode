@@ -26,6 +26,7 @@ type LinearTeam = {
   name: string
   states: Array<{ id: string; name: string }>
 }
+type LinearUser = { email: string; id: string; name: string }
 
 const ANY_VALUE = ""
 
@@ -205,24 +206,31 @@ export function LinearTriggerChip({
   trigger: LinearTrigger
 }) {
   const [teams, setTeams] = useState<LinearTeam[] | null>(null)
+  const [users, setUsers] = useState<LinearUser[] | null>(null)
   const [loadError, setLoadError] = useState("")
 
   useEffect(() => {
     if (!open || teams !== null) return
     let cancelled = false
-    void fetchJson<{ teams: LinearTeam[] }>(
+    void fetchJson<{ teams: LinearTeam[]; users: LinearUser[] }>(
       "/api/integrations/linear/teams",
       { method: "GET" },
-      { fallbackError: "Unable to load Linear teams." }
+      { fallbackError: "Unable to load Linear trigger options." }
     )
       .then((data) => {
-        if (!cancelled) setTeams(data.teams)
+        if (!cancelled) {
+          setTeams(data.teams)
+          setUsers(data.users)
+        }
       })
       .catch((error) => {
         if (!cancelled) {
           setTeams([])
+          setUsers([])
           setLoadError(
-            error instanceof Error ? error.message : "Unable to load teams."
+            error instanceof Error
+              ? error.message
+              : "Unable to load Linear trigger options."
           )
         }
       })
@@ -254,7 +262,9 @@ export function LinearTriggerChip({
     trigger.event === "issueCreated"
       ? "On new issue"
       : trigger.event === "issueAssigned"
-        ? "On issue assigned"
+        ? trigger.assigneeName
+          ? `On assigned to ${trigger.assigneeName}`
+          : "On issue assigned"
         : trigger.event === "labelAdded"
           ? trigger.labelName
             ? `On label “${trigger.labelName}”`
@@ -282,6 +292,8 @@ export function LinearTriggerChip({
         onChange={(event) =>
           onChange({
             ...trigger,
+            assigneeId: "",
+            assigneeName: "",
             event: event as LinearTrigger["event"],
             labelId: "",
             labelName: "",
@@ -329,6 +341,29 @@ export function LinearTriggerChip({
                 scopedTeams
                   .flatMap((team) => team.labels)
                   .find((label) => label.id === labelId)?.name ?? "",
+            })
+          }
+        />
+      ) : trigger.event === "issueAssigned" ? (
+        <MenuSelect
+          ariaLabel="Person"
+          value={trigger.assigneeId}
+          options={
+            users === null
+              ? [{ label: "Loading people…", value: ANY_VALUE }]
+              : users.length > 0
+                ? users.map((user) => ({
+                    label: `${user.name} (${user.email})`,
+                    value: user.id,
+                  }))
+                : [{ label: "No people found", value: ANY_VALUE }]
+          }
+          onChange={(assigneeId) =>
+            onChange({
+              ...trigger,
+              assigneeId,
+              assigneeName:
+                users?.find((user) => user.id === assigneeId)?.name ?? "",
             })
           }
         />

@@ -64,6 +64,13 @@ function triggerDraftError(draft: AutomationDraft) {
   ) {
     return "Pick a label for the Linear trigger."
   }
+  if (
+    trigger.kind === "linear" &&
+    trigger.event === "issueAssigned" &&
+    !trigger.assigneeId
+  ) {
+    return "Pick a person for the Linear trigger."
+  }
   return null
 }
 

@@ -129,6 +129,9 @@ async function resolveAutomationTrigger(
   if (trigger.event === "labelAdded" && !trigger.labelId?.trim()) {
     throw new Error("labelId is required for label triggers.")
   }
+  if (trigger.event === "issueAssigned" && !trigger.assigneeId?.trim()) {
+    throw new Error("assigneeId is required for assignment triggers.")
+  }
   return trigger
 }
 

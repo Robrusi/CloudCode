@@ -12,8 +12,8 @@ import {
 
 export const runtime = "nodejs"
 
-/** Teams with their labels and workflow states, for the automations trigger
- * picker. Resolved through the stored per-organization installation. */
+/** Teams, labels, workflow states, and assignable people for the automations
+ * trigger picker. Resolved through the stored per-organization installation. */
 export async function GET(request: Request) {
   const blocked = requireSameOrigin(request)
   if (blocked) return blocked
@@ -37,17 +37,24 @@ export async function GET(request: Request) {
       return jsonError("The Linear integration is not configured.", 503)
     }
 
-    const teams = await linear.withInstallation(
+    const options = await linear.withInstallation(
       linearInstallation.externalId,
       async () => {
-        const connection = await linear.linearClient.teams({ first: 50 })
-        const result = []
-        for (const team of connection.nodes) {
+        const [teamConnection, userConnection] = await Promise.all([
+          linear.linearClient.teams({ first: 50 }),
+          linear.linearClient.users({ first: 250 }),
+        ])
+        while (userConnection.pageInfo.hasNextPage) {
+          await userConnection.fetchNext()
+        }
+
+        const teams = []
+        for (const team of teamConnection.nodes) {
           const [labels, states] = await Promise.all([
             team.labels({ first: 100 }),
             team.states({ first: 50 }),
           ])
-          result.push({
+          teams.push({
             id: team.id,
             key: team.key,
             labels: labels.nodes.map((label) => ({
@@ -61,15 +68,30 @@ export async function GET(request: Request) {
             })),
           })
         }
-        return result
+
+        const users = userConnection.nodes
+          .filter(
+            (user) =>
+              user.active && user.isAssignable && !user.app && !user.archivedAt
+          )
+          .map((user) => ({
+            email: user.email,
+            id: user.id,
+            name: user.name,
+          }))
+          .sort((left, right) => left.name.localeCompare(right.name))
+
+        return { teams, users }
       }
     )
 
-    return NextResponse.json({ teams })
+    return NextResponse.json(options)
   } catch (error) {
     console.error("/api/integrations/linear/teams failed", error)
     return jsonError(
-      error instanceof Error ? error.message : "Unable to list Linear teams.",
+      error instanceof Error
+        ? error.message
+        : "Unable to load Linear trigger options.",
       500
     )
   }
