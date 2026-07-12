@@ -108,6 +108,8 @@ assert.deepEqual(
       {
         event: "issueCreated",
         issue: {
+          assigneeId: undefined,
+          assigneeName: undefined,
           description: "Investigate the regression",
           id: "issue-2",
           identifier: "ENG-2",
@@ -160,6 +162,8 @@ assert.deepEqual(
         addedLabels: [{ id: "label-2", name: "Urgent" }],
         event: "labelAdded",
         issue: {
+          assigneeId: undefined,
+          assigneeName: undefined,
           description: undefined,
           id: "issue-3",
           identifier: undefined,
@@ -177,6 +181,8 @@ assert.deepEqual(
       {
         event: "statusChanged",
         issue: {
+          assigneeId: undefined,
+          assigneeName: undefined,
           description: undefined,
           id: "issue-3",
           identifier: undefined,
@@ -194,6 +200,55 @@ assert.deepEqual(
     ],
     organizationId: "organization-1",
   }
+)
+
+assert.deepEqual(
+  parseLinearIssueAutomationEvents({
+    action: "update",
+    data: {
+      assignee: { id: "user-2", name: "Ada Lovelace" },
+      assigneeId: "user-2",
+      id: "issue-4",
+      identifier: "ENG-4",
+      teamId: "team-1",
+      title: "Assigned work",
+    },
+    organizationId: "organization-1",
+    type: "Issue",
+    updatedFrom: { assigneeId: null },
+  }),
+  {
+    events: [
+      {
+        event: "issueAssigned",
+        issue: {
+          assigneeId: "user-2",
+          assigneeName: "Ada Lovelace",
+          description: undefined,
+          id: "issue-4",
+          identifier: "ENG-4",
+          labels: [],
+          stateId: undefined,
+          stateName: undefined,
+          teamId: "team-1",
+          title: "Assigned work",
+          url: undefined,
+        },
+      },
+    ],
+    organizationId: "organization-1",
+  }
+)
+
+assert.deepEqual(
+  parseLinearIssueAutomationEvents({
+    action: "update",
+    data: { assigneeId: null, id: "issue-4" },
+    organizationId: "organization-1",
+    type: "Issue",
+    updatedFrom: { assigneeId: "user-2" },
+  }),
+  { events: [], organizationId: "organization-1" }
 )
 
 console.log("Linear integration routing checks passed.")

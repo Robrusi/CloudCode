@@ -54,6 +54,8 @@ export function verifyLinearWebhookRequest(
 type LinearIssuePayload = {
   action?: string
   data?: {
+    assignee?: { id?: string; name?: string }
+    assigneeId?: string | null
     description?: string
     id?: string
     identifier?: string
@@ -68,6 +70,7 @@ type LinearIssuePayload = {
   organizationId?: string
   type?: string
   updatedFrom?: {
+    assigneeId?: string | null
     labelIds?: string[]
     stateId?: string
   }
@@ -149,9 +152,9 @@ export function parseCommentlessLinearDelegation(
   }
 }
 
-/** Extracts automation-relevant Issue data changes (creation, labels added,
- * workflow state changed) from a raw Linear webhook payload. Non-Issue events
- * and unrelated updates return an empty list. */
+/** Extracts automation-relevant Issue data changes (creation, assignment,
+ * labels added, workflow state changed) from a raw Linear webhook payload.
+ * Non-Issue events and unrelated updates return an empty list. */
 export function parseLinearIssueAutomationEvents(payload: unknown): {
   events: LinearIssueAutomationEvent[]
   organizationId?: string
@@ -175,7 +178,10 @@ export function parseLinearIssueAutomationEvents(payload: unknown): {
       )
       .map((label) => [label.id, label.name])
   )
+  const assigneeId = data.assigneeId ?? data.assignee?.id ?? undefined
   const issue = {
+    assigneeId,
+    assigneeName: data.assignee?.name,
     description: data.description,
     id: data.id,
     identifier: data.identifier,
@@ -200,6 +206,14 @@ export function parseLinearIssueAutomationEvents(payload: unknown): {
   }
 
   if (!updatedFrom) return { events: [] }
+
+  if (
+    updatedFrom.assigneeId !== undefined &&
+    assigneeId &&
+    updatedFrom.assigneeId !== assigneeId
+  ) {
+    events.push({ event: "issueAssigned", issue })
+  }
 
   if (updatedFrom.labelIds) {
     const previous = new Set(updatedFrom.labelIds)

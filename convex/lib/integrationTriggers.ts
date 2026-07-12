@@ -32,6 +32,7 @@ export const automationTrigger = v.union(
   v.object({
     event: v.union(
       v.literal("issueCreated"),
+      v.literal("issueAssigned"),
       v.literal("labelAdded"),
       v.literal("statusChanged")
     ),

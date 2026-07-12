@@ -95,11 +95,12 @@ function parseAutomationTrigger(body: JsonRecord): AutomationTrigger {
     const event = raw.event
     if (
       event !== "issueCreated" &&
+      event !== "issueAssigned" &&
       event !== "labelAdded" &&
       event !== "statusChanged"
     ) {
       throw new Error(
-        "trigger.event must be issueCreated, labelAdded, or statusChanged."
+        "trigger.event must be issueCreated, issueAssigned, labelAdded, or statusChanged."
       )
     }
     return {

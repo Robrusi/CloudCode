@@ -253,13 +253,15 @@ export function LinearTriggerChip({
   const label =
     trigger.event === "issueCreated"
       ? "On new issue"
-      : trigger.event === "labelAdded"
-        ? trigger.labelName
-          ? `On label “${trigger.labelName}”`
-          : "On label added"
-        : trigger.stateName
-          ? `On status → ${trigger.stateName}`
-          : "On status change"
+      : trigger.event === "issueAssigned"
+        ? "On issue assigned"
+        : trigger.event === "labelAdded"
+          ? trigger.labelName
+            ? `On label “${trigger.labelName}”`
+            : "On label added"
+          : trigger.stateName
+            ? `On status → ${trigger.stateName}`
+            : "On status change"
 
   return (
     <TriggerPopover
@@ -273,6 +275,7 @@ export function LinearTriggerChip({
         value={trigger.event}
         options={[
           { label: "New issue created", value: "issueCreated" },
+          { label: "Issue assigned to a person", value: "issueAssigned" },
           { label: "Label added to an issue", value: "labelAdded" },
           { label: "Issue status changed", value: "statusChanged" },
         ]}
