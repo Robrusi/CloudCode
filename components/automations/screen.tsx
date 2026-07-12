@@ -27,8 +27,8 @@ import {
   runDotClass,
   type RunStatus,
 } from "@/components/chat/run-status"
-import { SettingsConfirmDialog } from "@/components/settings/shared"
 import { Button } from "@/components/ui/button"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { IconButton } from "@/components/ui/icon-button"
 import { Switch } from "@/components/ui/switch"
 import { api } from "@/convex/_generated/api"
@@ -312,6 +312,8 @@ export function AutomationsScreen({
   const [pendingDelete, setPendingDelete] = useState<AutomationRecord | null>(
     null
   )
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<Id<"automations"> | null>(null)
   const [actionError, setActionError] = useState("")
 
@@ -355,26 +357,46 @@ export function AutomationsScreen({
       )
     )
 
+  const requestDelete = (automation: AutomationRecord) => {
+    setDeleteError(null)
+    setPendingDelete(automation)
+  }
+
+  const cancelDelete = () => {
+    setPendingDelete(null)
+    setDeleteError(null)
+  }
+
   const confirmDelete = async () => {
     const automation = pendingDelete
-    setPendingDelete(null)
-    if (!automation) return
-    if (editingId === automation._id) setActive(null)
-    await runAction(automation, () =>
-      postJson(
+    if (!automation || deleteBusy) return
+    setDeleteBusy(true)
+    setDeleteError(null)
+    try {
+      await postJson(
         "/api/automations/delete",
         { automationId: automation._id },
         {},
         { fallbackError: "Unable to delete automation." }
       )
-    )
+      if (editingId === automation._id) setActive(null)
+      setPendingDelete(null)
+    } catch (error) {
+      // Keep the dialog open so the user can retry or back out instead of
+      // silently losing the action.
+      setDeleteError(
+        error instanceof Error ? error.message : "Unable to delete automation."
+      )
+    } finally {
+      setDeleteBusy(false)
+    }
   }
 
   const rowProps = (automation: AutomationRecord) => ({
     automation,
     busy: busyId === automation._id,
     expanded: expandedId === automation._id,
-    onDelete: () => setPendingDelete(automation),
+    onDelete: () => requestDelete(automation),
     onEdit: () => setActive(automation),
     onOpenThread,
     onRunNow: () => void runNow(automation),
@@ -474,13 +496,15 @@ export function AutomationsScreen({
       </div>
 
       {pendingDelete ? (
-        <SettingsConfirmDialog
+        <ConfirmDialog
           title="Delete automation?"
-          description={`"${pendingDelete.name}" will stop running. Its chat and run history are kept.`}
+          description={`“${pendingDelete.name}” will stop running. Its chat and run history are kept.`}
           confirmLabel="Delete"
           destructive
+          busy={deleteBusy}
+          error={deleteError ?? undefined}
           onConfirm={() => void confirmDelete()}
-          onCancel={() => setPendingDelete(null)}
+          onCancel={cancelDelete}
         />
       ) : null}
     </div>

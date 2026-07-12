@@ -1,10 +1,6 @@
 "use client"
 
-import { type ReactNode, useEffect } from "react"
-
-import { Button } from "@/components/ui/button"
-import { popoverSurfaceClass } from "@/components/ui/surface"
-import { cn } from "@/lib/shared/utils"
+import { type ReactNode } from "react"
 
 export const inputClass =
   "h-9 w-full rounded-lg border border-field bg-background px-3 text-sm transition-colors outline-none placeholder:text-muted-foreground/60 focus:border-ring focus:ring-3 focus:ring-ring/20 disabled:pointer-events-none disabled:opacity-60"
@@ -53,84 +49,5 @@ export function SettingsPage({
       </div>
       {children}
     </section>
-  )
-}
-
-export function SettingsConfirmDialog({
-  title,
-  description,
-  confirmLabel = "Confirm",
-  cancelLabel = "Cancel",
-  destructive,
-  onConfirm,
-  onCancel,
-}: {
-  title: string
-  description?: string
-  confirmLabel?: string
-  cancelLabel?: string
-  destructive?: boolean
-  onConfirm: () => void
-  onCancel: () => void
-}) {
-  useEffect(() => {
-    function handleKeyDown(event: globalThis.KeyboardEvent) {
-      if (event.key === "Escape") onCancel()
-    }
-
-    window.addEventListener("keydown", handleKeyDown)
-    return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [onCancel])
-
-  return (
-    <dialog
-      open
-      className="fixed inset-0 z-50 m-0 flex h-dvh max-h-none w-screen max-w-none items-center justify-center border-0 bg-black/40 p-4 backdrop-blur-sm"
-      onCancel={(event) => {
-        event.preventDefault()
-        onCancel()
-      }}
-      aria-modal="true"
-      aria-label={title}
-      tabIndex={-1}
-    >
-      <button
-        type="button"
-        aria-label="Cancel dialog"
-        tabIndex={-1}
-        className="absolute inset-0 cursor-default border-0 bg-transparent p-0"
-        onClick={onCancel}
-      />
-      <div
-        className={cn(
-          "relative z-10 w-full max-w-sm overflow-hidden p-5",
-          popoverSurfaceClass
-        )}
-      >
-        <div className="text-base font-medium text-foreground">{title}</div>
-        {description ? (
-          <p className="mt-1.5 text-sm text-muted-foreground">{description}</p>
-        ) : null}
-        <div className="mt-5 flex justify-end gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={onCancel}
-            className="text-muted-foreground"
-          >
-            {cancelLabel}
-          </Button>
-          <Button
-            type="button"
-            variant={destructive ? "destructive" : "default"}
-            size="sm"
-            onClick={onConfirm}
-          >
-            {confirmLabel}
-          </Button>
-        </div>
-      </div>
-    </dialog>
   )
 }

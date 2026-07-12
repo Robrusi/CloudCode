@@ -29,8 +29,8 @@ import {
 } from "@/components/chat/run-status"
 import { ReviewComposer } from "@/components/reviews/composer"
 import { type ReviewRecord } from "@/components/reviews/model"
-import { SettingsConfirmDialog } from "@/components/settings/shared"
 import { Button } from "@/components/ui/button"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { IconButton } from "@/components/ui/icon-button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
@@ -456,6 +456,8 @@ export function ReviewsScreen({
   const [active, setActive] = useState<ReviewRecord | "new" | null>(null)
   const [expandedId, setExpandedId] = useState<Id<"reviews"> | null>(null)
   const [pendingDelete, setPendingDelete] = useState<ReviewRecord | null>(null)
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<Id<"reviews"> | null>(null)
   const [actionError, setActionError] = useState("")
   // Template picked for the next "new" composer; null means a blank one.
@@ -506,25 +508,45 @@ export function ReviewsScreen({
       )
     )
 
+  const requestDelete = (review: ReviewRecord) => {
+    setDeleteError(null)
+    setPendingDelete(review)
+  }
+
+  const cancelDelete = () => {
+    setPendingDelete(null)
+    setDeleteError(null)
+  }
+
   const confirmDelete = async () => {
     const review = pendingDelete
-    setPendingDelete(null)
-    if (!review) return
-    if (editingId === review._id) setActive(null)
-    await runAction(review, () =>
-      postJson(
+    if (!review || deleteBusy) return
+    setDeleteBusy(true)
+    setDeleteError(null)
+    try {
+      await postJson(
         "/api/reviews/delete",
         { reviewId: review._id },
         {},
         { fallbackError: "Unable to delete review." }
       )
-    )
+      if (editingId === review._id) setActive(null)
+      setPendingDelete(null)
+    } catch (error) {
+      // Keep the dialog open so the user can retry or back out instead of
+      // silently losing the action.
+      setDeleteError(
+        error instanceof Error ? error.message : "Unable to delete review."
+      )
+    } finally {
+      setDeleteBusy(false)
+    }
   }
 
   const rowProps = (review: ReviewRecord) => ({
     busy: busyId === review._id,
     expanded: expandedId === review._id,
-    onDelete: () => setPendingDelete(review),
+    onDelete: () => requestDelete(review),
     onEdit: () => setActive(review),
     onOpenThread,
     onRunOnPr: (prNumber: number) => void runOnPr(review, prNumber),
@@ -627,13 +649,15 @@ export function ReviewsScreen({
       </div>
 
       {pendingDelete ? (
-        <SettingsConfirmDialog
+        <ConfirmDialog
           title="Delete review?"
-          description={`"${pendingDelete.name}" will stop reviewing pull requests. Its review threads are kept.`}
+          description={`“${pendingDelete.name}” will stop reviewing pull requests. Its review threads are kept.`}
           confirmLabel="Delete"
           destructive
+          busy={deleteBusy}
+          error={deleteError ?? undefined}
           onConfirm={() => void confirmDelete()}
-          onCancel={() => setPendingDelete(null)}
+          onCancel={cancelDelete}
         />
       ) : null}
     </div>

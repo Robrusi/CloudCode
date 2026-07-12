@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 
+import { automationTriggerLabel } from "../components/automations/model"
 import type { Id } from "../convex/_generated/dataModel"
 import {
   parseCommentlessLinearDelegation,
@@ -291,6 +292,45 @@ assert.equal(
     assignmentEvent
   ),
   false
+)
+
+type AutomationRecord = Parameters<typeof automationTriggerLabel>[0]
+
+assert.equal(
+  automationTriggerLabel({
+    trigger: {
+      assigneeId: "user-2",
+      event: "issueAssigned",
+      installationId: "installation-1" as Id<"integrationInstallations">,
+      kind: "linear",
+    },
+  } as unknown as AutomationRecord),
+  "On issue assigned"
+)
+assert.equal(
+  automationTriggerLabel({
+    trigger: {
+      assigneeId: "user-2",
+      assigneeName: "Ada Lovelace",
+      event: "issueAssigned",
+      installationId: "installation-1" as Id<"integrationInstallations">,
+      kind: "linear",
+      teamId: "team-1",
+      teamName: "Engineering",
+    },
+  } as unknown as AutomationRecord),
+  "On assigned to Ada Lovelace in Engineering"
+)
+assert.equal(
+  automationTriggerLabel({
+    trigger: {
+      event: "labelAdded",
+      installationId: "installation-1" as Id<"integrationInstallations">,
+      kind: "linear",
+      labelId: "label-1",
+    },
+  } as unknown as AutomationRecord),
+  "On label added"
 )
 
 console.log("Linear integration routing checks passed.")

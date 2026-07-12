@@ -12,9 +12,9 @@ import {
   codexAccountTitle,
   initialChatGPTConnectionState,
 } from "@/components/settings/chatgpt-model"
-import { SettingsConfirmDialog } from "@/components/settings/shared"
 import { OpenAIIcon } from "@/components/ui/brand-icons"
 import { Button } from "@/components/ui/button"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { useCodexAuthWindow } from "@/hooks/use-codex-auth-window"
 import type {
   CodexAuthAccountStatus,
@@ -359,7 +359,7 @@ export function ChatGPTConnectionRow({
         />
       ) : null}
       {pendingDisconnectAccount ? (
-        <SettingsConfirmDialog
+        <ConfirmDialog
           title={`Disconnect ${codexAccountTitle(pendingDisconnectAccount)}?`}
           description="Codex runs will stop using this ChatGPT account."
           confirmLabel="Disconnect"

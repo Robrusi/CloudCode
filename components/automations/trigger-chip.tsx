@@ -30,6 +30,15 @@ type LinearUser = { email: string; id: string; name: string }
 
 const ANY_VALUE = ""
 
+function keepSelectedOption(
+  options: MenuSelectOption[],
+  value: string,
+  fallbackLabel: string
+) {
+  if (!value || options.some((option) => option.value === value)) return options
+  return [{ label: fallbackLabel, value }, ...options]
+}
+
 function TriggerPopover({
   children,
   label,
@@ -210,7 +219,7 @@ export function LinearTriggerChip({
   const [loadError, setLoadError] = useState("")
 
   useEffect(() => {
-    if (!open || teams !== null) return
+    if (teams !== null) return
     let cancelled = false
     void fetchJson<{ teams: LinearTeam[]; users: LinearUser[] }>(
       "/api/integrations/linear/teams",
@@ -237,40 +246,131 @@ export function LinearTriggerChip({
     return () => {
       cancelled = true
     }
-  }, [open, teams])
+  }, [teams])
+
+  const selectedTeam = teams?.find((team) => team.id === trigger.teamId)
+  const selectedAssignee = users?.find((user) => user.id === trigger.assigneeId)
 
   const scopedTeams = trigger.teamId
     ? (teams ?? []).filter((team) => team.id === trigger.teamId)
     : (teams ?? [])
-  const labelOptions: MenuSelectOption[] = scopedTeams.flatMap((team) =>
+  const selectedLabel = scopedTeams
+    .flatMap((team) => team.labels)
+    .find((label) => label.id === trigger.labelId)
+  const selectedState = scopedTeams
+    .flatMap((team) => team.states)
+    .find((state) => state.id === trigger.stateId)
+  const teamOptions = keepSelectedOption(
+    [
+      { label: "Any team", value: ANY_VALUE },
+      ...(teams ?? []).map((team) => ({
+        label: team.name,
+        value: team.id,
+      })),
+    ],
+    trigger.teamId,
+    trigger.teamName || (teams === null ? "Loading team…" : "Unavailable team")
+  )
+  const rawLabelOptions: MenuSelectOption[] = scopedTeams.flatMap((team) =>
     team.labels.map((label) => ({
       label: trigger.teamId ? label.name : `${team.key} · ${label.name}`,
       value: label.id,
     }))
   )
-  const stateOptions: MenuSelectOption[] = [
-    { label: "Any status", value: ANY_VALUE },
-    ...scopedTeams.flatMap((team) =>
-      team.states.map((state) => ({
-        label: trigger.teamId ? state.name : `${team.key} · ${state.name}`,
-        value: state.id,
-      }))
-    ),
-  ]
+  const labelOptions = keepSelectedOption(
+    rawLabelOptions.length > 0
+      ? rawLabelOptions
+      : [
+          {
+            label: teams === null ? "Loading labels…" : "No labels found",
+            value: ANY_VALUE,
+          },
+        ],
+    trigger.labelId,
+    trigger.labelName ||
+      (teams === null ? "Loading label…" : "Unavailable label")
+  )
+  const stateOptions = keepSelectedOption(
+    [
+      { label: "Any status", value: ANY_VALUE },
+      ...scopedTeams.flatMap((team) =>
+        team.states.map((state) => ({
+          label: trigger.teamId ? state.name : `${team.key} · ${state.name}`,
+          value: state.id,
+        }))
+      ),
+    ],
+    trigger.stateId,
+    trigger.stateName ||
+      (teams === null ? "Loading status…" : "Unavailable status")
+  )
+  const personOptions = keepSelectedOption(
+    users === null
+      ? [{ label: "Loading people…", value: ANY_VALUE }]
+      : users.length > 0
+        ? users.map((user) => ({
+            label: `${user.name} (${user.email})`,
+            value: user.id,
+          }))
+        : [{ label: "No people found", value: ANY_VALUE }],
+    trigger.assigneeId,
+    trigger.assigneeName ||
+      (users === null ? "Loading person…" : "Unavailable person")
+  )
+
+  // Older automation rows may have only stable IDs. Once the catalog loads,
+  // hydrate their display metadata so this edit also repairs the saved row.
+  useEffect(() => {
+    if (teams === null || users === null) return
+    const resolved = {
+      assigneeName: trigger.assigneeId
+        ? (selectedAssignee?.name ?? trigger.assigneeName)
+        : "",
+      labelName: trigger.labelId
+        ? (selectedLabel?.name ?? trigger.labelName)
+        : "",
+      stateName: trigger.stateId
+        ? (selectedState?.name ?? trigger.stateName)
+        : "",
+      teamName: trigger.teamId ? (selectedTeam?.name ?? trigger.teamName) : "",
+    }
+    if (
+      resolved.assigneeName === trigger.assigneeName &&
+      resolved.labelName === trigger.labelName &&
+      resolved.stateName === trigger.stateName &&
+      resolved.teamName === trigger.teamName
+    ) {
+      return
+    }
+    onChange({ ...trigger, ...resolved })
+  }, [
+    onChange,
+    selectedAssignee,
+    selectedLabel,
+    selectedState,
+    selectedTeam,
+    teams,
+    trigger,
+    users,
+  ])
+
+  const assigneeName = selectedAssignee?.name ?? trigger.assigneeName
+  const labelName = selectedLabel?.name ?? trigger.labelName
+  const stateName = selectedState?.name ?? trigger.stateName
 
   const label =
     trigger.event === "issueCreated"
       ? "On new issue"
       : trigger.event === "issueAssigned"
-        ? trigger.assigneeName
-          ? `On assigned to ${trigger.assigneeName}`
+        ? assigneeName
+          ? `On assigned to ${assigneeName}`
           : "On issue assigned"
         : trigger.event === "labelAdded"
-          ? trigger.labelName
-            ? `On label “${trigger.labelName}”`
+          ? labelName
+            ? `On label “${labelName}”`
             : "On label added"
-          : trigger.stateName
-            ? `On status → ${trigger.stateName}`
+          : stateName
+            ? `On status → ${stateName}`
             : "On status change"
 
   return (
@@ -305,13 +405,7 @@ export function LinearTriggerChip({
       <MenuSelect
         ariaLabel="Linear team"
         value={trigger.teamId}
-        options={[
-          { label: "Any team", value: ANY_VALUE },
-          ...(teams ?? []).map((team) => ({
-            label: team.name,
-            value: team.id,
-          })),
-        ]}
+        options={teamOptions}
         onChange={(teamId) =>
           onChange({
             ...trigger,
@@ -328,11 +422,7 @@ export function LinearTriggerChip({
         <MenuSelect
           ariaLabel="Label"
           value={trigger.labelId}
-          options={
-            labelOptions.length > 0
-              ? labelOptions
-              : [{ label: "No labels found", value: ANY_VALUE }]
-          }
+          options={labelOptions}
           onChange={(labelId) =>
             onChange({
               ...trigger,
@@ -348,16 +438,7 @@ export function LinearTriggerChip({
         <MenuSelect
           ariaLabel="Person"
           value={trigger.assigneeId}
-          options={
-            users === null
-              ? [{ label: "Loading people…", value: ANY_VALUE }]
-              : users.length > 0
-                ? users.map((user) => ({
-                    label: `${user.name} (${user.email})`,
-                    value: user.id,
-                  }))
-                : [{ label: "No people found", value: ANY_VALUE }]
-          }
+          options={personOptions}
           onChange={(assigneeId) =>
             onChange({
               ...trigger,

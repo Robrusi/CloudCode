@@ -284,13 +284,14 @@ export function automationTriggerLabel(automation: AutomationRecord) {
     return `On new issue${scope}`
   }
   if (trigger.event === "issueAssigned") {
-    const assignee = trigger.assigneeName || trigger.assigneeId
-    return assignee
-      ? `On assigned to ${assignee}${scope}`
+    return trigger.assigneeName
+      ? `On assigned to ${trigger.assigneeName}${scope}`
       : `On issue assigned${scope}`
   }
   if (trigger.event === "labelAdded") {
-    return `On label “${trigger.labelName || trigger.labelId}”${scope}`
+    return trigger.labelName
+      ? `On label “${trigger.labelName}”${scope}`
+      : `On label added${scope}`
   }
   return trigger.stateName
     ? `On status → ${trigger.stateName}${scope}`
