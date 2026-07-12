@@ -17,7 +17,10 @@ import {
   parseIntegrationMessage,
 } from "@/lib/integrations/keywords"
 import { linearAgentSessionThreadId } from "@/lib/integrations/linear-threads"
-import { normalizeSlackDmThreadId } from "@/lib/integrations/slack-threads"
+import {
+  normalizeSlackDmThreadId,
+  slackThreadContextFromMessages,
+} from "@/lib/integrations/slack-threads"
 import {
   currentSlackWebhookTeamId,
   isSlackEventFromCurrentApp,
@@ -111,6 +114,7 @@ function externalThreadContext(
 async function chatEventPayload(
   provider: "slack" | "linear",
   adapters: { linear: LinearAdapter | null; slack: SlackAdapter | null },
+  thread: Thread,
   message: Message,
   kind: "mention" | "follow_up",
   parsed: { presetOverride?: string; repoOverride?: string; text: string },
@@ -135,6 +139,15 @@ async function chatEventPayload(
     payload.authorEmail = await slackAuthorEmail(
       adapters.slack,
       message.author.userId
+    )
+    const threadMessages = await adapters.slack
+      ?.fetchMessages(thread.id, { direction: "backward", limit: 50 })
+      .then((result) => result.messages)
+      .catch(() => [])
+    payload.slackThreadContext = slackThreadContextFromMessages(
+      threadMessages ?? [],
+      message.id,
+      adapters.slack?.botUserId
     )
     return payload
   }
@@ -191,7 +204,8 @@ export function registerIntegrationHandlers(
 
     const parsed = parseIntegrationMessage(
       message.text,
-      INTEGRATIONS_BOT_USERNAME
+      INTEGRATIONS_BOT_USERNAME,
+      provider === "slack" ? adapters.slack?.botUserId : undefined
     )
     const threadContext = externalThreadContext(
       provider,
@@ -242,6 +256,7 @@ export function registerIntegrationHandlers(
     const payload = await chatEventPayload(
       provider,
       adapters,
+      thread,
       message,
       kind,
       parsed,

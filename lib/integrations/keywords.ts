@@ -8,6 +8,7 @@
  * that merely contains the word "help" never triggers anything. */
 
 import { canonicalGitHubRepoUrl } from "@/lib/github/repo"
+import { stripSlackBotMention } from "@/lib/integrations/slack-threads"
 
 const REPO_KEYWORD_RE = /(?:^|\s)!repo=(\S+)/i
 // Preset names may contain spaces; accept a quoted value or a bare token.
@@ -37,9 +38,13 @@ function repoUrlFromKeyword(value: string): string | undefined {
  * the clean instruction text plus any parsed controls. */
 export function parseIntegrationMessage(
   rawText: string,
-  botUserName: string
+  botUserName: string,
+  botUserId?: string
 ): ParsedIntegrationMessage {
   let text = rawText.trim()
+
+  // Slack uses the bot's opaque user ID in native mention markup.
+  text = stripSlackBotMention(text, botUserId)
 
   // The mention can appear anywhere; remove the @botname token itself.
   const mentionRe = new RegExp(

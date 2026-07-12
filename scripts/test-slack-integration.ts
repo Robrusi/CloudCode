@@ -1,8 +1,12 @@
 import assert from "node:assert/strict"
 
+import { chatEventPrompt } from "../lib/integrations/events"
+import { parseIntegrationMessage } from "../lib/integrations/keywords"
 import {
   normalizeSlackDmThreadId,
+  slackThreadContextFromMessages,
   slackThreadParts,
+  stripSlackBotMention,
 } from "../lib/integrations/slack-threads"
 import {
   currentSlackWebhookTeamId,
@@ -43,6 +47,71 @@ assert.equal(
 assert.throws(() => slackThreadParts("linear:D123:1712345678.123456"))
 assert.throws(() => slackThreadParts("slack::1712345678.123456"))
 assert.throws(() => slackThreadParts("slack:D123:1712345678.123456:extra"))
+
+assert.equal(
+  stripSlackBotMention("<@U0BG3L6054P> investigate this", "U0BG3L6054P"),
+  "  investigate this"
+)
+assert.deepEqual(
+  parseIntegrationMessage(
+    "<@U0BG3L6054P> check with <@UOTHER>",
+    "cloudcode",
+    "U0BG3L6054P"
+  ),
+  {
+    control: null,
+    presetOverride: undefined,
+    repoOverride: undefined,
+    text: "check with <@UOTHER>",
+  }
+)
+
+const slackThreadContext = slackThreadContextFromMessages(
+  [
+    {
+      author: { fullName: "Alice", userName: "alice" },
+      id: "1.0",
+      text: "Deployments fail after reconnects.",
+    },
+    {
+      author: { fullName: "", userName: "bob" },
+      id: "2.0",
+      text: "It looks related to session recovery.",
+    },
+    {
+      author: { fullName: "Alice", userName: "alice" },
+      id: "3.0",
+      text: "<@U0BG3L6054P> please investigate",
+    },
+  ],
+  "3.0",
+  "U0BG3L6054P"
+)
+assert.deepEqual(slackThreadContext, [
+  { authorName: "Alice", text: "Deployments fail after reconnects." },
+  { authorName: "bob", text: "It looks related to session recovery." },
+])
+assert.equal(
+  chatEventPrompt({
+    authorName: "Alice",
+    externalThreadId: "slack:C123:1.0",
+    kind: "mention",
+    messageId: "3.0",
+    provider: "slack",
+    slackThreadContext,
+    text: "please investigate",
+  }),
+  [
+    "please investigate",
+    "",
+    "---",
+    "Requested by Alice from Slack.",
+    "",
+    "Slack thread before this request:",
+    "[Alice] Deployments fail after reconnects.",
+    "[bob] It looks related to session recovery.",
+  ].join("\n")
+)
 
 const webhookRequest = new Request("https://cloudcode.test/api/slack/webhook", {
   body: JSON.stringify({
