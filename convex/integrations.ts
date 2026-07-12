@@ -30,11 +30,13 @@ import { assertModelSupportsThinking } from "@/lib/chat/options"
 import { canonicalGitHubRepoUrl } from "@/lib/github/repo"
 import { linearAgentSessionThreadParts } from "@/lib/integrations/linear-threads"
 
-// Session defaults for runs started from Slack/Linear. Follow-up runs on an
-// existing bridge reuse the thread's previous run options instead.
+// Session defaults for runs started from Slack/Linear. Integrations have no
+// branch picker, so new sessions stay on the selected base branch; follow-ups
+// reuse an explicit mode from the thread or latest run when one exists.
 const INTEGRATION_RUN_MODEL = "gpt-5.5" as const
 const INTEGRATION_RUN_EFFORT = "medium" as const
 const INTEGRATION_RUN_SPEED = "standard" as const
+const INTEGRATION_RUN_BRANCH_MODE = "base" as const
 
 const THREAD_TITLE_MAX_LENGTH = 120
 const PENDING_MESSAGES_MAX = 20
@@ -878,7 +880,10 @@ export const workerCreateSessionRun = mutation({
       const latest = continuation.latest
       const created = await insertFactoryRunRecords(ctx, {
         baseBranch: thread.baseBranch ?? latest?.baseBranch,
-        branchMode: thread.branchMode ?? latest?.branchMode,
+        branchMode:
+          thread.branchMode ??
+          latest?.branchMode ??
+          INTEGRATION_RUN_BRANCH_MODE,
         branchName: latest?.branchName,
         codexThreadId: continuation.codexThreadId,
         logMessage: QUEUED_LOG_MESSAGE,
@@ -952,6 +957,7 @@ export const workerCreateSessionRun = mutation({
     const baseBranch = installation.defaultBaseBranch?.trim() || undefined
     const threadId = await ctx.db.insert("threads", {
       ...(baseBranch ? { baseBranch } : {}),
+      branchMode: INTEGRATION_RUN_BRANCH_MODE,
       createdAt: now,
       model: sessionModel,
       repoUrl,
@@ -962,6 +968,7 @@ export const workerCreateSessionRun = mutation({
     })
     const created = await insertFactoryRunRecords(ctx, {
       baseBranch,
+      branchMode: INTEGRATION_RUN_BRANCH_MODE,
       logMessage: QUEUED_LOG_MESSAGE,
       model: sessionModel,
       profile: auth.profile,
@@ -1157,7 +1164,8 @@ export const workerDrainPendingMessages = mutation({
 
     const created = await insertFactoryRunRecords(ctx, {
       baseBranch: thread.baseBranch ?? latest?.baseBranch,
-      branchMode: thread.branchMode ?? latest?.branchMode,
+      branchMode:
+        thread.branchMode ?? latest?.branchMode ?? INTEGRATION_RUN_BRANCH_MODE,
       branchName: latest?.branchName,
       codexThreadId: continuation.codexThreadId,
       logMessage: QUEUED_LOG_MESSAGE,
