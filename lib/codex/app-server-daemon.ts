@@ -80,6 +80,18 @@ export type CodexAppServerDaemonEvent =
       type: "result"
     }
 
+export function codexAppServerDaemonEventIsTurnActivity(
+  event: CodexAppServerDaemonEvent
+) {
+  return (
+    event.type === "thread" ||
+    event.type === "notification" ||
+    event.type === "result" ||
+    event.type === "authRefreshRequest" ||
+    event.type === "mcpStatus"
+  )
+}
+
 export function codexAppServerStdioCommand({
   env,
   paths,

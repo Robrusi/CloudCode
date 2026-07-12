@@ -51,7 +51,10 @@ import {
 } from "@/lib/codex/app-server-daemon"
 import { appServerThreadParams } from "@/lib/codex/app-server-run-params"
 import { codexAppServerStderrLogForLine } from "@/lib/codex/app-server-stderr"
-import { redactCodexAppServerAuthPayloads } from "@/lib/daytona/codex-app-server-run"
+import {
+  codexAppServerFailureMessage,
+  redactCodexAppServerAuthPayloads,
+} from "@/lib/daytona/codex-app-server-run"
 import { replayMissingDaytonaCommandOutput } from "@/lib/daytona/sandbox-command"
 import type { RunCodexInSandboxResult } from "@/lib/daytona/codex-agent-types"
 import {
@@ -316,6 +319,14 @@ assert.ok(
     "isCodexRefreshTokenReusedRunResult({"
   )
 )
+assert.ok(!daytonaCodexAppServerRunSource.includes("const safeStdout"))
+const boundedDaemonFailure = codexAppServerFailureMessage(
+  "Codex app-server daemon did not return a turn result.",
+  `${"protocol-noise ".repeat(1_000)} rt_worker-secret`
+)
+assert.ok(boundedDaemonFailure.includes("earlier daemon diagnostics omitted"))
+assert.ok(boundedDaemonFailure.length < 8_100)
+assert.ok(!boundedDaemonFailure.includes("rt_worker-secret"))
 const redactedDaemonOutput = redactCodexAppServerAuthPayloads(
   JSON.stringify({
     error: "refresh failed",

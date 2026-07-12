@@ -5,6 +5,7 @@ import type { Sandbox } from "@daytona/sdk"
 import {
   codexAppServerDaemonClientCommand,
   codexAppServerDaemonCommand,
+  codexAppServerDaemonEventIsTurnActivity,
   codexAppServerDaemonPaths,
   parseCodexAppServerDaemonEventLine,
   type CodexAppServerDaemonEvent,
@@ -39,6 +40,7 @@ import type { SandboxPresetEnvVar } from "@/lib/sandbox/env"
 
 const CODEX_APP_SERVER_LOCAL_READY_TIMEOUT_MS = 5_000
 const CODEX_APP_SERVER_REQUEST_TIMEOUT_MS = 45_000
+const MAX_RETAINED_DAEMON_EVENTS = 32
 
 type CodexAppServerDaemonLog = {
   detail?: string
@@ -271,18 +273,41 @@ export async function requestCodexAppServerDaemon({
 }) {
   const payloadPath = codexAppServerDaemonRequestPath(paths, label)
   const authOutputPath = codexAppServerDaemonRequestPath(paths, `${label}-auth`)
+  const resultOutputPath = codexAppServerDaemonRequestPath(
+    paths,
+    `${label}-result`
+  )
   await writeDaytonaTextFile(
     sandbox,
     payloadPath,
-    JSON.stringify({ ...payload, authOutputPath })
+    JSON.stringify({
+      ...payload,
+      authOutputPath,
+      resultOutputPath,
+    })
   )
 
   let buffer = ""
   const events: CodexAppServerDaemonEvent[] = []
+  let turnActivitySeen = false
   const emitLine = (line: string) => {
     const event = parseCodexAppServerDaemonEventLine(line)
     if (!event) return
-    events.push(event)
+    if (codexAppServerDaemonEventIsTurnActivity(event)) {
+      turnActivitySeen = true
+    }
+    // High-volume notifications, stderr, setup, and MCP payloads are handled
+    // live by onEvent. Retain only the control events needed after the command
+    // exits so long turns cannot grow this array without bound.
+    if (
+      event.type === "error" ||
+      event.type === "health" ||
+      event.type === "result" ||
+      event.type === "thread"
+    ) {
+      if (events.length >= MAX_RETAINED_DAEMON_EVENTS) events.shift()
+      events.push(event)
+    }
     void onEvent?.(event)
   }
   const flush = () => {
@@ -314,17 +339,22 @@ export async function requestCodexAppServerDaemon({
       }
     )
     flush()
-    const updatedAuthJson = await readDaytonaTextFile(
-      sandbox,
-      authOutputPath
-    ).catch(() => undefined)
-    return { events, result, updatedAuthJson }
+    const [updatedAuthJson, serializedResult] = await Promise.all([
+      readDaytonaTextFile(sandbox, authOutputPath).catch(() => undefined),
+      readDaytonaTextFile(sandbox, resultOutputPath).catch(() => undefined),
+    ])
+    if (!events.some((event) => event.type === "result") && serializedResult) {
+      emitLine(serializedResult)
+    }
+    return { events, result, turnActivitySeen, updatedAuthJson }
   } finally {
     // No signal here: after an abort the payload file should still be removed,
     // and an aborted signal would make this cleanup throw before running.
     await runDaytonaCommand(
       sandbox,
-      `rm -f ${shellQuote(payloadPath)} ${shellQuote(authOutputPath)}`,
+      `rm -f ${shellQuote(payloadPath)} ${shellQuote(
+        authOutputPath
+      )} ${shellQuote(resultOutputPath)}`,
       {
         timeoutMs: 10_000,
       }

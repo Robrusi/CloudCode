@@ -1,11 +1,11 @@
-export const CODEX_APP_SERVER_DAEMON_VERSION = "9"
+export const CODEX_APP_SERVER_DAEMON_VERSION = "10"
 
 export const CODEX_APP_SERVER_DAEMON_SCRIPT = String.raw`import { createHash } from "node:crypto"
 import { spawn } from "node:child_process"
 import fs from "node:fs"
 import net from "node:net"
 
-const VERSION = "9"
+const VERSION = "10"
 const REQUEST_TIMEOUT_MS = Number(process.env.CLOUDCODE_APP_SERVER_REQUEST_TIMEOUT_MS || "45000")
 const AUTH_REFRESH_RESPONSE_TIMEOUT_MS = Number(process.env.CLOUDCODE_AUTH_REFRESH_RESPONSE_TIMEOUT_MS || "120000")
 const SOCKET_PATH = requiredEnv("CLOUDCODE_DAEMON_SOCKET")
@@ -59,7 +59,7 @@ function daemonFilePath(value) {
   const filePath = stringValue(value)
   if (!filePath) return undefined
   if (filePath.includes("\0") || !filePath.startsWith(DAEMON_DIR + "/")) {
-    throw new Error("Codex app-server daemon auth output path is invalid.")
+    throw new Error("Codex app-server daemon private output path is invalid.")
   }
   return filePath
 }
@@ -74,9 +74,9 @@ function daemonDirectoryPath(value) {
   return normalized
 }
 
-function writeAuthOutput(filePath, authJson) {
+function writePrivateOutput(filePath, value) {
   if (!filePath) return
-  fs.writeFileSync(filePath, authJson, {
+  fs.writeFileSync(filePath, value, {
     encoding: "utf8",
     flag: "w",
     mode: 0o600,
@@ -869,6 +869,12 @@ async function runTurn(payload, socket) {
     throw new Error("Codex app-server daemon run payload is missing authJson.")
   }
   const auth = ensureAuthJson(authJson, authHash)
+  const resultOutputPath = daemonFilePath(payload.resultOutputPath)
+  if (!resultOutputPath) {
+    throw new Error(
+      "Codex app-server daemon run payload is missing resultOutputPath."
+    )
+  }
   await ensureCodexInitialized(authHash)
 
   const run = {
@@ -955,14 +961,16 @@ async function runTurn(payload, socket) {
 
     const completedTurn = run.completedTurn || alreadyCompleted || {}
     const status = stringValue(completedTurn.status) || "failed"
-    writeAuthOutput(daemonFilePath(payload.authOutputPath), run.authJson)
-    writeLine(socket, {
+    const result = {
       finalAssistantText: agentMessageFromTurn(completedTurn),
       status,
       threadId: run.threadId,
       turnError: turnErrorMessage(completedTurn),
       type: "result",
-    })
+    }
+    writePrivateOutput(daemonFilePath(payload.authOutputPath), run.authJson)
+    writePrivateOutput(resultOutputPath, JSON.stringify(result))
+    writeLine(socket, result)
   } finally {
     socket.off("close", socketClosed)
     if (activeRun === run) activeRun = null

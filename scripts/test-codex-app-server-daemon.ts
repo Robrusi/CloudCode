@@ -251,9 +251,13 @@ async function requestDaemon({
     root,
     `auth-output-${Date.now()}-${Math.random()}.json`
   )
+  const resultOutputPath = join(
+    root,
+    `result-output-${Date.now()}-${Math.random()}.json`
+  )
   await writeFile(
     payloadPath,
-    JSON.stringify({ ...payload, authOutputPath }),
+    JSON.stringify({ ...payload, authOutputPath, resultOutputPath }),
     "utf8"
   )
 
@@ -287,8 +291,11 @@ async function requestDaemon({
   const updatedAuthJson = await readFile(authOutputPath, "utf8").catch(
     () => undefined
   )
+  const persistedResult = await readFile(resultOutputPath, "utf8")
+    .then((value) => JSON.parse(value) as Record<string, unknown>)
+    .catch(() => undefined)
 
-  return { ...result, events, updatedAuthJson }
+  return { ...result, events, persistedResult, updatedAuthJson }
 }
 
 function runPayload({
@@ -502,6 +509,20 @@ try {
     eventLines(firstRun.events)
   )
   assert.equal(resultEvent(firstRun.events)?.updatedAuthJson, undefined)
+  const firstPersistedResult = firstRun.persistedResult
+  assert.ok(firstPersistedResult)
+  assert.deepEqual(firstPersistedResult, resultEvent(firstRun.events))
+  assert.equal(
+    resultEvent(firstRun.events.filter((event) => event.type !== "result")),
+    undefined
+  )
+  assert.deepEqual(
+    resultEvent([
+      ...firstRun.events.filter((event) => event.type !== "result"),
+      firstPersistedResult,
+    ]),
+    resultEvent(firstRun.events)
+  )
   assert.equal(firstRun.updatedAuthJson, firstAuth)
   assert.ok(!firstRun.stdout.includes(firstAuth), firstRun.stdout)
   assert.ok(!firstRun.stdout.includes("access-one"), firstRun.stdout)
@@ -587,14 +608,15 @@ try {
   const hangingPayloadPath = join(root, "payload-hanging-run.json")
   await writeFile(
     hangingPayloadPath,
-    JSON.stringify(
-      runPayload({
+    JSON.stringify({
+      ...runPayload({
         authHash: "auth-two",
         authJson: secondAuth,
         codexThreadIdToResume: "thread-1",
         text: "hang",
-      })
-    ),
+      }),
+      resultOutputPath: join(root, "hanging-result.json"),
+    }),
     "utf8"
   )
   const hangingClient = spawn(

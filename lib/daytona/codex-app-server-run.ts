@@ -15,6 +15,7 @@ import { isWorkerRunCanceledError } from "@/lib/codex/run-cancel-error"
 import { isCodexRefreshTokenReusedRunResult } from "@/lib/codex/auth-errors"
 import { normalizeCodexUsageLimitError } from "@/lib/codex/usage-errors"
 import {
+  codexAppServerDaemonEventIsTurnActivity,
   codexAppServerNotificationMatchesActiveRoute,
   codexAppServerNotificationRoute,
   isCodexAppServerDaemonStaleError,
@@ -93,13 +94,26 @@ type CodexAppServerDaemonResponse = Awaited<
   ReturnType<typeof requestCodexAppServerDaemon>
 >
 
-function codexAppServerTurnActivityEvent(event: CodexAppServerDaemonEvent) {
-  return (
-    event.type === "thread" ||
-    event.type === "notification" ||
-    event.type === "result" ||
-    event.type === "authRefreshRequest" ||
-    event.type === "mcpStatus"
+const DAEMON_DIAGNOSTIC_MAX_CHARS = 8_000
+
+function boundedDaemonDiagnostic(value: string) {
+  if (value.length <= DAEMON_DIAGNOSTIC_MAX_CHARS) return value
+  const prefix = "[earlier daemon diagnostics omitted]\n"
+  return `${prefix}${value.slice(
+    -(DAEMON_DIAGNOSTIC_MAX_CHARS - prefix.length)
+  )}`
+}
+
+function appendDaemonDiagnostic(current: string, value: string) {
+  return boundedDaemonDiagnostic(`${current}${value}`)
+}
+
+export function codexAppServerFailureMessage(message: string, stderr: string) {
+  const safeStderr = boundedDaemonDiagnostic(
+    redactCodexAppServerAuthPayloads(stderr.trim())
+  )
+  return normalizeCodexUsageLimitError(
+    [message, safeStderr].filter(Boolean).join("\n\n")
   )
 }
 
@@ -112,7 +126,7 @@ function codexAppServerTurnActivityEvent(event: CodexAppServerDaemonEvent) {
 function codexAppServerDaemonUnavailable(
   response: CodexAppServerDaemonResponse
 ) {
-  if (response.events.some(codexAppServerTurnActivityEvent)) return false
+  if (response.turnActivitySeen) return false
   if (response.events.some(isCodexAppServerDaemonStaleError)) return true
   return response.result.exitCode !== 0
 }
@@ -223,8 +237,19 @@ export async function runCodexViaAppServer({
 
     let turnActivitySeen = false
     const handleDaemonEvent = (event: CodexAppServerDaemonEvent) => {
-      if (codexAppServerTurnActivityEvent(event)) turnActivitySeen = true
-      stdout += `${redactCodexAppServerAuthPayloads(JSON.stringify(event))}\n`
+      if (codexAppServerDaemonEventIsTurnActivity(event)) {
+        turnActivitySeen = true
+      }
+      // Notifications are high-volume protocol traffic, not command output.
+      // Retaining them made long failed turns consume unbounded memory and
+      // leaked the entire NDJSON stream into the user-facing error. Keep only
+      // bounded terminal diagnostics for compatibility with error classifiers.
+      if (event.type === "error" || event.type === "result") {
+        stdout = appendDaemonDiagnostic(
+          stdout,
+          `${redactCodexAppServerAuthPayloads(JSON.stringify(event))}\n`
+        )
+      }
       switch (event.type) {
         case "thread": {
           activeThreadId = event.threadId
@@ -265,7 +290,7 @@ export async function runCodexViaAppServer({
           return
         }
         case "stderr":
-          stderr += `${event.line}\n`
+          stderr = appendDaemonDiagnostic(stderr, `${event.line}\n`)
           emitDaemonStderr(event.line)
           return
         case "setup":
@@ -414,7 +439,7 @@ export async function runCodexViaAppServer({
     updatedAuthJson = daemonResponse.updatedAuthJson
 
     if (result.stderr) {
-      stderr += result.stderr
+      stderr = appendDaemonDiagnostic(stderr, result.stderr)
     }
     if (result.exitCode !== 0 && !daemonError) {
       daemonError =
@@ -474,9 +499,8 @@ export async function runCodexViaAppServer({
       updatedAuthJson,
     }
   } catch (error) {
-    // Cancellation must reach the worker unchanged: wrapping would both lose
-    // the WorkerRunCanceledError type and bloat the error with the full
-    // daemon event stream captured in stdout.
+    // Cancellation must reach the worker unchanged so the worker can preserve
+    // the cancellation state instead of recording an ordinary failed run.
     if (isWorkerRunCanceledError(error) || input.signal?.aborted) throw error
     const errorUpdatedAuthJson =
       error instanceof CodexAppServerRunError
@@ -489,16 +513,11 @@ export async function runCodexViaAppServer({
           ? error.message
           : "Codex app-server run failed."
     )
-    const safeStdout = redactCodexAppServerAuthPayloads(stdout.trim())
-    const safeStderr = redactCodexAppServerAuthPayloads(stderr.trim())
-
-    if (safeStdout || safeStderr) {
-      throw new CodexAppServerRunError(
-        normalizeCodexUsageLimitError(
-          [message, safeStdout, safeStderr].filter(Boolean).join("\n\n")
-        ),
-        { updatedAuthJson: errorUpdatedAuthJson }
-      )
+    const failureMessage = codexAppServerFailureMessage(message, stderr)
+    if (failureMessage !== message) {
+      throw new CodexAppServerRunError(failureMessage, {
+        updatedAuthJson: errorUpdatedAuthJson,
+      })
     }
     if (errorUpdatedAuthJson) {
       throw new CodexAppServerRunError(message, {
