@@ -242,6 +242,10 @@ export default defineSchema({
     resumeContext: v.optional(v.string()),
     reviewCommentUrl: v.optional(v.string()),
     reviewId: v.optional(v.id("reviews")),
+    // Stable id of the parent review-run task. A Trigger retry reuses this
+    // key so it can resume a run whose creation response was lost instead of
+    // creating another sandbox and comment.
+    reviewRequestKey: v.optional(v.string()),
     rootThreadId: v.optional(v.id("threads")),
     sandboxId: v.optional(v.string()),
     sandboxPresetId: v.optional(v.id("sandboxPresets")),
@@ -262,6 +266,7 @@ export default defineSchema({
     .index("by_parent_thread_status", ["parentThreadId", "status"])
     .index("by_review_created", ["reviewId", "createdAt"])
     .index("by_review_pr", ["reviewId", "prNumber", "createdAt"])
+    .index("by_review_request", ["reviewId", "reviewRequestKey"])
     .index("by_thread_updated", ["threadId", "updatedAt"])
     .index("by_thread_status_updated", ["threadId", "status", "updatedAt"])
     .index("by_ephemeral_sandbox_state", [

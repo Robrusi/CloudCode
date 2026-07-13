@@ -33,6 +33,15 @@ const GITHUB_ACCESS_ERROR =
   "Install the GitHub App on this repository and authorize your GitHub user; posting the review comment requires repository access."
 
 const COMMENT_POST_ATTEMPTS = 3
+const REVIEW_RUN_MAX_ATTEMPTS = 3
+
+class ReviewExecutionError extends Error {
+  override name = "ReviewExecutionError"
+
+  constructor(error: unknown) {
+    super(errorMessage(error), { cause: error })
+  }
+}
 
 type ReviewMentionComment = {
   authorLogin?: string
@@ -219,11 +228,17 @@ export const reviewDispatch = task({
 // + thread creation in Convex, the regular cloudcode-run pipeline, and then
 // posts the report as a comment on the pull request.
 export const reviewRun = task({
+  catchError: ({ error }: { error: unknown }) =>
+    error instanceof ReviewExecutionError ? { skipRetrying: true } : undefined,
   id: "review-run",
   retry: {
-    maxAttempts: 1,
+    factor: 2,
+    maxAttempts: REVIEW_RUN_MAX_ATTEMPTS,
+    maxTimeoutInMs: 10_000,
+    minTimeoutInMs: 1_000,
+    randomize: true,
   },
-  run: async (payload: ReviewRunPayload) => {
+  run: async (payload: ReviewRunPayload, { ctx }) => {
     const client = workerConvexClient()
     const workerSecret = getWorkerSecret()
 
@@ -266,6 +281,7 @@ export const reviewRun = task({
     }
 
     let created: {
+      resumed: boolean
       runId: Id<"codexRuns">
       threadId: Id<"threads">
       userId: Id<"users">
@@ -350,6 +366,7 @@ export const reviewRun = task({
         notesAccessToken: randomUUID(),
         pr,
         reviewId: payload.reviewId,
+        requestKey: ctx.run.id,
         workerSecret,
       })
       if (!result.ok) {
@@ -375,54 +392,79 @@ export const reviewRun = task({
       }
       created = result
 
-      // 👀 on GitHub the moment the review is actually underway: on the
-      // triggering comment for mentions, on the PR itself otherwise.
-      // Best-effort — a failed reaction never blocks the review.
-      await (
-        payload.comment
-          ? addIssueCommentReaction({
-              commentId: payload.comment.id,
-              content: "eyes",
-              repo,
-              token: credential.token,
-            })
-          : addPullRequestReaction({
-              content: "eyes",
-              number: pr.number,
-              repo,
-              token: credential.token,
-            })
-      ).catch((reactionError) => {
-        console.warn("Unable to add the eyes reaction.", reactionError)
-      })
+      if (!created.resumed) {
+        // 👀 on GitHub the moment the review is actually underway: on the
+        // triggering comment for mentions, on the PR itself otherwise.
+        // Best-effort — a failed reaction never blocks the review.
+        await (
+          payload.comment
+            ? addIssueCommentReaction({
+                commentId: payload.comment.id,
+                content: "eyes",
+                repo,
+                token: credential.token,
+              })
+            : addPullRequestReaction({
+                content: "eyes",
+                number: pr.number,
+                repo,
+                token: credential.token,
+              })
+        ).catch((reactionError) => {
+          console.warn("Unable to add the eyes reaction.", reactionError)
+        })
+      }
     } catch (error) {
-      await recordDispatchFailure(errorMessage(error))
+      // Setup and control-plane errors are safe to retry. Only count the
+      // terminal attempt so one transient outage cannot auto-disable a review.
+      if (ctx.attempt.number >= REVIEW_RUN_MAX_ATTEMPTS) {
+        await recordDispatchFailure(errorMessage(error))
+      }
       throw error
+    }
+
+    let outcome = created.resumed
+      ? await client.query(api.reviews.workerGetRunOutcome, {
+          runId: created.runId,
+          workerSecret,
+        })
+      : null
+    if (outcome?.reviewCommentUrl) {
+      return {
+        dispatched: true,
+        commented: true,
+        commentUrl: outcome.reviewCommentUrl,
+        runId: created.runId,
+      }
     }
 
     // From here the run and its pending assistant message exist; failures
     // must unwind through failWorkerRun so the thread is not left pending.
-    try {
-      await tasks.triggerAndWait<typeof cloudcodeRun>(
-        "cloudcode-run",
-        { runId: created.runId },
-        {
-          idempotencyKey: created.runId,
-          tags: [`user:${created.userId}`, `review:${payload.reviewId}`],
-        }
-      )
-    } catch (error) {
-      await failWorkerRun(client, created.runId, errorMessage(error)).catch(
-        (failError) => {
-          console.warn("Unable to mark review run failed.", failError)
-        }
-      )
-      throw error
+    if (outcome?.status !== "succeeded") {
+      try {
+        await tasks.triggerAndWait<typeof cloudcodeRun>(
+          "cloudcode-run",
+          { runId: created.runId },
+          {
+            idempotencyKey: created.runId,
+            tags: [`user:${created.userId}`, `review:${payload.reviewId}`],
+          }
+        )
+      } catch (error) {
+        await failWorkerRun(client, created.runId, errorMessage(error)).catch(
+          (failError) => {
+            console.warn("Unable to mark review run failed.", failError)
+          }
+        )
+        // Retrying an agent execution can spend another sandbox run and make
+        // side effects unpredictable. The child task owns its own retries.
+        throw new ReviewExecutionError(error)
+      }
     }
 
     // Convex is the source of truth for the outcome: cloudcode-run records
     // success/failure/cancellation there through the shared worker mutations.
-    const outcome = await client.query(api.reviews.workerGetRunOutcome, {
+    outcome = await client.query(api.reviews.workerGetRunOutcome, {
       runId: created.runId,
       workerSecret,
     })

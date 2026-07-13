@@ -397,6 +397,7 @@ export const workerCreateRun = mutation({
     notesAccessToken: v.string(),
     pr: reviewPullRequestArgs,
     reviewId: v.id("reviews"),
+    requestKey: v.string(),
     workerSecret: v.string(),
   },
   handler: async (ctx, args) => {
@@ -408,6 +409,34 @@ export const workerCreateRun = mutation({
     }
     if (!review.enabled && !args.manual) {
       return { ok: false as const, status: "disabled" as const }
+    }
+
+    // A Trigger task retry must continue the transaction it already created.
+    // This covers a lost Convex response as well as a retry after a later
+    // control-plane failure. Distinct manual requests still have distinct
+    // task ids and therefore remain intentional new reviews.
+    const requestedRun = await ctx.db
+      .query("codexRuns")
+      .withIndex("by_review_request", (q) =>
+        q.eq("reviewId", args.reviewId).eq("reviewRequestKey", args.requestKey)
+      )
+      .first()
+    if (requestedRun) {
+      if (
+        requestedRun.status === "failed" ||
+        requestedRun.status === "canceled" ||
+        requestedRun.status === "canceling"
+      ) {
+        return { ok: false as const, status: "duplicate" as const }
+      }
+
+      return {
+        ok: true as const,
+        resumed: true,
+        runId: requestedRun._id,
+        threadId: requestedRun.threadId,
+        userId: requestedRun.userId,
+      }
     }
 
     // Duplicate webhook deliveries (and opened + ready_for_review with an
@@ -534,6 +563,7 @@ export const workerCreateRun = mutation({
       reasoningEffort: review.reasoningEffort,
       repoUrl: review.repoUrl,
       reviewId: review._id,
+      reviewRequestKey: args.requestKey,
       sandboxPresetId,
       speed: review.speed,
       status: "queued",
@@ -576,6 +606,7 @@ export const workerCreateRun = mutation({
 
     return {
       ok: true as const,
+      resumed: false,
       runId,
       threadId,
       userId,
@@ -683,6 +714,7 @@ export const workerGetRunOutcome = query({
       content: message?.content ?? "",
       prNumber: run.prNumber,
       prUrl: run.prUrl,
+      reviewCommentUrl: run.reviewCommentUrl,
       reviewId: run.reviewId,
       status: run.status,
       threadId: run.threadId,
