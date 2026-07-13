@@ -2,7 +2,18 @@ packages:
   - .
 
 minimumReleaseAge: 10080
+minimumReleaseAgeIgnoreMissingTime: false
 trustPolicy: no-downgrade
+trustLockfile: false
+blockExoticSubdeps: true
+verifyDepsBeforeRun: error
+strictPeerDependencies: true
+peerDependencyRules:
+  allowedVersions:
+    # atmn intentionally uses Ink 6/React 19 but its nested CJS input still
+    # publishes the older peer ranges; scope the compatibility exception.
+    "ink-text-input@3.3.0>ink": "6"
+    "ink-text-input@3.3.0>react": "19"
 # semver@6.3.1 is a 2023 ReDoS-fix backport published without provenance after
 # semver 7.x gained it — a known-benign trust "downgrade" by publish date.
 trustPolicyExclude:
@@ -10,36 +21,34 @@ trustPolicyExclude:
   # c12@3, pulled by trigger.dev tooling, requires chokidar ^4.0.3; chokidar
   # 5 has provenance but is outside the declared compatible range.
   - chokidar
-  # react-doctor@0.4.0 pins effect v4 beta tooling; current react-doctor
-  # releases are still inside the 7-day minimumReleaseAge window.
+  # react-doctor@0.4.x pins effect v4 beta tooling; newer 0.x minors are
+  # potentially breaking updates and are reviewed separately.
   - effect
   - "@effect/platform-node-shared"
 
-# Postinstall scripts stay blocked (each verified unnecessary): esbuild,
-# @depot/cli, unrs-resolver, and msgpackr-extract all ship their native
-# binaries via platform-specific optional deps (the scripts are fallback
-# downloaders/compilers); @clerk/shared's script only prints a telemetry
-# notice; protobufjs's script only generates optional CLI artifacts.
-ignoredBuiltDependencies:
-  - esbuild
-  - protobufjs
-  - "@depot/cli"
-  - "@clerk/shared"
-  - unrs-resolver
-  - msgpackr-extract
+# Fail closed when a new dependency introduces an unreviewed install script.
+# Every current script is unnecessary: native packages ship platform-specific
+# optional dependencies, while the remaining scripts provide notices, demos,
+# optional CLI artifacts, or project setup that CloudCode does not use.
+strictDepBuilds: true
 
 # Security overrides for vulnerable transitive dependencies (pnpm audit).
 # Scoped by major version where multiple majors coexist in the tree.
 overrides:
   shell-quote: ^1.8.4 # GHSA-w7jw-789q-3m8p (critical) via @daytona/sdk
+  "esbuild@>=0.27.3 <0.29": ^0.28.1 # GHSA-g7r4-m6w7-qqqr via tsx
+  "@babel/core": ^7.29.6 # GHSA-4x5r-pxfx-6jf8 via Next/shadcn tooling
+  "js-yaml@4": ^4.2.0 # GHSA-h67p-54hq-rp68 via ESLint/shadcn tooling
   # node-tar path traversal advisories via trigger.dev>giget. giget@1 pins
   # tar@6 (unpatched major); it only uses `extract`, which tar@7 keeps.
-  tar: ^7.5.11
+  tar: ^7.5.16
+  "form-data@4": ^4.0.6 # GHSA-hmw2-7cc7-3qxx via atmn>axios
   systeminformation: ^5.31.6 # command injection advisories via @opentelemetry/host-metrics
   "@grpc/grpc-js": ^1.14.4 # GHSA via @daytona/sdk otel exporters
+  "@opentelemetry/core": ^2.8.0 # GHSA-8988-4f7v-96qf via @daytona/sdk
   "@opentelemetry/sdk-node": ^0.217.0 # GHSA-q7rr-3cgh-j5r3 (prometheus exporter crash)
   "@opentelemetry/exporter-prometheus": ^0.217.0 # GHSA-q7rr-3cgh-j5r3
-  hono: ^4.12.21 # JWT validation advisories via @modelcontextprotocol/sdk
+  hono: ^4.12.25 # traversal/CORS/Lambda advisories via @modelcontextprotocol/sdk
   "ws@8": ^8.20.1 # via socket.io>engine.io
   "cookie@0": ^0.7.2 # GHSA via engine.io
   fast-uri: ^3.1.2 # via atmn>conf>ajv
@@ -47,9 +56,9 @@ overrides:
   ip-address: ^10.1.1 # via @modelcontextprotocol/sdk>express-rate-limit
   "brace-expansion@5": ^5.0.6 # ReDoS via eslint tooling
   "js-cookie@3": ^3.0.7 # via @clerk/shared
-  "postcss@8": ^8.5.10 # parsing advisory via next
+  "postcss@8": ^8.5.16 # parsing advisory via Next; keep the direct tool current
   reselect: ^5.2.0 # no-downgrade trust policy blocks older 5.1.1 via @base-ui/utils
-  "protobufjs@7": ^7.5.8 # via react-doctor>@sentry/node
+  "protobufjs@7": ^7.6.3 # GHSA-f38q-mgvj-vph7 via OpenTelemetry exporters
   "protobufjs@8": ^8.0.2 # DoS advisories via react-doctor>@sentry/node (otlp-transformer)
   "trigger.dev>esbuild": ^0.25.0 # GHSA-67mh-4wv8-2f99 via trigger.dev dev server tooling
   # 3.10.1 dropped provenance attestation (trustPolicy no-downgrade rejects it);
@@ -57,12 +66,12 @@ overrides:
   eslint-import-resolver-typescript: ^4.4.3
 
 allowBuilds:
-  "@clerk/shared": set this to true or false
-  "@depot/cli": set this to true or false
-  esbuild: set this to true or false
-  msgpackr-extract: set this to true or false
-  msw: set this to true or false
-  protobufjs: set this to true or false
-  sharp: set this to true or false
-  unicode-animations: set this to true or false
-  unrs-resolver: set this to true or false
+  "@clerk/shared": false
+  "@depot/cli": false
+  esbuild: false
+  msgpackr-extract: false
+  msw: false
+  protobufjs: false
+  sharp: false
+  unicode-animations: false
+  unrs-resolver: false

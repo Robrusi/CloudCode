@@ -497,23 +497,20 @@ export async function findDaytonaSandboxInfoForRun(runId: string) {
   const trimmedRunId = runId.trim()
   if (!trimmedRunId) return null
 
-  const result = await getDaytonaClient().list(
-    {
+  const result = getDaytonaClient().list({
+    labels: {
       [CLOUDCODE_RUN_LABEL]: trimmedRunId,
       app: "cloudcode",
     },
-    1,
-    10
-  )
+    limit: 10,
+    order: "desc",
+    sort: "createdAt",
+  })
   let sandbox: Sandbox | undefined
-  let sandboxCreatedAt = 0
-  for (const candidate of result.items) {
+  for await (const candidate of result) {
     if (normalizeDaytonaState(candidate.state) === "deleted") continue
-    const createdAt = timeValue(candidate.createdAt) ?? 0
-    if (!sandbox || createdAt > sandboxCreatedAt) {
-      sandbox = candidate
-      sandboxCreatedAt = createdAt
-    }
+    sandbox = candidate
+    break
   }
 
   if (!sandbox) return null

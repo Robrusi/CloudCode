@@ -72,6 +72,32 @@ function parseAutomationTrigger(body: JsonRecord): AutomationTrigger {
     }
   }
 
+  if (kind === "github") {
+    const event = raw.event
+    if (
+      event !== "issueOpened" &&
+      event !== "issueClosed" &&
+      event !== "issueCommented" &&
+      event !== "pullRequestOpened" &&
+      event !== "pullRequestMerged" &&
+      event !== "pullRequestReviewSubmitted" &&
+      event !== "push"
+    ) {
+      throw new Error("trigger.event is not a supported GitHub event.")
+    }
+    return {
+      actorLogin:
+        jsonRawStringField(raw, "actorLogin")?.trim().replace(/^@/, "") ||
+        undefined,
+      branch:
+        jsonRawStringField(raw, "branch")
+          ?.trim()
+          .replace(/^refs\/heads\//, "") || undefined,
+      event,
+      kind: "github",
+    }
+  }
+
   const installationId = jsonRawStringField(raw, "installationId")?.trim()
   if (!installationId) throw new Error("trigger.installationId is required.")
 
@@ -119,7 +145,7 @@ function parseAutomationTrigger(body: JsonRecord): AutomationTrigger {
     }
   }
 
-  throw new Error("trigger.kind must be cron, slack, or linear.")
+  throw new Error("trigger.kind must be cron, GitHub, Slack, or Linear.")
 }
 
 // Shared by the create and update routes so both validate identically.

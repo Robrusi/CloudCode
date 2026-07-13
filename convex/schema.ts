@@ -494,6 +494,7 @@ export default defineSchema({
     userId: v.id("users"),
   })
     .index("by_user", ["userId"])
+    .index("by_installation", ["installationId"])
     .index("by_user_installation", ["userId", "installationId"]),
 
   githubAppUsers: defineTable({

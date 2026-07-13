@@ -53,8 +53,11 @@ Webhook: enabled
 Webhook URL: http://localhost:3000/api/github/webhook
 ```
 
-Grant the app repository permissions for **Contents: Read and write** and
-**Pull requests: Read and write**.
+Grant the app repository permissions for **Contents: Read and write**,
+**Issues: Read and write**, and **Pull requests: Read and write**. Subscribe it
+to **Push**, **Issues**, **Issue comment**, **Pull request**, and **Pull request
+review** events. These subscriptions power PR reviews and GitHub automation
+triggers.
 
 ## Run
 

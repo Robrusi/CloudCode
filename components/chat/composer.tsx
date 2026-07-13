@@ -184,6 +184,7 @@ export function ChatComposer({
           onSteer={onSteerQueuedMessage}
         />
       ) : null}
+      {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- The native form is a pointer drop target; keyboard users attach through the labeled file input. */}
       <form
         onSubmit={onSubmit}
         onDragOver={onComposerDragOver}

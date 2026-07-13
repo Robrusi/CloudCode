@@ -67,17 +67,17 @@ export function cloudcodeBotLogin() {
   return slug ? `${slug}[bot]` : undefined
 }
 
+export function isCloudcodeActor(login: string | undefined) {
+  const bot = cloudcodeBotLogin()
+  return Boolean(bot && login && login.toLowerCase() === bot.toLowerCase())
+}
+
 /** Whether a pull_request event was triggered by the app itself. A
  * `synchronize` from our own autofix push must not re-review — that would loop
  * (fix → push → synchronize → fix …). Requires GITHUB_APP_SLUG; without it the
  * guard is a no-op. */
 export function isCloudcodeSelfPush(event: PullRequestWebhookEvent) {
-  const bot = cloudcodeBotLogin()
-  return Boolean(
-    bot &&
-    event.senderLogin &&
-    event.senderLogin.toLowerCase() === bot.toLowerCase()
-  )
+  return isCloudcodeActor(event.senderLogin)
 }
 
 function requiredString(value: unknown) {

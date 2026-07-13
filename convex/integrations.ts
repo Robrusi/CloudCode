@@ -189,7 +189,7 @@ async function disableInstallationAutomations(
     const trigger = automation.trigger
     if (
       trigger &&
-      trigger.kind !== "cron" &&
+      (trigger.kind === "slack" || trigger.kind === "linear") &&
       trigger.installationId === installation._id &&
       automation.enabled
     ) {

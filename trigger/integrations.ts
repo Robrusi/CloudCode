@@ -1,6 +1,7 @@
 import { task, tasks } from "@trigger.dev/sdk"
 
 import { api } from "@/convex/_generated/api"
+import { githubAutomationTriggerSourceKey } from "@/convex/lib/integrationTriggers"
 import {
   MODELS,
   THINKINGS,
@@ -11,11 +12,14 @@ import { getWorkerSecret, workerConvexClient } from "@/lib/codex/run-worker"
 import { dispatchIntegrationRun } from "@/lib/integrations/dispatch"
 import {
   chatEventPrompt,
+  githubAutomationEventMatches,
+  githubAutomationEventVars,
   linearAutomationEventMatches,
   linearAutomationEventVars,
   slackAutomationEventVars,
   type IntegrationChatEventPayload,
   type IntegrationEventPayload,
+  type GitHubAutomationEventPayload,
   type LinearAutomationEventPayload,
   type SlackAutomationEventPayload,
 } from "@/lib/integrations/events"
@@ -347,6 +351,61 @@ async function handleLinearAutomationEvent(
   return { fired, matched: automations.length }
 }
 
+/** Matches repository-scoped GitHub events and dispatches each automation
+ * after the shared feedback-loop rate claim succeeds. */
+async function handleGitHubAutomationEvent(
+  payload: GitHubAutomationEventPayload
+) {
+  const client = workerConvexClient()
+  const workerSecret = getWorkerSecret()
+  const event = payload.event
+  const eventId =
+    payload.deliveryId ??
+    event.comment?.id ??
+    event.push?.after ??
+    event.review?.url ??
+    `${event.event}:${event.pullRequest?.number ?? event.issue?.number ?? "unknown"}:${event.actorLogin ?? "unknown"}`
+  const automations = await client.query(
+    api.automations.workerMatchTriggeredAutomations,
+    {
+      githubInstallationId: event.installationId,
+      sourceKeys: [
+        githubAutomationTriggerSourceKey(event.repoUrl, event.event),
+      ],
+      workerSecret,
+    }
+  )
+
+  let fired = 0
+  for (const automation of automations) {
+    const trigger = automation.trigger
+    if (trigger.kind !== "github") continue
+    if (!githubAutomationEventMatches(trigger, event)) continue
+
+    const claim = await client.mutation(api.automations.workerClaimEventFire, {
+      automationId: automation._id,
+      workerSecret,
+    })
+    if (!claim.claimed) continue
+
+    await tasks.trigger<typeof automationRun>(
+      "automation-run",
+      {
+        automationId: automation._id,
+        eventVars: githubAutomationEventVars(event),
+        manual: false,
+      },
+      {
+        idempotencyKey: `${automation._id}:${eventId}`,
+        tags: [`automation:${automation._id}`],
+      }
+    )
+    fired += 1
+  }
+
+  return { fired, matched: automations.length }
+}
+
 // One task for every integration event so webhook handlers stay thin: they
 // verify, acknowledge, and enqueue here with the platform's delivery id as
 // the idempotency key. Redeliveries and Slack retries become no-ops.
@@ -364,6 +423,8 @@ export const integrationEvent = task({
         return await handleSlackAutomationEvent(payload)
       case "linear_automation":
         return await handleLinearAutomationEvent(payload)
+      case "github_automation":
+        return await handleGitHubAutomationEvent(payload)
     }
   },
 })

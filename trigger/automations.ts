@@ -30,7 +30,7 @@ const GITHUB_ACCESS_ERROR =
 
 type AutomationRunPayload = {
   automationId: Id<"automations">
-  // Set on event-triggered fires (Slack/Linear): interpolated into the
+  // Set on event-triggered fires (GitHub/Slack/Linear): interpolated into the
   // automation's prompt as {{event.*}} plus an appended context block.
   eventVars?: EventContextVars
   manual: boolean

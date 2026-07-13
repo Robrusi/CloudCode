@@ -10,13 +10,14 @@ import {
 } from "@/components/automations/menu-select"
 import type { TriggerDraft } from "@/components/automations/model"
 import { chipTrigger, popoverPanel } from "@/components/chat/control-styles"
-import { LinearIcon, SlackIcon } from "@/components/ui/brand-icons"
+import { GitHubIcon, LinearIcon, SlackIcon } from "@/components/ui/brand-icons"
 import { useClickOutside } from "@/hooks/use-click-outside"
 import { fetchJson } from "@/lib/http/client-json"
 import { cn } from "@/lib/shared/utils"
 
 type SlackTrigger = Extract<TriggerDraft, { kind: "slack" }>
 type LinearTrigger = Extract<TriggerDraft, { kind: "linear" }>
+type GitHubTrigger = Extract<TriggerDraft, { kind: "github" }>
 
 type SlackChannel = { id: string; name: string }
 type LinearTeam = {
@@ -29,6 +30,26 @@ type LinearTeam = {
 type LinearUser = { email: string; id: string; name: string }
 
 const ANY_VALUE = ""
+
+const GITHUB_EVENT_OPTIONS: MenuSelectOption[] = [
+  { label: "Comment created", value: "issueCommented" },
+  { label: "Issue opened", value: "issueOpened" },
+  { label: "Issue closed", value: "issueClosed" },
+  { label: "Pull request opened", value: "pullRequestOpened" },
+  { label: "Pull request merged", value: "pullRequestMerged" },
+  { label: "Review submitted", value: "pullRequestReviewSubmitted" },
+  { label: "Push to branch", value: "push" },
+]
+
+function githubTriggerLabel(trigger: GitHubTrigger) {
+  if (trigger.event === "issueOpened") return "On new issue"
+  if (trigger.event === "issueClosed") return "On issue closed"
+  if (trigger.event === "issueCommented") return "On new comment"
+  if (trigger.event === "pullRequestOpened") return "On new PR"
+  if (trigger.event === "pullRequestMerged") return "On PR merged"
+  if (trigger.event === "pullRequestReviewSubmitted") return "On PR review"
+  return trigger.branch ? `On push to ${trigger.branch}` : "On any push"
+}
 
 function keepSelectedOption(
   options: MenuSelectOption[],
@@ -80,6 +101,75 @@ function TriggerPopover({
         </div>
       ) : null}
     </div>
+  )
+}
+
+export function GitHubTriggerChip({
+  onChange,
+  open,
+  setOpen,
+  trigger,
+}: {
+  onChange: (trigger: GitHubTrigger) => void
+  open: boolean
+  setOpen: (value: boolean) => void
+  trigger: GitHubTrigger
+}) {
+  return (
+    <TriggerPopover
+      label={githubTriggerLabel(trigger)}
+      icon={<GitHubIcon className="size-3.5 shrink-0" />}
+      open={open}
+      setOpen={setOpen}
+    >
+      <MenuSelect
+        ariaLabel="GitHub event"
+        value={trigger.event}
+        options={GITHUB_EVENT_OPTIONS}
+        onChange={(event) =>
+          onChange({
+            ...trigger,
+            branch: event === "push" ? trigger.branch : "",
+            event: event as GitHubTrigger["event"],
+          })
+        }
+      />
+      <input
+        aria-label="GitHub user filter"
+        type="text"
+        spellCheck={false}
+        value={trigger.actorLogin}
+        onChange={(event) =>
+          onChange({
+            ...trigger,
+            actorLogin: event.target.value.replace(/^@/, "").trim(),
+          })
+        }
+        placeholder="Any user"
+        className={cn(fieldBase, "px-2.5")}
+      />
+      {trigger.event === "push" ? (
+        <input
+          aria-label="GitHub branch filter"
+          type="text"
+          spellCheck={false}
+          value={trigger.branch}
+          onChange={(event) =>
+            onChange({
+              ...trigger,
+              branch: event.target.value.replace(/^refs\/heads\//, "").trim(),
+            })
+          }
+          placeholder="Any branch"
+          className={cn(fieldBase, "px-2.5")}
+        />
+      ) : null}
+      <p className="px-0.5 text-[11px] leading-4 text-muted-foreground">
+        {trigger.event === "issueCommented"
+          ? "Includes comments on issues and pull requests."
+          : "Leave the user empty to match anyone."}
+      </p>
+    </TriggerPopover>
   )
 }
 

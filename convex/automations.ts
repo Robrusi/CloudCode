@@ -103,6 +103,15 @@ async function resolveAutomationTrigger(
     }
   }
 
+  if (trigger.kind === "github") {
+    return {
+      ...trigger,
+      actorLogin:
+        trigger.actorLogin?.trim().replace(/^@/, "").toLowerCase() || undefined,
+      branch: trigger.branch?.trim().replace(/^refs\/heads\//, "") || undefined,
+    }
+  }
+
   const installation = await ctx.db.get(trigger.installationId)
   if (
     !installation ||
@@ -138,13 +147,13 @@ async function resolveAutomationTrigger(
 /** Denormalized trigger columns stored alongside the trigger object: the
  * legacy cron/timezone pair for cron kind, and the source key that
  * by_trigger_source matches webhook events against for event kinds. */
-function triggerColumns(trigger: AutomationTrigger) {
+function triggerColumns(trigger: AutomationTrigger, repoUrl: string) {
   return {
     cron: trigger.kind === "cron" ? trigger.cron : undefined,
     timezone: trigger.kind === "cron" ? trigger.timezone : undefined,
     trigger,
     triggerKind: trigger.kind,
-    triggerSourceKey: automationTriggerSourceKey(trigger),
+    triggerSourceKey: automationTriggerSourceKey(trigger, repoUrl),
   }
 }
 
@@ -251,7 +260,7 @@ export const create = mutation({
       speed: args.speed,
       threadId,
       ...(args.threadMode ? { threadMode: args.threadMode } : {}),
-      ...triggerColumns(trigger),
+      ...triggerColumns(trigger, args.repoUrl),
       updatedAt: now,
       userId,
     })
@@ -314,7 +323,7 @@ export const update = mutation({
         sandboxRetention: args.sandboxRetention,
         speed: args.speed,
         threadMode: args.threadMode,
-        ...triggerColumns(trigger),
+        ...triggerColumns(trigger, args.repoUrl),
         updatedAt: now,
       }),
       // The automation's thread mirrors its config so the chat UI shows the
@@ -785,20 +794,37 @@ export const disableForWorker = mutation({
 
 // Sliding-window cap on event-triggered fires: a webhook feedback loop (an
 // automation whose run re-emits its own trigger event) stalls out instead of
-// self-amplifying. Ten fires per hour is far above any legitimate cadence.
+// self-amplifying, keeping event-driven spend predictable.
 const EVENT_FIRE_WINDOW_MS = 60 * 60_000
 const EVENT_FIRE_WINDOW_MAX = 10
 
 /** Enabled event automations matching any of the coarse source keys computed
  * from a webhook event. The caller applies the trigger's fine predicates
- * (channel, keyword, emoji, team, label, state) on the returned rows. */
+ * (channel, keyword, emoji, team, label, state, actor, branch) on the returned
+ * rows. GitHub results are also restricted to the webhook installation's
+ * owners here, before any run is claimed. */
 export const workerMatchTriggeredAutomations = query({
   args: {
+    githubInstallationId: v.optional(v.string()),
     sourceKeys: v.array(v.string()),
     workerSecret: v.string(),
   },
   handler: async (ctx, args) => {
     requireWorkerSecret(args.workerSecret)
+
+    const githubInstallationId = args.githubInstallationId
+    const githubInstallationOwners = githubInstallationId
+      ? new Set(
+          (
+            await ctx.db
+              .query("githubAppInstallations")
+              .withIndex("by_installation", (q) =>
+                q.eq("installationId", githubInstallationId)
+              )
+              .collect()
+          ).map((installation) => installation.userId)
+        )
+      : undefined
 
     const matched = new Map<
       string,
@@ -818,6 +844,12 @@ export const workerMatchTriggeredAutomations = query({
         .take(50)
       for (const row of rows) {
         if (!row.trigger) continue
+        if (
+          row.trigger.kind === "github" &&
+          !githubInstallationOwners?.has(row.userId)
+        ) {
+          continue
+        }
         matched.set(row._id, {
           _id: row._id,
           name: row.name,

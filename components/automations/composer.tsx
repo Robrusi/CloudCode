@@ -8,6 +8,7 @@ import {
   automationRequestBody,
   deriveAutomationName,
   emptyAutomationDraft,
+  emptyGitHubTrigger,
   emptyLinearTrigger,
   emptySlackTrigger,
   type AutomationDraft,
@@ -15,6 +16,7 @@ import {
 } from "@/components/automations/model"
 import { ScheduleChip } from "@/components/automations/schedule-chip"
 import {
+  GitHubTriggerChip,
   LinearTriggerChip,
   SlackTriggerChip,
 } from "@/components/automations/trigger-chip"
@@ -267,32 +269,33 @@ export function AutomationComposer({
                 }
               />
             </DetailRow>
-            {slackInstallation || linearInstallation ? (
-              <DetailRow label="Trigger">
-                <OptionChip
-                  ariaLabel="Trigger kind"
-                  value={draft.trigger.kind}
-                  onChange={(kind) => {
-                    setTriggerOpen(false)
-                    if (kind === "cron") set("trigger", { kind: "cron" })
-                    else if (kind === "slack" && slackInstallation) {
-                      set("trigger", emptySlackTrigger(slackInstallation.id))
-                    } else if (kind === "linear" && linearInstallation) {
-                      set("trigger", emptyLinearTrigger(linearInstallation.id))
-                    }
-                  }}
-                  options={[
-                    { label: "Schedule", value: "cron" as const },
-                    ...(slackInstallation
-                      ? [{ label: "Slack event", value: "slack" as const }]
-                      : []),
-                    ...(linearInstallation
-                      ? [{ label: "Linear event", value: "linear" as const }]
-                      : []),
-                  ]}
-                />
-              </DetailRow>
-            ) : null}
+            <DetailRow label="Trigger">
+              <OptionChip
+                ariaLabel="Trigger kind"
+                value={draft.trigger.kind}
+                onChange={(kind) => {
+                  setTriggerOpen(false)
+                  if (kind === "cron") set("trigger", { kind: "cron" })
+                  else if (kind === "github") {
+                    set("trigger", emptyGitHubTrigger())
+                  } else if (kind === "slack" && slackInstallation) {
+                    set("trigger", emptySlackTrigger(slackInstallation.id))
+                  } else if (kind === "linear" && linearInstallation) {
+                    set("trigger", emptyLinearTrigger(linearInstallation.id))
+                  }
+                }}
+                options={[
+                  { label: "Schedule", value: "cron" as const },
+                  { label: "GitHub event", value: "github" as const },
+                  ...(slackInstallation
+                    ? [{ label: "Slack event", value: "slack" as const }]
+                    : []),
+                  ...(linearInstallation
+                    ? [{ label: "Linear event", value: "linear" as const }]
+                    : []),
+                ]}
+              />
+            </DetailRow>
             {draft.trigger.kind === "cron" ? (
               <DetailRow label="Repeats">
                 <ScheduleChip
@@ -313,9 +316,18 @@ export function AutomationComposer({
                   onChange={(trigger) => set("trigger", trigger)}
                 />
               </DetailRow>
-            ) : (
+            ) : draft.trigger.kind === "linear" ? (
               <DetailRow label="Linear event">
                 <LinearTriggerChip
+                  trigger={draft.trigger}
+                  open={triggerOpen}
+                  setOpen={setTriggerOpen}
+                  onChange={(trigger) => set("trigger", trigger)}
+                />
+              </DetailRow>
+            ) : (
+              <DetailRow label="GitHub event">
+                <GitHubTriggerChip
                   trigger={draft.trigger}
                   open={triggerOpen}
                   setOpen={setTriggerOpen}

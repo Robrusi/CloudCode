@@ -1,5 +1,6 @@
 import type { Id } from "@/convex/_generated/dataModel"
 import type { AutomationTrigger } from "@/convex/lib/integrationTriggers"
+import type { GitHubAutomationEvent } from "@/lib/github/automation-events"
 
 /** Subject context captured with a chat event: the Linear issue behind an
  * agent session, normalized from the Chat SDK's MessageSubject. */
@@ -78,10 +79,18 @@ export type LinearAutomationEventPayload = {
   provider: "linear"
 }
 
+export type GitHubAutomationEventPayload = {
+  deliveryId?: string
+  event: GitHubAutomationEvent
+  kind: "github_automation"
+  provider: "github"
+}
+
 export type IntegrationEventPayload =
   | IntegrationChatEventPayload
   | SlackAutomationEventPayload
   | LinearAutomationEventPayload
+  | GitHubAutomationEventPayload
 
 /** Template variables an event exposes to automation prompts as
  * {{event.name}} placeholders. */
@@ -171,6 +180,59 @@ export function linearAutomationEventVars(
     issueUrl: event.issue.url ?? "",
     source: "linear",
   }
+}
+
+export function githubAutomationEventVars(
+  event: GitHubAutomationEvent
+): EventContextVars {
+  const target = event.pullRequest ?? event.issue
+  return {
+    action: event.action,
+    actor: event.actorLogin ?? "",
+    branch: event.branch ?? "",
+    comment: event.comment?.body ?? "",
+    commentUrl: event.comment?.url ?? "",
+    event: event.event,
+    isPullRequest: event.issue?.isPullRequest ? "true" : "false",
+    issueBody: event.issue?.body ?? "",
+    number: target ? String(target.number) : "",
+    pullRequestBaseBranch: event.pullRequest?.baseBranch ?? "",
+    pullRequestBody: event.pullRequest?.body ?? "",
+    pullRequestHeadBranch: event.pullRequest?.headBranch ?? "",
+    repository: event.repoFullName,
+    repositoryUrl: event.repoUrl,
+    review: event.review?.body ?? "",
+    reviewState: event.review?.state ?? "",
+    reviewUrl: event.review?.url ?? "",
+    source: "github",
+    title: target?.title ?? "",
+    url: target?.url ?? "",
+    pushAfter: event.push?.after ?? "",
+    pushBefore: event.push?.before ?? "",
+    pushCompareUrl: event.push?.compareUrl ?? "",
+    pushHeadCommitMessage: event.push?.headCommitMessage ?? "",
+  }
+}
+
+export function githubAutomationEventMatches(
+  trigger: Extract<AutomationTrigger, { kind: "github" }>,
+  event: GitHubAutomationEvent
+) {
+  if (trigger.event !== event.event) return false
+  if (
+    trigger.actorLogin &&
+    trigger.actorLogin.toLowerCase() !== event.actorLogin?.toLowerCase()
+  ) {
+    return false
+  }
+  if (
+    trigger.event === "push" &&
+    trigger.branch &&
+    trigger.branch !== event.branch
+  ) {
+    return false
+  }
+  return true
 }
 
 /** Fine-grained predicate applied after the source-key lookup. IDs are used

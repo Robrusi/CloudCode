@@ -4,18 +4,24 @@ import { NextResponse } from "next/server"
 import {
   commentMentionsCloudcode,
   isCloudcodeSelfPush,
+  isCloudcodeActor,
   isGitHubWebhookConfigured,
   isTrustedMentionAuthor,
   parseIssueCommentWebhookEvent,
   parsePullRequestWebhookEvent,
   verifyGitHubWebhookSignature,
 } from "@/lib/github/webhook"
+import { parseGitHubAutomationEvent } from "@/lib/github/automation-events"
 import { jsonError } from "@/lib/http/api-route"
+import type { integrationEvent } from "@/trigger/integrations"
 import type { reviewDispatch } from "@/trigger/reviews"
 
 export const runtime = "nodejs"
 
 type ReviewDispatchPayload = Parameters<(typeof reviewDispatch)["trigger"]>[0]
+type IntegrationEventPayload = Parameters<
+  (typeof integrationEvent)["trigger"]
+>[0]
 
 function dispatchPayloadForEvent(
   event: string | null,
@@ -103,23 +109,51 @@ export async function POST(request: Request) {
     return jsonError("Invalid JSON payload.", 400)
   }
 
-  const dispatchPayload = dispatchPayloadForEvent(event, payload)
-  if (!dispatchPayload) return NextResponse.json({ ignored: true })
-
-  const deliveryId = request.headers.get("x-github-delivery")
-  try {
-    await tasks.trigger<typeof reviewDispatch>(
-      "review-dispatch",
-      dispatchPayload,
-      {
-        ...(deliveryId ? { idempotencyKey: `ghd:${deliveryId}` } : {}),
-        tags: [`repo:${dispatchPayload.repoUrl}`],
-      }
-    )
-  } catch (error) {
-    console.error("/api/github/webhook dispatch failed", error)
-    return jsonError("Unable to dispatch review.", 500)
+  const reviewPayload = dispatchPayloadForEvent(event, payload)
+  const githubEvent = parseGitHubAutomationEvent(event, payload)
+  const automationPayload: IntegrationEventPayload | null =
+    githubEvent && !isCloudcodeActor(githubEvent.actorLogin)
+      ? {
+          deliveryId: request.headers.get("x-github-delivery") ?? undefined,
+          event: githubEvent,
+          kind: "github_automation",
+          provider: "github",
+        }
+      : null
+  if (!reviewPayload && !automationPayload) {
+    return NextResponse.json({ ignored: true })
   }
 
-  return NextResponse.json({ dispatched: true })
+  const deliveryId = request.headers.get("x-github-delivery")
+  const dispatches: Promise<unknown>[] = []
+  if (reviewPayload) {
+    dispatches.push(
+      tasks.trigger<typeof reviewDispatch>("review-dispatch", reviewPayload, {
+        ...(deliveryId ? { idempotencyKey: `ghd:${deliveryId}` } : {}),
+        tags: [`repo:${reviewPayload.repoUrl}`],
+      })
+    )
+  }
+  if (automationPayload) {
+    dispatches.push(
+      tasks.trigger<typeof integrationEvent>(
+        "integration-event",
+        automationPayload,
+        deliveryId ? { idempotencyKey: `gha:${deliveryId}` } : undefined
+      )
+    )
+  }
+
+  try {
+    await Promise.all(dispatches)
+  } catch (error) {
+    console.error("/api/github/webhook dispatch failed", error)
+    return jsonError("Unable to dispatch GitHub event.", 500)
+  }
+
+  return NextResponse.json({
+    automationDispatched: Boolean(automationPayload),
+    dispatched: true,
+    reviewDispatched: Boolean(reviewPayload),
+  })
 }

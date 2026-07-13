@@ -21,6 +21,19 @@ export type AutomationRecord = Doc<"automations">
 export type TriggerDraft =
   | { kind: "cron" }
   | {
+      actorLogin: string
+      branch: string
+      event:
+        | "issueOpened"
+        | "issueClosed"
+        | "issueCommented"
+        | "pullRequestOpened"
+        | "pullRequestMerged"
+        | "pullRequestReviewSubmitted"
+        | "push"
+      kind: "github"
+    }
+  | {
       channelId: string
       channelName: string
       emoji: string
@@ -52,6 +65,15 @@ export function emptySlackTrigger(installationId: string): TriggerDraft {
     installationId,
     keyword: "",
     kind: "slack",
+  }
+}
+
+export function emptyGitHubTrigger(): TriggerDraft {
+  return {
+    actorLogin: "",
+    branch: "",
+    event: "issueCommented",
+    kind: "github",
   }
 }
 
@@ -141,6 +163,14 @@ export function emptyAutomationDraft(): AutomationDraft {
 function triggerDraftFromRecord(automation: AutomationRecord): TriggerDraft {
   const trigger = automation.trigger
   if (!trigger || trigger.kind === "cron") return { kind: "cron" }
+  if (trigger.kind === "github") {
+    return {
+      actorLogin: trigger.actorLogin ?? "",
+      branch: trigger.branch ?? "",
+      event: trigger.event,
+      kind: "github",
+    }
+  }
   if (trigger.kind === "slack") {
     return {
       channelId: trigger.channelId ?? "",
@@ -230,6 +260,14 @@ function triggerRequestBody(draft: AutomationDraft) {
       kind: "slack" as const,
     }
   }
+  if (trigger.kind === "github") {
+    return {
+      actorLogin: trigger.actorLogin.trim().replace(/^@/, "") || undefined,
+      branch: trigger.branch.trim().replace(/^refs\/heads\//, "") || undefined,
+      event: trigger.event,
+      kind: "github" as const,
+    }
+  }
   return {
     assigneeId: trigger.assigneeId || undefined,
     assigneeName: trigger.assigneeName || undefined,
@@ -266,7 +304,7 @@ export function automationRequestBody(draft: AutomationDraft) {
 }
 
 /** One-line row label: the schedule for cron automations, the watched event
- * for Slack/Linear ones. */
+ * for GitHub/Slack/Linear ones. */
 export function automationTriggerLabel(automation: AutomationRecord) {
   const trigger = automation.trigger
   if (!trigger || trigger.kind === "cron") {
@@ -278,6 +316,19 @@ export function automationTriggerLabel(automation: AutomationRecord) {
     return trigger.event === "reaction"
       ? `On :${trigger.emoji}: reaction${where}`
       : `On “${trigger.keyword}”${where}`
+  }
+  if (trigger.kind === "github") {
+    const actor = trigger.actorLogin ? ` by @${trigger.actorLogin}` : ""
+    if (trigger.event === "issueOpened") return `On new issue${actor}`
+    if (trigger.event === "issueClosed") return `On issue closed${actor}`
+    if (trigger.event === "issueCommented") return `On new comment${actor}`
+    if (trigger.event === "pullRequestOpened") return `On new PR${actor}`
+    if (trigger.event === "pullRequestMerged") return `On PR merged${actor}`
+    if (trigger.event === "pullRequestReviewSubmitted") {
+      return `On PR review${actor}`
+    }
+    const branch = trigger.branch ? ` to ${trigger.branch}` : ""
+    return `On push${branch}${actor}`
   }
   const scope = trigger.teamName ? ` in ${trigger.teamName}` : ""
   if (trigger.event === "issueCreated") {

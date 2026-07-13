@@ -66,7 +66,7 @@ export function SettingsScreen({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+      <div className="min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto">
         <div className="mx-auto w-full max-w-2xl px-4 pt-8 pb-[calc(5rem+env(safe-area-inset-bottom))] md:px-8 md:pt-12">
           {section === "connections" ? (
             <ConnectionsSettings
