@@ -4,7 +4,6 @@ import { chatEventPrompt } from "../lib/integrations/events"
 import { parseIntegrationMessage } from "../lib/integrations/keywords"
 import {
   normalizeSlackDmThreadId,
-  slackThreadContextFromMessages,
   slackThreadParts,
   stripSlackBotMention,
 } from "../lib/integrations/slack-threads"
@@ -84,31 +83,6 @@ assert.deepEqual(
   }
 )
 
-const slackThreadContext = slackThreadContextFromMessages(
-  [
-    {
-      author: { fullName: "Alice", userName: "alice" },
-      id: "1.0",
-      text: "Deployments fail after reconnects.",
-    },
-    {
-      author: { fullName: "", userName: "bob" },
-      id: "2.0",
-      text: "It looks related to session recovery.",
-    },
-    {
-      author: { fullName: "Alice", userName: "alice" },
-      id: "3.0",
-      text: "<@U0BG3L6054P> please investigate",
-    },
-  ],
-  "3.0",
-  "U0BG3L6054P"
-)
-assert.deepEqual(slackThreadContext, [
-  { authorName: "Alice", text: "Deployments fail after reconnects." },
-  { authorName: "bob", text: "It looks related to session recovery." },
-])
 assert.equal(
   chatEventPrompt({
     authorName: "Alice",
@@ -116,7 +90,8 @@ assert.equal(
     kind: "mention",
     messageId: "3.0",
     provider: "slack",
-    slackThreadContext,
+    slackChannelName: "#deployments",
+    slackThreadTs: "1.0",
     text: "please investigate",
   }),
   [
@@ -124,10 +99,27 @@ assert.equal(
     "",
     "---",
     "Requested by Alice from Slack.",
+    "Slack channel: #deployments",
+    "Slack thread: 1.0",
+  ].join("\n")
+)
+
+assert.equal(
+  chatEventPrompt({
+    authorName: "Alice",
+    externalThreadId: "slack:C123:3.0",
+    kind: "mention",
+    messageId: "3.0",
+    provider: "slack",
+    slackChannelName: "#deployments",
+    text: "please investigate",
+  }),
+  [
+    "please investigate",
     "",
-    "Slack thread before this request:",
-    "[Alice] Deployments fail after reconnects.",
-    "[bob] It looks related to session recovery.",
+    "---",
+    "Requested by Alice from Slack.",
+    "Slack channel: #deployments",
   ].join("\n")
 )
 

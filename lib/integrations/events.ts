@@ -1,6 +1,5 @@
 import type { Id } from "@/convex/_generated/dataModel"
 import type { AutomationTrigger } from "@/convex/lib/integrationTriggers"
-import type { SlackThreadContextMessage } from "@/lib/integrations/slack-threads"
 
 /** Subject context captured with a chat event: the Linear issue behind an
  * agent session, normalized from the Chat SDK's MessageSubject. */
@@ -28,7 +27,8 @@ export type IntegrationChatEventPayload = {
   presetOverride?: string
   provider: "slack" | "linear"
   repoOverride?: string
-  slackThreadContext?: SlackThreadContextMessage[]
+  slackChannelName?: string
+  slackThreadTs?: string
   subject?: IntegrationEventSubject
   text: string
 }
@@ -129,15 +129,11 @@ export function chatEventPrompt(payload: IntegrationChatEventPayload) {
     }
   } else if (payload.provider === "slack") {
     context.push(`Requested by ${payload.authorName} from Slack.`)
-    if (payload.slackThreadContext?.length) {
-      context.push(
-        "",
-        "Slack thread before this request:",
-        ...payload.slackThreadContext.map(
-          (message) =>
-            `[${message.authorName}] ${message.text.replace(/\n/g, "\n  ")}`
-        )
-      )
+    if (payload.slackChannelName) {
+      context.push(`Slack channel: ${payload.slackChannelName}`)
+    }
+    if (payload.slackThreadTs) {
+      context.push(`Slack thread: ${payload.slackThreadTs}`)
     }
   }
 

@@ -17,10 +17,7 @@ import {
   parseIntegrationMessage,
 } from "@/lib/integrations/keywords"
 import { linearAgentSessionThreadId } from "@/lib/integrations/linear-threads"
-import {
-  normalizeSlackDmThreadId,
-  slackThreadContextFromMessages,
-} from "@/lib/integrations/slack-threads"
+import { normalizeSlackDmThreadId } from "@/lib/integrations/slack-threads"
 import {
   currentSlackWebhookTeamId,
   isSlackEventFromCurrentApp,
@@ -144,19 +141,15 @@ async function chatEventPayload(
   if (provider === "slack") {
     const raw = message.raw as SlackEvent | undefined
     payload.externalId = raw?.team_id ?? raw?.team
-    payload.authorEmail = await slackAuthorEmail(
-      adapters.slack,
-      message.author.userId
-    )
-    const threadMessages = await adapters.slack
-      ?.fetchMessages(thread.id, { direction: "backward", limit: 50 })
-      .then((result) => result.messages)
-      .catch(() => [])
-    payload.slackThreadContext = slackThreadContextFromMessages(
-      threadMessages ?? [],
-      message.id,
-      adapters.slack?.botUserId
-    )
+    const [authorEmail, channelInfo] = await Promise.all([
+      slackAuthorEmail(adapters.slack, message.author.userId),
+      adapters.slack?.fetchChannelInfo(thread.channelId).catch(() => undefined),
+    ])
+    payload.authorEmail = authorEmail
+    payload.slackChannelName = channelInfo?.name
+    // A root Slack message uses its own timestamp in the adapter thread ID.
+    // Only raw thread_ts proves that the incoming request is actually a reply.
+    payload.slackThreadTs = raw?.thread_ts
     return payload
   }
 

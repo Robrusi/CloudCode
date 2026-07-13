@@ -3,22 +3,6 @@ export type SlackThreadParts = {
   threadTs?: string
 }
 
-export type SlackThreadContextMessage = {
-  authorName: string
-  text: string
-}
-
-type SlackThreadMessage = {
-  author: {
-    fullName: string
-    userName: string
-  }
-  id: string
-  text: string
-}
-
-const SLACK_THREAD_CONTEXT_CHARACTER_LIMIT = 12_000
-
 /** Parses both current thread ids (slack:C…:ts) and legacy channel-only ids
  * (slack:D…). Keeping this logic shared prevents inbound and outbound paths
  * from disagreeing about whether an empty timestamp is a real thread. */
@@ -49,40 +33,4 @@ export function stripSlackBotMention(text: string, botUserId?: string) {
   if (!botUserId) return text
   const escapedId = botUserId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
   return text.replace(new RegExp(`<@${escapedId}(?:\\|[^>]+)?>`, "gi"), " ")
-}
-
-/** Builds bounded, chronological context from the messages preceding the
- * request. Keeping the limit here prevents a busy Slack thread from turning
- * into an unbounded run prompt. */
-export function slackThreadContextFromMessages(
-  messages: readonly SlackThreadMessage[],
-  currentMessageId: string,
-  botUserId?: string
-): SlackThreadContextMessage[] {
-  const context = messages
-    .filter((message) => message.id !== currentMessageId)
-    .map((message) => ({
-      authorName: message.author.fullName || message.author.userName,
-      text: stripSlackBotMention(message.text, botUserId).trim(),
-    }))
-    .filter((message) => message.text)
-
-  let remaining = SLACK_THREAD_CONTEXT_CHARACTER_LIMIT
-  const selected: SlackThreadContextMessage[] = []
-  for (let index = context.length - 1; index >= 0; index -= 1) {
-    const message = context[index]
-    if (message.text.length > remaining) {
-      if (selected.length === 0 && remaining > 0) {
-        selected.push({
-          ...message,
-          text: message.text.slice(-remaining),
-        })
-      }
-      break
-    }
-    selected.push(message)
-    remaining -= message.text.length
-  }
-
-  return selected.reverse()
 }
