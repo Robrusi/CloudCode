@@ -51,9 +51,17 @@ assert.equal(
   stripSlackBotMention("<@U0BG3L6054P> investigate this", "U0BG3L6054P"),
   "  investigate this"
 )
+assert.equal(
+  stripSlackBotMention("@U0BG3L6054P investigate this", "U0BG3L6054P"),
+  "  investigate this"
+)
+assert.equal(
+  stripSlackBotMention("@U0BG3L6054P check with @UOTHER", "U0BG3L6054P"),
+  "  check with @UOTHER"
+)
 assert.deepEqual(
   parseIntegrationMessage(
-    "<@U0BG3L6054P> check with <@UOTHER>",
+    "@U0BG3L6054P check with @UOTHER",
     "cloudcode",
     "U0BG3L6054P"
   ),
@@ -63,7 +71,7 @@ assert.deepEqual(
     modelOverride: undefined,
     presetOverride: undefined,
     repoOverride: undefined,
-    text: "check with <@UOTHER>",
+    text: "check with @UOTHER",
   }
 )
 

@@ -26,11 +26,14 @@ export function normalizeSlackDmThreadId(
   return `slack:${channel}:${messageId}`
 }
 
-/** Removes Slack's native markup for this bot while preserving mentions of
- * other people. Slack sends `@bot` mentions as `<@U…>` rather than the bot's
- * display name. */
+/** Removes this bot's Slack mention while preserving mentions of other people.
+ * The adapter normalizes native `<@U…>` markup to `@U…` in `Message.text`,
+ * while fetched or raw messages can still contain the native form. */
 export function stripSlackBotMention(text: string, botUserId?: string) {
   if (!botUserId) return text
   const escapedId = botUserId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-  return text.replace(new RegExp(`<@${escapedId}(?:\\|[^>]+)?>`, "gi"), " ")
+  return text.replace(
+    new RegExp(`<@${escapedId}(?:\\|[^>]+)?>|@${escapedId}\\b`, "gi"),
+    " "
+  )
 }
