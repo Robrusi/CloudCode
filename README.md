@@ -50,7 +50,7 @@ Homepage URL: http://localhost:3000
 Callback URL: http://localhost:3000/api/github/app/oauth/callback
 Setup URL: http://localhost:3000/api/github/app/setup
 Webhook: enabled
-Webhook URL: https://cloudcode.computer/api/github/webhook
+Webhook URL: http://localhost:3000/api/github/webhook
 ```
 
 Grant the app repository permissions for **Contents: Read and write** and
