@@ -75,11 +75,18 @@ export function encryptSecret(value: string) {
 export function decryptSecret(value: string) {
   if (!isEncryptedSecret(value)) return value
 
-  const [ivBase64, tagBase64, ciphertextBase64] = value
-    .slice(PREFIX.length)
-    .split(".")
+  const parts = value.slice(PREFIX.length).split(".")
+  const [ivBase64, tagBase64, ciphertextBase64] = parts
 
-  if (!ivBase64 || !tagBase64 || !ciphertextBase64) {
+  if (
+    parts.length !== 3 ||
+    !ivBase64 ||
+    !tagBase64 ||
+    ciphertextBase64 === undefined ||
+    !/^[A-Za-z0-9_-]+$/.test(ivBase64) ||
+    !/^[A-Za-z0-9_-]+$/.test(tagBase64) ||
+    !/^[A-Za-z0-9_-]*$/.test(ciphertextBase64)
+  ) {
     throw new Error("Stored preset secret is malformed.")
   }
 
@@ -95,6 +102,10 @@ export function decryptSecret(value: string) {
   const iv = Buffer.from(ivBase64, "base64url")
   const tag = Buffer.from(tagBase64, "base64url")
   const ciphertext = Buffer.from(ciphertextBase64, "base64url")
+
+  if (iv.length !== 12 || tag.length !== 16) {
+    throw new Error("Stored preset secret is malformed.")
+  }
 
   for (const secret of secrets) {
     try {
