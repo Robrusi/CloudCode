@@ -271,6 +271,7 @@ export async function requestCodexAppServerDaemon({
   timeoutMs?: number
   verifyScripts?: boolean
 }) {
+  const isRunRequest = payload.type === "run"
   const payloadPath = codexAppServerDaemonRequestPath(paths, label)
   const authOutputPath = codexAppServerDaemonRequestPath(paths, `${label}-auth`)
   const resultOutputPath = codexAppServerDaemonRequestPath(
@@ -339,12 +340,17 @@ export async function requestCodexAppServerDaemon({
       }
     )
     flush()
-    const [updatedAuthJson, serializedResult] = await Promise.all([
-      readDaytonaTextFile(sandbox, authOutputPath).catch(() => undefined),
-      readDaytonaTextFile(sandbox, resultOutputPath).catch(() => undefined),
-    ])
-    if (!events.some((event) => event.type === "result") && serializedResult) {
-      emitLine(serializedResult)
+    const updatedAuthJson = isRunRequest
+      ? await readDaytonaTextFile(sandbox, authOutputPath).catch(
+          () => undefined
+        )
+      : undefined
+    if (isRunRequest && !events.some((event) => event.type === "result")) {
+      const serializedResult = await readDaytonaTextFile(
+        sandbox,
+        resultOutputPath
+      ).catch(() => undefined)
+      if (serializedResult) emitLine(serializedResult)
     }
     return { events, result, turnActivitySeen, updatedAuthJson }
   } finally {

@@ -171,6 +171,7 @@ export async function runCodexViaAppServer({
     | Extract<CodexAppServerDaemonEvent, { type: "result" }>
     | undefined
   let daemonError = ""
+  let coordinatedAuthJson: string | undefined
   let updatedAuthJson: string | undefined
   let stdout = ""
   let stderr = ""
@@ -342,6 +343,7 @@ export async function runCodexViaAppServer({
                   : {}),
                 requestId: event.requestId,
               })
+              coordinatedAuthJson = refreshed.authJson
               await writeDaytonaTextFile(
                 sandbox,
                 responsePath,
@@ -436,7 +438,12 @@ export async function runCodexViaAppServer({
     }
     const { result } = daemonResponse
     await Promise.all(authRefreshTasks)
-    updatedAuthJson = daemonResponse.updatedAuthJson
+    // The private auth output is an optimization for returning rotated tokens,
+    // not a condition for accepting an otherwise complete turn. A coordinated
+    // refresh already returned the authoritative auth here (and persisted it in
+    // the worker); without a refresh, the run input remains authoritative.
+    updatedAuthJson =
+      daemonResponse.updatedAuthJson ?? coordinatedAuthJson ?? input.authJson
 
     if (result.stderr) {
       stderr = appendDaemonDiagnostic(stderr, result.stderr)
@@ -455,10 +462,6 @@ export async function runCodexViaAppServer({
     if (!daemonResult) {
       throw new Error("Codex app-server daemon did not return a turn result.")
     }
-    if (!updatedAuthJson) {
-      throw new Error("Codex app-server daemon did not return updated auth.")
-    }
-
     if (!activeThreadId) {
       throw new Error("Codex app-server did not return a thread id.")
     }
