@@ -17,7 +17,10 @@ import {
   parseIntegrationMessage,
 } from "@/lib/integrations/keywords"
 import { linearAgentSessionThreadId } from "@/lib/integrations/linear-threads"
-import { normalizeSlackDmThreadId } from "@/lib/integrations/slack-threads"
+import {
+  normalizeSlackDmThreadId,
+  slackThreadParts,
+} from "@/lib/integrations/slack-threads"
 import {
   currentSlackWebhookTeamId,
   isSlackEventFromCurrentApp,
@@ -299,10 +302,11 @@ export function registerIntegrationHandlers(
       console.warn("Ignoring Slack message without a workspace identity.")
       return
     }
+    const channelId = slackThreadParts(thread.id).channel
     const matches = await convexClient().query(
       api.integrations.workerMatchSlackEvent,
       {
-        channelId: thread.channelId,
+        channelId,
         event: "keyword",
         externalId,
         text: message.text,
@@ -315,7 +319,7 @@ export function registerIntegrationHandlers(
       {
         authorName: message.author.fullName || message.author.userName,
         automationIds: matches.map((match) => match.automationId),
-        channelId: thread.channelId,
+        channelId,
         event: "keyword",
         externalId,
         externalThreadId: thread.id,
@@ -341,10 +345,11 @@ export function registerIntegrationHandlers(
       return
     }
 
+    const channelId = slackThreadParts(event.threadId).channel
     const matches = await convexClient().query(
       api.integrations.workerMatchSlackEvent,
       {
-        channelId: event.thread.channelId,
+        channelId,
         emoji: event.rawEmoji,
         event: "reaction",
         externalId,
@@ -357,7 +362,7 @@ export function registerIntegrationHandlers(
       {
         authorName: event.user.fullName || event.user.userName,
         automationIds: matches.map((match) => match.automationId),
-        channelId: event.thread.channelId,
+        channelId,
         emoji: event.rawEmoji,
         event: "reaction",
         externalId,
