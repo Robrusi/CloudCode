@@ -100,14 +100,14 @@ function TriggerPopover({
   useClickOutside(ref, open, () => setOpen(false))
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative min-w-0">
       <button
         type="button"
         onClick={() => setOpen(!open)}
         aria-haspopup="dialog"
         aria-expanded={open}
         title="Trigger event"
-        className={cn(chipTrigger, "max-w-64 text-foreground/80")}
+        className={cn(chipTrigger, "max-w-full text-foreground/80")}
       >
         {icon}
         <span className="truncate">{label}</span>
