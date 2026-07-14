@@ -15,6 +15,7 @@ import {
   parseLinearAutomationEvents,
   verifyLinearWebhookRequest,
 } from "@/lib/integrations/linear-webhook"
+import { createWebhookTaskTracker } from "@/lib/integrations/webhook-tasks"
 import type { integrationEvent } from "@/trigger/integrations"
 
 export const runtime = "nodejs"
@@ -126,7 +127,13 @@ export async function POST(request: Request) {
   await dispatchPreprocessedEvents(request, env.webhookSecret)
 
   const { bot } = getIntegrationsBot()
-  return await bot.webhooks.linear(request, {
-    waitUntil: (task) => after(() => task),
+  const background = createWebhookTaskTracker((error) => {
+    console.error("Linear webhook background task failed.", error)
   })
+  const response = await bot.webhooks.linear(request, {
+    waitUntil: background.waitUntil,
+  })
+  const completion = background.finish()
+  after(() => completion)
+  return response
 }

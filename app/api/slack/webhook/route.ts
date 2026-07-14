@@ -10,6 +10,7 @@ import {
   slackWebhookContextFromRequest,
   withSlackWebhookContext,
 } from "@/lib/integrations/slack-webhook-context"
+import { createWebhookTaskTracker } from "@/lib/integrations/webhook-tasks"
 
 export const runtime = "nodejs"
 
@@ -24,9 +25,15 @@ export async function POST(request: Request) {
 
   const context = await slackWebhookContextFromRequest(request)
   const { bot } = getIntegrationsBot()
-  return await withSlackWebhookContext(context, () =>
+  const background = createWebhookTaskTracker((error) => {
+    console.error("Slack webhook background task failed.", error)
+  })
+  const response = await withSlackWebhookContext(context, () =>
     bot.webhooks.slack(request, {
-      waitUntil: (task) => after(() => task),
+      waitUntil: background.waitUntil,
     })
   )
+  const completion = background.finish()
+  after(() => completion)
+  return response
 }

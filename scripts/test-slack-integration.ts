@@ -13,6 +13,7 @@ import {
   slackWebhookContextFromRequest,
   withSlackWebhookContext,
 } from "../lib/integrations/slack-webhook-context"
+import { createWebhookTaskTracker } from "../lib/integrations/webhook-tasks"
 
 assert.deepEqual(slackThreadParts("slack:C123:1712345678.123456"), {
   channel: "C123",
@@ -153,5 +154,41 @@ await withSlackWebhookContext(webhookContext, async () => {
 })
 assert.equal(currentSlackWebhookTeamId(), undefined)
 assert.equal(isSlackEventFromCurrentApp({ app_id: "A123" }), false)
+
+const backgroundErrors: unknown[] = []
+const background = createWebhookTaskTracker((error) => {
+  backgroundErrors.push(error)
+})
+let releaseNestedTask: (() => void) | undefined
+const nestedTaskGate = new Promise<void>((resolve) => {
+  releaseNestedTask = resolve
+})
+const completedSteps: string[] = []
+background.waitUntil(
+  Promise.resolve().then(() => {
+    background.waitUntil(
+      nestedTaskGate.then(() => {
+        completedSteps.push("nested")
+      })
+    )
+    completedSteps.push("outer")
+  })
+)
+const backgroundCompletion = background.finish()
+await Promise.resolve()
+assert.deepEqual(completedSteps, ["outer"])
+releaseNestedTask?.()
+await backgroundCompletion
+assert.deepEqual(completedSteps, ["outer", "nested"])
+assert.deepEqual(backgroundErrors, [])
+
+const rejectedTaskError = new Error("expected background failure")
+const rejectedTaskErrors: unknown[] = []
+const rejectedTaskTracker = createWebhookTaskTracker((error) => {
+  rejectedTaskErrors.push(error)
+})
+rejectedTaskTracker.waitUntil(Promise.reject(rejectedTaskError))
+await rejectedTaskTracker.finish()
+assert.deepEqual(rejectedTaskErrors, [rejectedTaskError])
 
 console.log("Slack integration thread-id checks passed.")
