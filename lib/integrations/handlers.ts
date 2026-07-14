@@ -1,7 +1,7 @@
 import type { LinearAdapter, LinearRawMessage } from "@chat-adapter/linear"
 import type { SlackAdapter, SlackEvent } from "@chat-adapter/slack"
 import { tasks } from "@trigger.dev/sdk"
-import type { Adapter, Chat, Message, ReactionEvent, Thread } from "chat"
+import type { Adapter, Chat, Message, Thread } from "chat"
 import { ConvexHttpClient } from "convex/browser"
 
 import { api } from "@/convex/_generated/api"
@@ -17,14 +17,8 @@ import {
   parseIntegrationMessage,
 } from "@/lib/integrations/keywords"
 import { linearAgentSessionThreadId } from "@/lib/integrations/linear-threads"
-import {
-  normalizeSlackDmThreadId,
-  slackThreadParts,
-} from "@/lib/integrations/slack-threads"
-import {
-  currentSlackWebhookTeamId,
-  isSlackEventFromCurrentApp,
-} from "@/lib/integrations/slack-webhook-context"
+import { normalizeSlackDmThreadId } from "@/lib/integrations/slack-threads"
+import { isSlackEventFromCurrentApp } from "@/lib/integrations/slack-webhook-context"
 import { getWorkerSecret } from "@/lib/security/worker-secret"
 import type { integrationEvent } from "@/trigger/integrations"
 
@@ -285,94 +279,5 @@ export function registerIntegrationHandlers(
     // Follow-ups only make sense where a session bridge can exist; muted
     // bridges are filtered in the worker where the bridge row lives.
     await handleChatMessage(thread, message, "follow_up")
-  })
-
-  // Slack channel messages that never mention the bot only matter when a
-  // keyword automation watches the channel; one Convex query decides that
-  // before anything is enqueued.
-  bot.onNewMessage(/[\s\S]*/, async (thread, message) => {
-    if (message.author.isBot === true || message.author.isMe) return
-    if (message.isMention || thread.isDM) return
-    if (providerOfThread(thread.id) !== "slack") return
-    if (isSlackEventFromCurrentApp(message.raw)) return
-
-    const raw = message.raw as SlackEvent | undefined
-    const externalId = raw?.team_id ?? raw?.team
-    if (!externalId) {
-      console.warn("Ignoring Slack message without a workspace identity.")
-      return
-    }
-    const channelId = slackThreadParts(thread.id).channel
-    const matches = await convexClient().query(
-      api.integrations.workerMatchSlackEvent,
-      {
-        channelId,
-        event: "keyword",
-        externalId,
-        text: message.text,
-        workerSecret: getWorkerSecret(WORKER_SECRET_ERROR),
-      }
-    )
-    if (matches.length === 0) return
-
-    await enqueueIntegrationEvent(
-      {
-        authorName: message.author.fullName || message.author.userName,
-        automationIds: matches.map((match) => match.automationId),
-        channelId,
-        event: "keyword",
-        externalId,
-        externalThreadId: thread.id,
-        kind: "slack_automation",
-        messageId: message.id,
-        messageText: message.text,
-        provider: "slack",
-      },
-      `slack:keyword:${externalId}:${message.id}`
-    )
-  })
-
-  bot.onReaction(async (event: ReactionEvent) => {
-    if (!event.added || event.user.isBot === true || event.user.isMe) return
-    if (providerOfThread(event.threadId) !== "slack") return
-
-    // ReactionEvent does not expose Slack's outer webhook envelope, where
-    // team_id lives. The route carries that authenticated workspace through
-    // async request context. Never fall back to another tenant.
-    const externalId = currentSlackWebhookTeamId()
-    if (!externalId) {
-      console.warn("Ignoring Slack reaction without a workspace identity.")
-      return
-    }
-
-    const channelId = slackThreadParts(event.threadId).channel
-    const matches = await convexClient().query(
-      api.integrations.workerMatchSlackEvent,
-      {
-        channelId,
-        emoji: event.rawEmoji,
-        event: "reaction",
-        externalId,
-        workerSecret: getWorkerSecret(WORKER_SECRET_ERROR),
-      }
-    )
-    if (matches.length === 0) return
-
-    await enqueueIntegrationEvent(
-      {
-        authorName: event.user.fullName || event.user.userName,
-        automationIds: matches.map((match) => match.automationId),
-        channelId,
-        emoji: event.rawEmoji,
-        event: "reaction",
-        externalId,
-        externalThreadId: event.threadId,
-        kind: "slack_automation",
-        messageId: event.messageId,
-        messageText: event.message?.text,
-        provider: "slack",
-      },
-      `slack:reaction:${externalId}:${event.messageId}:${event.rawEmoji}:${event.user.userId}`
-    )
   })
 }

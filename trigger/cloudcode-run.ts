@@ -49,6 +49,7 @@ import {
   type ActiveBillingSandboxSegment,
 } from "@/trigger/cloudcode-run-billing"
 import type { factoryDispatch } from "@/trigger/factory"
+import type { automationEventDispatch } from "@/trigger/automations"
 
 function errorMessage(error: unknown) {
   return redactCodexAuthPayloads(
@@ -79,6 +80,25 @@ async function queueFactoryWakeRuns(wakeRuns?: FactoryWakeRunRef[]) {
         console.warn("Unable to queue factory wake-up run.", error)
       })
   }
+}
+
+async function queueAutomationEventDrain(
+  automationId: Id<"automations"> | undefined,
+  runId: Id<"codexRuns">
+) {
+  if (!automationId) return
+  await tasks
+    .trigger<typeof automationEventDispatch>(
+      "automation-event-dispatch",
+      { automationId },
+      {
+        idempotencyKey: `${automationId}:terminal:${runId}`,
+        tags: [`automation:${automationId}`],
+      }
+    )
+    .catch((error) => {
+      console.warn("Unable to drain queued automation events.", error)
+    })
 }
 
 class CodexAuthReconnectHandledError extends Error {
@@ -123,6 +143,7 @@ async function failCodexAuthReconnectRun({
     return undefined
   })
   await queueFactoryWakeRuns(failResponse?.factoryWakeRuns)
+  await queueAutomationEventDrain(failResponse?.automationId, runId)
 }
 
 export const billingReconcileDaytonaSandboxes = schedules.task({
@@ -385,6 +406,10 @@ export const cloudcodeRun = task({
         result
       )
       await queueFactoryWakeRuns(completeResponse.factoryWakeRuns)
+      await queueAutomationEventDrain(
+        completeResponse.automationId,
+        payload.runId
+      )
       await notifyIntegrationRunFinished(
         client,
         payload.runId,
@@ -420,6 +445,10 @@ export const cloudcodeRun = task({
           latestSandboxId
         )
         await queueFactoryWakeRuns(cancelResponse?.factoryWakeRuns)
+        await queueAutomationEventDrain(
+          cancelResponse?.automationId,
+          payload.runId
+        )
         await notifyIntegrationRunFinished(client, payload.runId)
         streamPublisher?.publishDone("canceled")
         await streamPublisher?.flush()
@@ -473,6 +502,7 @@ export const cloudcodeRun = task({
         return undefined
       })
       await queueFactoryWakeRuns(failResponse?.factoryWakeRuns)
+      await queueAutomationEventDrain(failResponse?.automationId, payload.runId)
       await notifyIntegrationRunFinished(client, payload.runId)
       streamPublisher?.publishError(failureMessage)
       await streamPublisher?.flush()
@@ -506,6 +536,7 @@ export const cloudcodeRun = task({
     const client = workerConvexClient()
     const response = await cancelWorkerRun(client, payload.runId)
     await queueFactoryWakeRuns(response?.factoryWakeRuns)
+    await queueAutomationEventDrain(response?.automationId, payload.runId)
     await notifyIntegrationRunFinished(client, payload.runId)
   },
 })

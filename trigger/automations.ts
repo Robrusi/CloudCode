@@ -33,12 +33,50 @@ type AutomationRunPayload = {
   // Set on event-triggered fires (GitHub/Slack/Linear): interpolated into the
   // automation's prompt as {{event.*}} plus an appended context block.
   eventVars?: EventContextVars
+  eventQueueId?: Id<"automationEventQueue">
   manual: boolean
   scheduledFor?: number
 }
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Automation run failed."
+}
+
+/** Idempotently bridges a persisted Codex run to its Trigger.dev worker. If
+ * the caller dies anywhere in this handoff, the queue's run_created state lets
+ * the minute tick retry it without creating another Codex run. */
+async function dispatchCreatedAutomationRun(args: {
+  automationId: Id<"automations">
+  eventQueueId?: Id<"automationEventQueue">
+  runId: Id<"codexRuns">
+  userId: Id<"users">
+}) {
+  const client = workerConvexClient()
+  const workerSecret = getWorkerSecret()
+  const handle = await tasks.trigger<typeof cloudcodeRun>(
+    "cloudcode-run",
+    { runId: args.runId },
+    {
+      idempotencyKey: args.runId,
+      tags: [`user:${args.userId}`, `automation:${args.automationId}`],
+    }
+  )
+  const attached = await client.mutation(api.codexRuns.workerAttachTriggerRun, {
+    runId: args.runId,
+    triggerRunId: handle.id,
+    workerSecret,
+  })
+  if (args.eventQueueId) {
+    await client.mutation(api.automations.workerCompleteQueuedEvent, {
+      queueId: args.eventQueueId,
+      workerSecret,
+    })
+  }
+  return {
+    dispatched: true as const,
+    runId: args.runId,
+    triggerRunId: attached.triggerRunId,
+  }
 }
 
 // Every minute: claim due automations (compare-and-set on nextRunAt, so
@@ -48,7 +86,11 @@ export const automationsTick = schedules.task({
   id: "automations-tick",
   cron: "*/1 * * * *",
   retry: {
-    maxAttempts: 1,
+    factor: 2,
+    maxAttempts: 3,
+    maxTimeoutInMs: 10_000,
+    minTimeoutInMs: 1_000,
+    randomize: true,
   },
   run: async () => {
     const client = workerConvexClient()
@@ -107,6 +149,19 @@ export const automationsTick = schedules.task({
         dispatched += 1
       } catch (error) {
         await client
+          .mutation(api.automations.releaseScheduleClaimForWorker, {
+            automationId: automation._id,
+            expectedNextRunAt: next,
+            scheduledFor: claim.scheduledFor,
+            workerSecret,
+          })
+          .catch((releaseError) => {
+            console.warn(
+              "Unable to restore failed schedule claim.",
+              releaseError
+            )
+          })
+        await client
           .mutation(api.automations.recordDispatchFailureForWorker, {
             automationId: automation._id,
             error: errorMessage(error),
@@ -116,6 +171,25 @@ export const automationsTick = schedules.task({
             console.warn("Unable to record dispatch failure.", recordError)
           })
       }
+    }
+
+    const recovered = await client.mutation(
+      api.automations.workerRecoverEventQueues,
+      { now, workerSecret }
+    )
+    for (const automationId of recovered.automationIds) {
+      await tasks
+        .trigger<typeof automationEventDispatch>(
+          "automation-event-dispatch",
+          { automationId },
+          {
+            idempotencyKey: `${automationId}:recover:${Math.floor(now / 60_000)}`,
+            tags: [`automation:${automationId}`],
+          }
+        )
+        .catch((error) => {
+          console.warn("Unable to recover queued automation event.", error)
+        })
     }
 
     const leaked = await client.query(
@@ -139,7 +213,75 @@ export const automationsTick = schedules.task({
         })
     }
 
-    return { dispatched, due: due.length, sweptSandboxes: leaked.length }
+    return {
+      dispatched,
+      due: due.length,
+      recoveredEventQueues: recovered.recovered,
+      sweptSandboxes: leaked.length,
+    }
+  },
+})
+
+/** Starts exactly one persisted event for an idle automation. Completion of
+ * the resulting Codex run schedules the next drain; the minute tick recovers
+ * a lease if this worker dies between the claim and child enqueue. */
+export const automationEventDispatch = task({
+  id: "automation-event-dispatch",
+  retry: {
+    factor: 2,
+    maxAttempts: 5,
+    maxTimeoutInMs: 30_000,
+    minTimeoutInMs: 1_000,
+    randomize: true,
+  },
+  run: async (payload: { automationId: Id<"automations"> }) => {
+    const client = workerConvexClient()
+    const workerSecret = getWorkerSecret()
+    const claim = await client.mutation(
+      api.automations.workerClaimQueuedEvent,
+      { automationId: payload.automationId, workerSecret }
+    )
+    if (!claim.claimed) {
+      if (claim.reason === "run_created") {
+        return await dispatchCreatedAutomationRun({
+          automationId: payload.automationId,
+          eventQueueId: claim.queueId,
+          runId: claim.runId,
+          userId: claim.userId,
+        })
+      }
+      return claim
+    }
+
+    try {
+      const handle = await tasks.trigger<typeof automationRun>(
+        "automation-run",
+        {
+          automationId: payload.automationId,
+          eventQueueId: claim.queueId,
+          eventVars: claim.eventVars,
+          manual: false,
+        },
+        {
+          idempotencyKey: `automation-event:${claim.queueId}`,
+          tags: [`automation:${payload.automationId}`],
+        }
+      )
+      return { dispatched: true, triggerRunId: handle.id }
+    } catch (error) {
+      await client
+        .mutation(api.automations.workerReleaseQueuedEvent, {
+          queueId: claim.queueId,
+          workerSecret,
+        })
+        .catch((releaseError) => {
+          console.warn(
+            "Unable to release queued automation event.",
+            releaseError
+          )
+        })
+      throw error
+    }
   },
 })
 
@@ -154,6 +296,36 @@ export const automationRun = task({
   run: async (payload: AutomationRunPayload) => {
     const client = workerConvexClient()
     const workerSecret = getWorkerSecret()
+
+    const releaseQueuedEvent = async () => {
+      if (!payload.eventQueueId) return
+      await client.mutation(api.automations.workerReleaseQueuedEvent, {
+        queueId: payload.eventQueueId,
+        workerSecret,
+      })
+    }
+    const completeQueuedEvent = async () => {
+      if (!payload.eventQueueId) return
+      await client.mutation(api.automations.workerCompleteQueuedEvent, {
+        queueId: payload.eventQueueId,
+        workerSecret,
+      })
+    }
+    const queueNextEvent = async () => {
+      if (!payload.eventQueueId) return
+      await tasks
+        .trigger<typeof automationEventDispatch>(
+          "automation-event-dispatch",
+          { automationId: payload.automationId },
+          {
+            idempotencyKey: `${payload.automationId}:after:${payload.eventQueueId}`,
+            tags: [`automation:${payload.automationId}`],
+          }
+        )
+        .catch((error) => {
+          console.warn("Unable to drain the next automation event.", error)
+        })
+    }
 
     const recordDispatchFailure = async (error: string) => {
       await client
@@ -181,13 +353,21 @@ export const automationRun = task({
       automationId: payload.automationId,
       workerSecret,
     })
-    if (!loaded) return { dispatched: false, reason: "not_found" as const }
+    if (!loaded) {
+      await completeQueuedEvent()
+      return { dispatched: false, reason: "not_found" as const }
+    }
 
     const { automation } = loaded
     if (!automation.enabled && !payload.manual) {
+      await completeQueuedEvent()
       return { dispatched: false, reason: "disabled" as const }
     }
     if (loaded.activeRun) {
+      if (payload.eventQueueId) {
+        await releaseQueuedEvent()
+        return { dispatched: false, reason: "queued_behind_active" as const }
+      }
       await recordSkip()
       return { dispatched: false, reason: "previous_run_active" as const }
     }
@@ -203,6 +383,8 @@ export const automationRun = task({
       )
       if (!billing.allowed) {
         await recordDispatchFailure(BILLING_EXHAUSTED_ERROR)
+        await completeQueuedEvent()
+        await queueNextEvent()
         return { dispatched: false, reason: "billing_exhausted" as const }
       }
 
@@ -215,11 +397,14 @@ export const automationRun = task({
         !(await canClonePublicGitHubRepo(automation.repoUrl))
       ) {
         await recordDispatchFailure(GITHUB_ACCESS_ERROR)
+        await completeQueuedEvent()
+        await queueNextEvent()
         return { dispatched: false, reason: "github_access" as const }
       }
 
       const result = await client.mutation(api.automations.workerCreateRun, {
         automationId: payload.automationId,
+        eventQueueId: payload.eventQueueId,
         ...(credential?.token
           ? { githubToken: encryptSecret(credential.token) }
           : {}),
@@ -237,6 +422,13 @@ export const automationRun = task({
       })
       if (!result.ok) {
         if (result.status === "thread_busy") {
+          if (payload.eventQueueId) {
+            await releaseQueuedEvent()
+            return {
+              dispatched: false,
+              reason: "queued_behind_active" as const,
+            }
+          }
           await recordSkip()
           return { dispatched: false, reason: "previous_run_active" as const }
         }
@@ -255,45 +447,35 @@ export const automationRun = task({
             })
           return { dispatched: false, reason: result.status }
         }
+        await completeQueuedEvent()
+        await queueNextEvent()
         return { dispatched: false, reason: result.status }
       }
       created = result
     } catch (error) {
       await recordDispatchFailure(errorMessage(error))
+      await releaseQueuedEvent().catch(() => undefined)
       throw error
     }
 
-    // From here the run and its pending assistant message exist; failures
-    // must unwind through workerFail so the thread is not left pending.
+    // Event runs remain recoverable in run_created until the worker handoff is
+    // durably attached. Cron/manual runs have no queue backstop, so preserve
+    // their existing explicit failure cleanup.
     try {
-      const handle = await tasks.trigger<typeof cloudcodeRun>(
-        "cloudcode-run",
-        { runId: created.runId },
-        {
-          idempotencyKey: created.runId,
-          tags: [
-            `user:${created.userId}`,
-            `automation:${payload.automationId}`,
-          ],
-        }
-      )
-      await client.mutation(api.codexRuns.workerAttachTriggerRun, {
+      return await dispatchCreatedAutomationRun({
+        automationId: payload.automationId,
+        eventQueueId: payload.eventQueueId,
         runId: created.runId,
-        triggerRunId: handle.id,
-        workerSecret,
+        userId: created.userId,
       })
-
-      return {
-        dispatched: true,
-        runId: created.runId,
-        triggerRunId: handle.id,
-      }
     } catch (error) {
+      if (payload.eventQueueId) throw error
       await failWorkerRun(client, created.runId, errorMessage(error)).catch(
         (failError) => {
           console.warn("Unable to mark automation run failed.", failError)
         }
       )
+      await queueNextEvent()
       throw error
     }
   },

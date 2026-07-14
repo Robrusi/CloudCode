@@ -75,6 +75,10 @@ export const automationTrigger = v.union(
       v.literal("pullRequestReviewSubmitted"),
       v.literal("push")
     ),
+    // Persisted after the API verifies that this repository belongs to one of
+    // the user's GitHub App installations. It lets disconnect/sync disable
+    // only the triggers whose delivery source disappeared.
+    installationId: v.optional(v.string()),
     kind: v.literal("github"),
   })
 )

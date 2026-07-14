@@ -103,6 +103,8 @@ function parseAutomationTrigger(body: JsonRecord): AutomationTrigger {
           ?.trim()
           .replace(/^refs\/heads\//, "") || undefined,
       event,
+      installationId:
+        jsonRawStringField(raw, "installationId")?.trim() || undefined,
       kind: "github",
     }
   }

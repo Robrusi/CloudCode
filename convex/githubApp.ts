@@ -2,8 +2,34 @@ import { v } from "convex/values"
 
 import type { Id } from "./_generated/dataModel"
 import { mutation, query, type MutationCtx } from "./_generated/server"
+import { disableAutomation } from "./lib/automationRecords"
+import { automationTriggerOf } from "./lib/integrationTriggers"
 import { requireWorkerSecret } from "./lib/workerAuth"
 import { ensureCurrentUser, getCurrentUser } from "./lib/users"
+
+const GITHUB_TRIGGER_DISCONNECTED_REASON =
+  "The GitHub App installation that delivered this trigger was disconnected. Reinstall the app and edit the automation to resume."
+
+async function disableGitHubAutomations(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  shouldDisable: (installationId: string | undefined) => boolean
+) {
+  const automations = await ctx.db
+    .query("automations")
+    .withIndex("by_user_updated", (q) => q.eq("userId", userId))
+    .collect()
+  for (const automation of automations) {
+    const trigger = automationTriggerOf(automation)
+    if (trigger.kind === "github" && shouldDisable(trigger.installationId)) {
+      await disableAutomation(
+        ctx,
+        automation,
+        GITHUB_TRIGGER_DISCONNECTED_REASON
+      )
+    }
+  }
+}
 
 function toInstallation(installation: {
   accountId?: string
@@ -170,6 +196,14 @@ export const replaceInstallations = mutation({
         !currentIds.has(installation.installationId) ||
         !retainedRowIds.has(installation._id)
     )
+    const staleIds = new Set(
+      stale.map((installation) => installation.installationId)
+    )
+    if (staleIds.size > 0) {
+      await disableGitHubAutomations(ctx, userId, (installationId) =>
+        installationId ? staleIds.has(installationId) : currentIds.size === 0
+      )
+    }
     for (const installation of stale) {
       await ctx.db.delete(installation._id)
     }
@@ -351,6 +385,8 @@ export const disconnectUser = mutation({
         .withIndex("by_user", (q) => q.eq("userId", userId))
         .unique(),
     ])
+
+    await disableGitHubAutomations(ctx, userId, () => true)
 
     await Promise.all([
       ...installations.map((installation) => ctx.db.delete(installation._id)),

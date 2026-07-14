@@ -376,6 +376,25 @@ export async function getCurrentGitHubAppInstallations(): Promise<
   )) satisfies StoredGitHubAppInstallation[]
 }
 
+/** Resolves the GitHub App installation that can actually deliver webhooks
+ * for this repository and confirms it belongs to the signed-in CloudCode
+ * user. Unlike credential creation, this does not mint a short-lived token. */
+export async function currentGitHubAppRepoInstallationId(repoUrl: string) {
+  if (!isGitHubAppConfigured() || !isGitHubAppUserAuthConfigured()) return null
+  const userAuth = await getCurrentGitHubAppUserAuth()
+  if (!userAuth) return null
+  const repoInstallation = await getGitHubAppRepoInstallation(repoUrl)
+  if (!repoInstallation) return null
+  const synced = await syncCurrentGitHubAppUserInstallations().catch(() => null)
+  const installations = synced ?? (await getCurrentGitHubAppInstallations())
+  return installations.some(
+    (installation) =>
+      installation.installationId === repoInstallation.installationId
+  )
+    ? repoInstallation.installationId
+    : null
+}
+
 async function replaceCurrentGitHubAppInstallations(
   installations: StoredGitHubAppInstallation[]
 ) {

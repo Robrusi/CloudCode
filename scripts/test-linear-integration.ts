@@ -93,6 +93,8 @@ assert.deepEqual(
   parseLinearAutomationEvents({
     action: "create",
     data: {
+      assignee: { id: "user-2", name: "Ada Lovelace" },
+      assigneeId: "user-2",
       description: "Investigate the regression",
       id: "issue-2",
       identifier: "ENG-2",
@@ -111,8 +113,41 @@ assert.deepEqual(
       {
         event: "issueCreated",
         issue: {
-          assigneeId: undefined,
-          assigneeName: undefined,
+          assigneeId: "user-2",
+          assigneeName: "Ada Lovelace",
+          description: "Investigate the regression",
+          id: "issue-2",
+          identifier: "ENG-2",
+          labels: [{ id: "label-1", name: "Bug" }],
+          stateId: "state-1",
+          stateName: "Triage",
+          teamId: "team-1",
+          title: "New regression",
+          url: "https://linear.app/acme/issue/ENG-2",
+        },
+      },
+      {
+        event: "issueAssigned",
+        issue: {
+          assigneeId: "user-2",
+          assigneeName: "Ada Lovelace",
+          description: "Investigate the regression",
+          id: "issue-2",
+          identifier: "ENG-2",
+          labels: [{ id: "label-1", name: "Bug" }],
+          stateId: "state-1",
+          stateName: "Triage",
+          teamId: "team-1",
+          title: "New regression",
+          url: "https://linear.app/acme/issue/ENG-2",
+        },
+      },
+      {
+        addedLabels: [{ id: "label-1", name: "Bug" }],
+        event: "labelAdded",
+        issue: {
+          assigneeId: "user-2",
+          assigneeName: "Ada Lovelace",
           description: "Investigate the regression",
           id: "issue-2",
           identifier: "ENG-2",

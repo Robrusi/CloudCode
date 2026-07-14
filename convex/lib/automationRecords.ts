@@ -4,6 +4,25 @@ import { AUTOMATION_MAX_CONSECUTIVE_FAILURES } from "@/lib/automations/config"
 
 const AUTOMATION_ERROR_MAX_LENGTH = 500
 
+async function deleteQueuedEvents(
+  ctx: MutationCtx,
+  automation: Doc<"automations">
+) {
+  const queued = await ctx.db
+    .query("automationEventQueue")
+    .withIndex("by_automation_created", (q) =>
+      q.eq("automationId", automation._id)
+    )
+    .collect()
+  await Promise.all(
+    queued
+      .filter(
+        (event) => event.status === "pending" || event.status === "dispatching"
+      )
+      .map((event) => ctx.db.delete(event._id))
+  )
+}
+
 function truncateError(error?: string) {
   if (!error) return undefined
 
@@ -68,6 +87,7 @@ export async function recordAutomationFailure(
       : {}),
     updatedAt: Date.now(),
   })
+  if (disable) await deleteQueuedEvents(ctx, automation)
 }
 
 export async function disableAutomation(
@@ -81,4 +101,5 @@ export async function disableAutomation(
     nextRunAt: undefined,
     updatedAt: Date.now(),
   })
+  await deleteQueuedEvents(ctx, automation)
 }

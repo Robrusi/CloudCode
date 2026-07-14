@@ -365,12 +365,26 @@ export const workerAttachTriggerRun = mutation({
     const run = await ctx.db.get(args.runId)
     if (!run) throw new Error("Run not found.")
 
-    await ctx.db.patch(args.runId, {
-      triggerRunId: args.triggerRunId,
-      updatedAt: Date.now(),
-    })
+    if (run.triggerRunId && run.triggerRunId !== args.triggerRunId) {
+      return {
+        attached: false as const,
+        canceled: run.status === "canceled" || run.status === "canceling",
+        triggerRunId: run.triggerRunId,
+      }
+    }
 
-    return { canceled: run.status === "canceled" || run.status === "canceling" }
+    if (!run.triggerRunId) {
+      await ctx.db.patch(args.runId, {
+        triggerRunId: args.triggerRunId,
+        updatedAt: Date.now(),
+      })
+    }
+
+    return {
+      attached: true as const,
+      canceled: run.status === "canceled" || run.status === "canceling",
+      triggerRunId: args.triggerRunId,
+    }
   },
 })
 
@@ -687,14 +701,22 @@ export const workerComplete = mutation({
     const run = await ctx.db.get(args.runId)
     if (!run) throw new Error("Run not found.")
     if (run.status === "canceled") {
-      return { canceled: true, factoryWakeRuns: [] }
+      return {
+        automationId: run.automationId,
+        canceled: true,
+        factoryWakeRuns: [],
+      }
     }
     if (run.status === "canceling") {
       // No wake-ups here: the worker routes a canceled completion through
       // workerCancel, which delivers them; creating them now would leave
       // queued wake runs nothing ever triggers.
       await markRunCanceled(ctx, run, "_Stopped._", args.sandboxId)
-      return { canceled: true, factoryWakeRuns: [] }
+      return {
+        automationId: run.automationId,
+        canceled: true,
+        factoryWakeRuns: [],
+      }
     }
 
     const now = Date.now()
@@ -759,7 +781,7 @@ export const workerComplete = mutation({
     await recordReviewRunOutcome(ctx, run, nextStatus, outcomeError)
     const factoryWakeRuns = await factoryWakeRunsAfterFinish(ctx, run)
 
-    return { canceled: false, factoryWakeRuns }
+    return { automationId: run.automationId, canceled: false, factoryWakeRuns }
   },
 })
 
@@ -775,12 +797,20 @@ export const workerFail = mutation({
     const run = await ctx.db.get(args.runId)
     if (!run) throw new Error("Run not found.")
     if (run.status === "canceled") {
-      return { canceled: true, factoryWakeRuns: [] }
+      return {
+        automationId: run.automationId,
+        canceled: true,
+        factoryWakeRuns: [],
+      }
     }
     if (run.status === "canceling") {
       await markRunCanceled(ctx, run, "_Stopped._", args.sandboxId)
       const factoryWakeRuns = await factoryWakeRunsAfterFinish(ctx, run)
-      return { canceled: true, factoryWakeRuns }
+      return {
+        automationId: run.automationId,
+        canceled: true,
+        factoryWakeRuns,
+      }
     }
 
     const now = Date.now()
@@ -814,7 +844,7 @@ export const workerFail = mutation({
     await recordReviewRunOutcome(ctx, run, "failed", args.error)
     const factoryWakeRuns = await factoryWakeRunsAfterFinish(ctx, run)
 
-    return { canceled: false, factoryWakeRuns }
+    return { automationId: run.automationId, canceled: false, factoryWakeRuns }
   },
 })
 
@@ -827,10 +857,10 @@ export const workerCancel = mutation({
   handler: async (ctx, args) => {
     requireWorkerSecret(args.workerSecret)
     const run = await ctx.db.get(args.runId)
-    if (!run) return { factoryWakeRuns: [] }
+    if (!run) return { automationId: undefined, factoryWakeRuns: [] }
     await markRunCanceled(ctx, run, "_Stopped._", args.sandboxId)
     const factoryWakeRuns = await factoryWakeRunsAfterFinish(ctx, run)
-    return { factoryWakeRuns }
+    return { automationId: run.automationId, factoryWakeRuns }
   },
 })
 

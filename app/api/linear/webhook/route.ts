@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { tasks } from "@trigger.dev/sdk"
 import { after } from "next/server"
 
@@ -22,7 +23,7 @@ export const runtime = "nodejs"
 
 /** Reads verified events the Chat SDK does not dispatch: Issue/Comment data
  * changes for automations and direct agent delegations without a backing
- * comment. Failures here never block the adapter's normal chat flow. */
+ * comment. Automation handoff failures are returned to Linear so it retries. */
 async function dispatchPreprocessedEvents(
   request: Request,
   webhookSecret: string
@@ -44,25 +45,21 @@ async function dispatchPreprocessedEvents(
     const delegation = parseCommentlessLinearDelegation(rawPayload)
     const { events, organizationId } = parseLinearAutomationEvents(rawPayload)
 
-    const deliveryId = request.headers.get("linear-delivery")
+    const deliveryId =
+      request.headers.get("linear-delivery") ??
+      `body:${createHash("sha256").update(rawBody).digest("hex")}`
     if (events.length > 0 && organizationId) {
-      after(async () => {
-        await tasks
-          .trigger<typeof integrationEvent>(
-            "integration-event",
-            {
-              deliveryId: deliveryId ?? undefined,
-              events,
-              externalId: organizationId,
-              kind: "linear_automation",
-              provider: "linear",
-            },
-            deliveryId ? { idempotencyKey: `lind:${deliveryId}` } : undefined
-          )
-          .catch((error) => {
-            console.warn("Unable to enqueue Linear automation event.", error)
-          })
-      })
+      await tasks.trigger<typeof integrationEvent>(
+        "integration-event",
+        {
+          deliveryId,
+          events,
+          externalId: organizationId,
+          kind: "linear_automation",
+          provider: "linear",
+        },
+        { idempotencyKey: `lind:${deliveryId}` }
+      )
     }
 
     if (delegation) {
@@ -110,21 +107,26 @@ async function dispatchPreprocessedEvents(
     }
   } catch (error) {
     console.warn("/api/linear/webhook preprocessing failed", error)
+    throw error
   }
 }
 
 // Linear is the caller: authentication is the HMAC signature over the raw
 // body (LINEAR_WEBHOOK_SECRET); the Chat SDK adapter verifies it again for
 // the comment-backed agent-session flow it handles. Agent sessions expect a
-// first activity within ~10 seconds, so both paths acknowledge promptly and
-// defer durable work to Trigger via waitUntil.
+// first activity within ~10 seconds. Automation events are handed to Trigger
+// before acknowledgement; agent-session chat work stays on waitUntil.
 export async function POST(request: Request) {
   const env = linearIntegrationEnv()
   if (!env || !integrationsStateRedisUrl()) {
     return jsonError("The Linear integration is not configured.", 503)
   }
 
-  await dispatchPreprocessedEvents(request, env.webhookSecret)
+  try {
+    await dispatchPreprocessedEvents(request, env.webhookSecret)
+  } catch {
+    return jsonError("Unable to dispatch Linear automation event.", 500)
+  }
 
   const { bot } = getIntegrationsBot()
   const background = createWebhookTaskTracker((error) => {

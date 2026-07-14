@@ -290,8 +290,21 @@ export function parseLinearAutomationEvents(payload: unknown): {
   const events: LinearAutomationEvent[] = []
 
   if (parsed.action === "create") {
+    const createdEvents: LinearAutomationEvent[] = [
+      { event: "issueCreated", issue },
+    ]
+    if (assigneeId) {
+      createdEvents.push({ event: "issueAssigned", issue })
+    }
+    if (issue.labels?.length) {
+      createdEvents.push({
+        addedLabels: issue.labels,
+        event: "labelAdded",
+        issue,
+      })
+    }
     return {
-      events: [{ event: "issueCreated", issue }],
+      events: createdEvents,
       organizationId: parsed.organizationId,
     }
   }

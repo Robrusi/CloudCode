@@ -37,11 +37,13 @@ export type IntegrationChatEventPayload = {
 /** A Slack channel event (keyword match or reaction) that pre-matched at
  * least one enabled event automation in the webhook handler. */
 export type SlackAutomationEventPayload = {
+  actorUserId?: string
   authorName?: string
   automationIds: Id<"automations">[]
   channelId: string
   emoji?: string
   event: "keyword" | "reaction"
+  eventId?: string
   externalId: string
   externalThreadId: string
   kind: "slack_automation"

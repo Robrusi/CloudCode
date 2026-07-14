@@ -7,6 +7,7 @@ import { convexErrorMessage } from "@/lib/convex/errors"
 import { currentUserConvexHttpClient } from "@/lib/convex/http"
 import { jsonError, readJsonRecord } from "@/lib/http/api-route"
 import { requireSameOrigin } from "@/lib/http/request-security"
+import { currentGitHubAppRepoInstallationId } from "@/lib/github/app"
 import type { Id } from "@/convex/_generated/dataModel"
 
 export const runtime = "nodejs"
@@ -17,7 +18,27 @@ export async function POST(request: Request) {
 
   try {
     const body = await readJsonRecord(request)
-    const config = parseAutomationRequestConfig(body)
+    const parsedConfig = parseAutomationRequestConfig(body)
+    const githubInstallationId =
+      parsedConfig.trigger.kind === "github"
+        ? await currentGitHubAppRepoInstallationId(parsedConfig.repoUrl)
+        : undefined
+    if (parsedConfig.trigger.kind === "github" && !githubInstallationId) {
+      return jsonError(
+        "Install the GitHub App on this repository before enabling its trigger.",
+        400
+      )
+    }
+    const config =
+      parsedConfig.trigger.kind === "github"
+        ? {
+            ...parsedConfig,
+            trigger: {
+              ...parsedConfig.trigger,
+              installationId: githubInstallationId!,
+            },
+          }
+        : parsedConfig
     const nextRunAt =
       config.trigger.kind === "cron"
         ? nextRunAtAfter(

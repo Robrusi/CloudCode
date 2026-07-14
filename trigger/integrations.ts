@@ -1,6 +1,7 @@
 import { task, tasks } from "@trigger.dev/sdk"
 
 import { api } from "@/convex/_generated/api"
+import type { Id } from "@/convex/_generated/dataModel"
 import { githubAutomationTriggerSourceKey } from "@/convex/lib/integrationTriggers"
 import {
   MODELS,
@@ -10,6 +11,7 @@ import {
 } from "@/lib/chat/options"
 import { getWorkerSecret, workerConvexClient } from "@/lib/codex/run-worker"
 import { dispatchIntegrationRun } from "@/lib/integrations/dispatch"
+import { getInitializedIntegrationsBot } from "@/lib/integrations/bot"
 import {
   chatEventPrompt,
   githubAutomationEventMatches,
@@ -31,7 +33,7 @@ import {
 } from "@/lib/integrations/outbound"
 import { linearAgentSessionThreadId } from "@/lib/integrations/linear-threads"
 import { normalizeSlackDmThreadId } from "@/lib/integrations/slack-threads"
-import type { automationRun } from "@/trigger/automations"
+import type { automationEventDispatch } from "@/trigger/automations"
 
 const BILLING_EXHAUSTED_MESSAGE =
   "CloudCode's infrastructure usage is exhausted for this account. Upgrade or wait for the included usage to reset."
@@ -76,6 +78,51 @@ async function replyBestEffort(ref: IntegrationThreadRef, markdown: string) {
   await deliverBestEffort(ref, async () => {
     await postToIntegrationThread(ref, markdown)
   })
+}
+
+async function enqueueAutomationFire(
+  client: ReturnType<typeof workerConvexClient>,
+  workerSecret: string,
+  automationId: Id<"automations">,
+  eventKey: string,
+  eventVars: Record<string, string>
+) {
+  const queued = await client.mutation(api.automations.workerEnqueueEventFire, {
+    automationId,
+    eventKey,
+    eventVars,
+    workerSecret,
+  })
+  if (!("queueId" in queued) || !queued.queueId) return queued
+
+  await tasks.trigger<typeof automationEventDispatch>(
+    "automation-event-dispatch",
+    { automationId },
+    {
+      idempotencyKey: `${automationId}:queued:${queued.queueId}`,
+      tags: [`automation:${automationId}`],
+    }
+  )
+  return queued
+}
+
+async function settleAutomationFires(
+  fires: Array<Promise<{ queued: boolean }>>
+) {
+  const settled = await Promise.allSettled(fires)
+  const failures = settled.filter(
+    (result): result is PromiseRejectedResult => result.status === "rejected"
+  )
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures.map((failure) => failure.reason),
+      `Unable to enqueue ${failures.length} matched automation event(s).`
+    )
+  }
+  return settled.filter(
+    (result): result is PromiseFulfilledResult<{ queued: boolean }> =>
+      result.status === "fulfilled"
+  )
 }
 
 /** Mentions and follow-up messages: resolve the installation and run owner,
@@ -264,30 +311,69 @@ async function handleChatEvent(payload: IntegrationChatEventPayload) {
 async function handleSlackAutomationEvent(
   payload: SlackAutomationEventPayload
 ) {
+  const { slack } = await getInitializedIntegrationsBot()
+  if (!slack) return { fired: 0, reason: "not_configured" as const }
+  const installation = await slack.getInstallation(payload.externalId)
+  if (!installation) return { fired: 0, reason: "not_installed" as const }
+
+  const enriched = await slack.withBotToken(installation.botToken, async () => {
+    const user = payload.actorUserId
+      ? await slack.getUser(payload.actorUserId).catch(() => null)
+      : null
+    if (user?.isBot) return null
+
+    if (payload.event !== "reaction" || payload.messageText) {
+      return {
+        ...payload,
+        authorName:
+          payload.authorName ??
+          user?.fullName ??
+          user?.userName ??
+          payload.actorUserId,
+      }
+    }
+
+    const reaction = await slack.webClient.reactions.get({
+      channel: payload.channelId,
+      full: true,
+      timestamp: payload.messageId,
+    })
+    const messageText = reaction.message?.text
+    if (!messageText) {
+      throw new Error("Unable to load the reacted Slack message.")
+    }
+    return {
+      ...payload,
+      authorName:
+        payload.authorName ??
+        user?.fullName ??
+        user?.userName ??
+        payload.actorUserId,
+      messageText,
+    }
+  })
+  if (!enriched) return { fired: 0, reason: "bot_actor" as const }
+
+  const eventVars = slackAutomationEventVars(enriched)
   const client = workerConvexClient()
   const workerSecret = getWorkerSecret()
-  const eventVars = slackAutomationEventVars(payload)
-
-  let fired = 0
-  for (const automationId of payload.automationIds) {
-    const claim = await client.mutation(api.automations.workerClaimEventFire, {
-      automationId,
-      workerSecret,
-    })
-    if (!claim.claimed) continue
-
-    await tasks.trigger<typeof automationRun>(
-      "automation-run",
-      { automationId, eventVars, manual: false },
-      {
-        idempotencyKey: `${automationId}:${payload.externalId}:${payload.event}:${payload.messageId}:${payload.emoji ?? ""}`,
-        tags: [`automation:${automationId}`],
-      }
+  const eventKey =
+    enriched.eventId ??
+    `${enriched.externalId}:${enriched.event}:${enriched.messageId}:${enriched.emoji ?? ""}:${enriched.actorUserId ?? "unknown"}`
+  const results = await settleAutomationFires(
+    enriched.automationIds.map((automationId) =>
+      enqueueAutomationFire(
+        client,
+        workerSecret,
+        automationId,
+        eventKey,
+        eventVars
+      )
     )
-    fired += 1
-  }
+  )
+  const fired = results.filter((result) => result.value.queued).length
 
-  return { fired, matched: payload.automationIds.length }
+  return { fired, matched: enriched.automationIds.length }
 }
 
 /** Matches Linear issue changes and human comment creations against event
@@ -307,11 +393,19 @@ async function handleLinearAutomationEvent(
     return { fired: 0, reason: resolved.status }
   }
 
+  const events = payload.events.filter(
+    (event) =>
+      event.event !== "commentCreated" ||
+      !resolved.botUserId ||
+      event.comment?.authorId !== resolved.botUserId
+  )
+  if (events.length === 0) {
+    return { fired: 0, matched: 0, reason: "self_authored" as const }
+  }
+
   const sourceKeys = [
     ...new Set(
-      payload.events.map(
-        (event) => `linear:${resolved.installationId}:${event.event}`
-      )
+      events.map((event) => `linear:${resolved.installationId}:${event.event}`)
     ),
   ]
   const automations = await client.query(
@@ -319,34 +413,27 @@ async function handleLinearAutomationEvent(
     { sourceKeys, workerSecret }
   )
 
-  let fired = 0
-  for (const event of payload.events) {
+  const fires: Array<Promise<{ queued: boolean }>> = []
+  for (const event of events) {
     for (const automation of automations) {
       const trigger = automation.trigger
       if (trigger.kind !== "linear") continue
       if (!linearAutomationEventMatches(trigger, event)) continue
 
-      const claim = await client.mutation(
-        api.automations.workerClaimEventFire,
-        { automationId: automation._id, workerSecret }
+      fires.push(
+        enqueueAutomationFire(
+          client,
+          workerSecret,
+          automation._id,
+          `${event.event}:${payload.deliveryId ?? event.comment?.id ?? event.issue.id}`,
+          linearAutomationEventVars(event)
+        )
       )
-      if (!claim.claimed) continue
-
-      await tasks.trigger<typeof automationRun>(
-        "automation-run",
-        {
-          automationId: automation._id,
-          eventVars: linearAutomationEventVars(event),
-          manual: false,
-        },
-        {
-          idempotencyKey: `${automation._id}:${event.event}:${payload.deliveryId ?? event.issue.id}`,
-          tags: [`automation:${automation._id}`],
-        }
-      )
-      fired += 1
     }
   }
+
+  const results = await settleAutomationFires(fires)
+  const fired = results.filter((result) => result.value.queued).length
 
   return { fired, matched: automations.length }
 }
@@ -376,32 +463,25 @@ async function handleGitHubAutomationEvent(
     }
   )
 
-  let fired = 0
+  const fires: Array<Promise<{ queued: boolean }>> = []
   for (const automation of automations) {
     const trigger = automation.trigger
     if (trigger.kind !== "github") continue
     if (!githubAutomationEventMatches(trigger, event)) continue
 
-    const claim = await client.mutation(api.automations.workerClaimEventFire, {
-      automationId: automation._id,
-      workerSecret,
-    })
-    if (!claim.claimed) continue
-
-    await tasks.trigger<typeof automationRun>(
-      "automation-run",
-      {
-        automationId: automation._id,
-        eventVars: githubAutomationEventVars(event),
-        manual: false,
-      },
-      {
-        idempotencyKey: `${automation._id}:${eventId}`,
-        tags: [`automation:${automation._id}`],
-      }
+    fires.push(
+      enqueueAutomationFire(
+        client,
+        workerSecret,
+        automation._id,
+        eventId,
+        githubAutomationEventVars(event)
+      )
     )
-    fired += 1
   }
+
+  const results = await settleAutomationFires(fires)
+  const fired = results.filter((result) => result.value.queued).length
 
   return { fired, matched: automations.length }
 }
@@ -412,7 +492,11 @@ async function handleGitHubAutomationEvent(
 export const integrationEvent = task({
   id: "integration-event",
   retry: {
-    maxAttempts: 1,
+    factor: 2,
+    maxAttempts: 5,
+    maxTimeoutInMs: 30_000,
+    minTimeoutInMs: 1_000,
+    randomize: true,
   },
   run: async (payload: IntegrationEventPayload) => {
     switch (payload.kind) {

@@ -766,6 +766,7 @@ export const workerResolveEvent = query({
 
     return {
       status: "ok" as const,
+      botUserId: installation.botUserId,
       bridge,
       defaultRepoUrl: installation.defaultRepoUrl,
       defaultSandboxPresetId: installation.defaultSandboxPresetId,
@@ -782,6 +783,7 @@ export const workerResolveEvent = query({
  * nothing more. The event worker still claims and re-validates each fire. */
 export const workerMatchSlackEvent = query({
   args: {
+    actorUserId: v.optional(v.string()),
     channelId: v.string(),
     emoji: v.optional(v.string()),
     event: v.union(v.literal("keyword"), v.literal("reaction")),
@@ -798,6 +800,9 @@ export const workerMatchSlackEvent = query({
       args.externalId
     )
     if (!installation || !installation.enabled) return []
+    if (args.actorUserId && args.actorUserId === installation.botUserId) {
+      return []
+    }
 
     const rows = await ctx.db
       .query("automations")
@@ -806,9 +811,17 @@ export const workerMatchSlackEvent = query({
           .eq("triggerSourceKey", `slack:${installation._id}:${args.event}`)
           .eq("enabled", true)
       )
-      .take(50)
+      .collect()
 
     const text = args.text?.toLowerCase() ?? ""
+    if (
+      args.event === "keyword" &&
+      installation.botUserId &&
+      (text.includes(`<@${installation.botUserId.toLowerCase()}>`) ||
+        text.includes(`@${installation.botUserId.toLowerCase()}`))
+    ) {
+      return []
+    }
     return rows
       .filter((row) => {
         const trigger = row.trigger

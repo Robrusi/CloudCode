@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { createHmac } from "node:crypto"
 
 import { chatEventPrompt } from "../lib/integrations/events"
 import { parseIntegrationMessage } from "../lib/integrations/keywords"
@@ -14,6 +15,10 @@ import {
   withSlackWebhookContext,
 } from "../lib/integrations/slack-webhook-context"
 import { createWebhookTaskTracker } from "../lib/integrations/webhook-tasks"
+import {
+  parseSlackAutomationWebhookEvent,
+  verifySlackWebhookRequest,
+} from "../lib/integrations/slack-webhook"
 
 assert.deepEqual(slackThreadParts("slack:C123:1712345678.123456"), {
   channel: "C123",
@@ -154,6 +159,98 @@ await withSlackWebhookContext(webhookContext, async () => {
 })
 assert.equal(currentSlackWebhookTeamId(), undefined)
 assert.equal(isSlackEventFromCurrentApp({ app_id: "A123" }), false)
+
+const signingSecret = "slack-signing-secret"
+const signedAt = 1_700_000_000
+const signedBody = JSON.stringify({
+  api_app_id: "A123",
+  event: {
+    channel: "C123",
+    text: "please ship this",
+    ts: "1700000000.000001",
+    type: "message",
+    user: "U123",
+  },
+  event_id: "Ev-message-1",
+  team_id: "T123",
+  type: "event_callback",
+})
+const slackSignature = `v0=${createHmac("sha256", signingSecret)
+  .update(`v0:${signedAt}:${signedBody}`)
+  .digest("hex")}`
+assert.equal(
+  verifySlackWebhookRequest(
+    signedBody,
+    slackSignature,
+    String(signedAt),
+    signingSecret,
+    signedAt * 1000
+  ),
+  true
+)
+assert.equal(
+  verifySlackWebhookRequest(
+    signedBody,
+    slackSignature,
+    String(signedAt),
+    signingSecret,
+    (signedAt + 301) * 1000
+  ),
+  false
+)
+assert.deepEqual(parseSlackAutomationWebhookEvent(JSON.parse(signedBody)), {
+  actorUserId: "U123",
+  channelId: "C123",
+  event: "keyword",
+  eventId: "Ev-message-1",
+  externalId: "T123",
+  externalThreadId: "slack:C123:1700000000.000001",
+  messageId: "1700000000.000001",
+  messageText: "please ship this",
+})
+
+const reactionEnvelope = {
+  event: {
+    item: {
+      channel: "C123",
+      ts: "1700000000.000001",
+      type: "message",
+    },
+    reaction: "white_check_mark",
+    type: "reaction_added",
+    user: "U123",
+  },
+  event_id: "Ev-reaction-1",
+  team_id: "T123",
+  type: "event_callback",
+}
+assert.deepEqual(parseSlackAutomationWebhookEvent(reactionEnvelope), {
+  actorUserId: "U123",
+  channelId: "C123",
+  emoji: "white_check_mark",
+  event: "reaction",
+  eventId: "Ev-reaction-1",
+  externalId: "T123",
+  externalThreadId: "slack:C123:1700000000.000001",
+  messageId: "1700000000.000001",
+})
+assert.equal(
+  parseSlackAutomationWebhookEvent({
+    ...reactionEnvelope,
+    event: { ...reactionEnvelope.event, type: "reaction_removed" },
+  }),
+  null
+)
+assert.equal(
+  parseSlackAutomationWebhookEvent({
+    ...JSON.parse(signedBody),
+    event: {
+      ...JSON.parse(signedBody).event,
+      app_id: "A123",
+    },
+  }),
+  null
+)
 
 const backgroundErrors: unknown[] = []
 const background = createWebhookTaskTracker((error) => {

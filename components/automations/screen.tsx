@@ -13,6 +13,7 @@ import {
 import { useRef, useState } from "react"
 
 import { AutomationComposer } from "@/components/automations/composer"
+import { RunEventAutomationDialog } from "@/components/automations/run-event-dialog"
 import {
   automationTriggerLabel,
   type AutomationRecord,
@@ -316,6 +317,8 @@ export function AutomationsScreen({
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<Id<"automations"> | null>(null)
   const [actionError, setActionError] = useState("")
+  const [pendingRun, setPendingRun] = useState<AutomationRecord | null>(null)
+  const [runTestError, setRunTestError] = useState("")
 
   const editingId = active && active !== "new" ? active._id : null
 
@@ -356,6 +359,37 @@ export function AutomationsScreen({
         { fallbackError: "Unable to run automation." }
       )
     )
+
+  const requestRunNow = (automation: AutomationRecord) => {
+    if (automation.trigger && automation.trigger.kind !== "cron") {
+      setRunTestError("")
+      setPendingRun(automation)
+      return
+    }
+    void runNow(automation)
+  }
+
+  const confirmEventRun = async (eventValues: Record<string, string>) => {
+    const automation = pendingRun
+    if (!automation || busyId) return
+    setBusyId(automation._id)
+    setRunTestError("")
+    try {
+      await postJson(
+        "/api/automations/run-now",
+        { automationId: automation._id, eventValues },
+        {},
+        { fallbackError: "Unable to run automation." }
+      )
+      setPendingRun(null)
+    } catch (error) {
+      setRunTestError(
+        error instanceof Error ? error.message : "Unable to run automation."
+      )
+    } finally {
+      setBusyId(null)
+    }
+  }
 
   const requestDelete = (automation: AutomationRecord) => {
     setDeleteError(null)
@@ -399,7 +433,7 @@ export function AutomationsScreen({
     onDelete: () => requestDelete(automation),
     onEdit: () => setActive(automation),
     onOpenThread,
-    onRunNow: () => void runNow(automation),
+    onRunNow: () => requestRunNow(automation),
     onToggle: (enabled: boolean) => void toggle(automation, enabled),
     onToggleExpanded: () =>
       setExpandedId((current) =>
@@ -505,6 +539,18 @@ export function AutomationsScreen({
           error={deleteError ?? undefined}
           onConfirm={() => void confirmDelete()}
           onCancel={cancelDelete}
+        />
+      ) : null}
+      {pendingRun ? (
+        <RunEventAutomationDialog
+          key={pendingRun._id}
+          automation={pendingRun}
+          busy={busyId === pendingRun._id}
+          error={runTestError || undefined}
+          onCancel={() => {
+            if (busyId !== pendingRun._id) setPendingRun(null)
+          }}
+          onConfirm={(values) => void confirmEventRun(values)}
         />
       ) : null}
     </div>

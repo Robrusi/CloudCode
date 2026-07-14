@@ -135,6 +135,33 @@ export default defineSchema({
     .index("by_trigger_source", ["triggerSourceKey", "enabled"])
     .index("by_thread", ["threadId"]),
 
+  // Durable FIFO for webhook-triggered automation runs. Provider deliveries
+  // land here before child Trigger.dev work is dispatched, so an active run or
+  // a transient queue outage delays an event instead of silently dropping it.
+  automationEventQueue: defineTable({
+    automationId: v.id("automations"),
+    createdAt: v.number(),
+    dispatchLeaseExpiresAt: v.optional(v.number()),
+    eventKey: v.string(),
+    eventVars: v.record(v.string(), v.string()),
+    runId: v.optional(v.id("codexRuns")),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("dispatching"),
+      v.literal("run_created"),
+      v.literal("started")
+    ),
+    updatedAt: v.number(),
+  })
+    .index("by_automation_created", ["automationId", "createdAt"])
+    .index("by_automation_event", ["automationId", "eventKey"])
+    .index("by_automation_status_created", [
+      "automationId",
+      "status",
+      "createdAt",
+    ])
+    .index("by_status_updated", ["status", "updatedAt"]),
+
   reviews: defineTable({
     // Which PR authors get reviewed: unset means everyone, "allow" means only
     // the logins in authorFilters, "block" means everyone except them.

@@ -43,6 +43,10 @@ import {
 // Guard against a stale client clock or a stale form submitting a nextRunAt
 // that is already far in the past, which would fire immediately.
 const NEXT_RUN_AT_PAST_TOLERANCE_MS = 5 * 60_000
+const EVENT_QUEUE_MAX_PENDING = 100
+const EVENT_DISPATCH_LEASE_MS = 5 * 60_000
+const EVENT_RECOVERY_LIMIT = 100
+const EVENT_DEDUPE_RETENTION_MS = 30 * 24 * 60 * 60_000
 const automationConfigArgs = {
   autoEnvironment: v.optional(v.boolean()),
   baseBranch: v.optional(v.string()),
@@ -108,11 +112,30 @@ async function resolveAutomationTrigger(
   }
 
   if (trigger.kind === "github") {
+    if (!trigger.installationId?.trim()) {
+      throwUserError(
+        "Install the GitHub App on this repository before enabling its trigger."
+      )
+    }
+    const installation = await ctx.db
+      .query("githubAppInstallations")
+      .withIndex("by_user_installation", (q) =>
+        q
+          .eq("userId", userId)
+          .eq("installationId", trigger.installationId!.trim())
+      )
+      .unique()
+    if (!installation) {
+      throwUserError(
+        "The GitHub App installation for this trigger is no longer connected."
+      )
+    }
     return {
       ...trigger,
       actorLogin:
         trigger.actorLogin?.trim().replace(/^@/, "").toLowerCase() || undefined,
       branch: trigger.branch?.trim().replace(/^refs\/heads\//, "") || undefined,
+      installationId: installation.installationId,
     }
   }
 
@@ -234,6 +257,29 @@ async function requireOwnedAutomation(
   }
 
   return automation
+}
+
+async function deleteQueuedAutomationEvents(
+  ctx: MutationCtx,
+  automationId: Id<"automations">,
+  options: { includeInFlight?: boolean } = {}
+) {
+  const queued = await ctx.db
+    .query("automationEventQueue")
+    .withIndex("by_automation_created", (q) =>
+      q.eq("automationId", automationId)
+    )
+    .collect()
+  await Promise.all(
+    queued
+      .filter(
+        (event) =>
+          options.includeInFlight ||
+          event.status === "pending" ||
+          event.status === "dispatching"
+      )
+      .map((event) => ctx.db.delete(event._id))
+  )
 }
 
 export const list = query({
@@ -436,6 +482,7 @@ export const setEnabled = mutation({
       nextRunAt: undefined,
       updatedAt: Date.now(),
     })
+    await deleteQueuedAutomationEvents(ctx, automation._id)
   },
 })
 
@@ -459,6 +506,9 @@ export const remove = mutation({
     } else if (thread?.automationId === automation._id) {
       await ctx.db.patch(automation.threadId, { automationId: undefined })
     }
+    await deleteQueuedAutomationEvents(ctx, automation._id, {
+      includeInFlight: true,
+    })
     await ctx.db.delete(automation._id)
   },
 })
@@ -589,6 +639,33 @@ export const claimForWorker = mutation({
   },
 })
 
+/** Restores a cron slot when Trigger.dev rejected the child enqueue. The CAS
+ * keeps a later scheduler claim from being moved backwards. */
+export const releaseScheduleClaimForWorker = mutation({
+  args: {
+    automationId: v.id("automations"),
+    expectedNextRunAt: v.number(),
+    scheduledFor: v.number(),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const automation = await ctx.db.get(args.automationId)
+    if (
+      !automation ||
+      !automation.enabled ||
+      automation.nextRunAt !== args.expectedNextRunAt
+    ) {
+      return { released: false as const }
+    }
+    await ctx.db.patch(automation._id, {
+      nextRunAt: args.scheduledFor,
+      updatedAt: Date.now(),
+    })
+    return { released: true as const }
+  },
+})
+
 export const getForWorker = query({
   args: {
     automationId: v.id("automations"),
@@ -609,6 +686,7 @@ export const getForWorker = query({
 export const workerCreateRun = mutation({
   args: {
     automationId: v.id("automations"),
+    eventQueueId: v.optional(v.id("automationEventQueue")),
     githubToken: v.optional(v.string()),
     githubUserEmail: v.optional(v.string()),
     githubUserName: v.optional(v.string()),
@@ -629,6 +707,26 @@ export const workerCreateRun = mutation({
     }
     if (!automation.enabled && !args.manual) {
       return { ok: false as const, status: "disabled" as const }
+    }
+    const queuedEvent = args.eventQueueId
+      ? await ctx.db.get(args.eventQueueId)
+      : null
+    if (
+      args.eventQueueId &&
+      (!queuedEvent || queuedEvent.automationId !== automation._id)
+    ) {
+      return { ok: false as const, status: "not_found" as const }
+    }
+    if (queuedEvent?.runId) {
+      const existingRun = await ctx.db.get(queuedEvent.runId)
+      if (existingRun?.automationId === automation._id) {
+        return {
+          ok: true as const,
+          runId: existingRun._id,
+          threadId: existingRun.threadId,
+          userId: existingRun.userId,
+        }
+      }
     }
     const thread = await ctx.db.get(automation.threadId)
     if (!thread) {
@@ -778,6 +876,14 @@ export const workerCreateRun = mutation({
         ...(threadId !== automation.threadId ? { threadId } : {}),
         updatedAt: now,
       }),
+      queuedEvent
+        ? ctx.db.patch(queuedEvent._id, {
+            dispatchLeaseExpiresAt: undefined,
+            runId,
+            status: "run_created",
+            updatedAt: now,
+          })
+        : Promise.resolve(),
     ])
 
     return {
@@ -894,12 +1000,14 @@ export const workerMatchTriggeredAutomations = query({
         .withIndex("by_trigger_source", (q) =>
           q.eq("triggerSourceKey", sourceKey).eq("enabled", true)
         )
-        .take(50)
+        .collect()
       for (const row of rows) {
         if (!row.trigger) continue
         if (
           row.trigger.kind === "github" &&
-          !githubInstallationOwners?.has(row.userId)
+          (!githubInstallationOwners?.has(row.userId) ||
+            (row.trigger.installationId &&
+              row.trigger.installationId !== githubInstallationId))
         ) {
           continue
         }
@@ -913,6 +1021,277 @@ export const workerMatchTriggeredAutomations = query({
     }
 
     return [...matched.values()]
+  },
+})
+
+/** Atomically deduplicates, rate-limits, and persists one provider event. The
+ * event is counted only after it has a durable queue row, so an enqueue outage
+ * can no longer spend the automation's hourly allowance without work to run. */
+export const workerEnqueueEventFire = mutation({
+  args: {
+    automationId: v.id("automations"),
+    eventKey: v.string(),
+    eventVars: v.record(v.string(), v.string()),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    const automation = await ctx.db.get(args.automationId)
+    if (!automation || !automation.enabled) {
+      return { queued: false as const, reason: "disabled" as const }
+    }
+
+    const eventKey = args.eventKey.trim()
+    if (!eventKey) throw new Error("eventKey is required.")
+    const existing = await ctx.db
+      .query("automationEventQueue")
+      .withIndex("by_automation_event", (q) =>
+        q.eq("automationId", automation._id).eq("eventKey", eventKey)
+      )
+      .unique()
+    if (existing) {
+      return {
+        queueId: existing._id,
+        queued: false as const,
+        reason: "duplicate" as const,
+      }
+    }
+
+    const pending = await ctx.db
+      .query("automationEventQueue")
+      .withIndex("by_automation_status_created", (q) =>
+        q.eq("automationId", automation._id).eq("status", "pending")
+      )
+      .take(EVENT_QUEUE_MAX_PENDING)
+    const dispatching = await ctx.db
+      .query("automationEventQueue")
+      .withIndex("by_automation_status_created", (q) =>
+        q.eq("automationId", automation._id).eq("status", "dispatching")
+      )
+      .take(EVENT_QUEUE_MAX_PENDING)
+    const created = await ctx.db
+      .query("automationEventQueue")
+      .withIndex("by_automation_status_created", (q) =>
+        q.eq("automationId", automation._id).eq("status", "run_created")
+      )
+      .take(EVENT_QUEUE_MAX_PENDING)
+    if (
+      pending.length + dispatching.length + created.length >=
+      EVENT_QUEUE_MAX_PENDING
+    ) {
+      await ctx.db.patch(automation._id, {
+        lastRunError: `Event queue reached its ${EVENT_QUEUE_MAX_PENDING}-event limit.`,
+        lastRunStatus: "dispatch_failed",
+        updatedAt: Date.now(),
+      })
+      return { queued: false as const, reason: "queue_full" as const }
+    }
+
+    const now = Date.now()
+    const windowStart = automation.eventFireWindowStart ?? 0
+    const inWindow = now - windowStart < EVENT_FIRE_WINDOW_MS
+    const count = inWindow ? (automation.eventFireCount ?? 0) : 0
+    if (count >= EVENT_FIRE_WINDOW_MAX) {
+      return { queued: false as const, reason: "rate_limited" as const }
+    }
+
+    const queueId = await ctx.db.insert("automationEventQueue", {
+      automationId: automation._id,
+      createdAt: now,
+      eventKey,
+      eventVars: args.eventVars,
+      status: "pending",
+      updatedAt: now,
+    })
+    await ctx.db.patch(automation._id, {
+      eventFireCount: count + 1,
+      eventFireWindowStart: inWindow ? windowStart : now,
+      updatedAt: now,
+    })
+    return { queueId, queued: true as const }
+  },
+})
+
+/** Claims only the oldest event for an idle automation. A dispatch lease
+ * serializes racing drain tasks until automation-run has created its durable
+ * Codex run or released the event. */
+export const workerClaimQueuedEvent = mutation({
+  args: {
+    automationId: v.id("automations"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const automation = await ctx.db.get(args.automationId)
+    if (!automation) {
+      return { claimed: false as const, reason: "disabled" as const }
+    }
+
+    const now = Date.now()
+    // A Codex run is persisted in the same transaction that moves its event
+    // here. Recover that handoff before checking enabled/active state: once a
+    // run exists, it must either reach cloudcode-run or be explicitly failed.
+    const created = await ctx.db
+      .query("automationEventQueue")
+      .withIndex("by_automation_status_created", (q) =>
+        q.eq("automationId", automation._id).eq("status", "run_created")
+      )
+      .first()
+    if (created?.runId) {
+      return {
+        claimed: false as const,
+        queueId: created._id,
+        reason: "run_created" as const,
+        runId: created.runId,
+        userId: automation.userId,
+      }
+    }
+    if (!automation.enabled) {
+      return { claimed: false as const, reason: "disabled" as const }
+    }
+
+    const dispatching = await ctx.db
+      .query("automationEventQueue")
+      .withIndex("by_automation_status_created", (q) =>
+        q.eq("automationId", automation._id).eq("status", "dispatching")
+      )
+      .first()
+    if (dispatching) {
+      if ((dispatching.dispatchLeaseExpiresAt ?? 0) > now) {
+        return {
+          claimed: false as const,
+          reason: "dispatch_in_progress" as const,
+        }
+      }
+      await ctx.db.patch(dispatching._id, {
+        dispatchLeaseExpiresAt: undefined,
+        status: "pending",
+        updatedAt: now,
+      })
+    }
+
+    const activeRun = await activeRunForThread(ctx, automation.threadId)
+    if (activeRun) {
+      return { claimed: false as const, reason: "active_run" as const }
+    }
+
+    const event = await ctx.db
+      .query("automationEventQueue")
+      .withIndex("by_automation_status_created", (q) =>
+        q.eq("automationId", automation._id).eq("status", "pending")
+      )
+      .first()
+    if (!event) return { claimed: false as const, reason: "empty" as const }
+
+    await ctx.db.patch(event._id, {
+      dispatchLeaseExpiresAt: now + EVENT_DISPATCH_LEASE_MS,
+      status: "dispatching",
+      updatedAt: now,
+    })
+    return {
+      claimed: true as const,
+      eventVars: event.eventVars,
+      queueId: event._id,
+    }
+  },
+})
+
+export const workerReleaseQueuedEvent = mutation({
+  args: {
+    queueId: v.id("automationEventQueue"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const event = await ctx.db.get(args.queueId)
+    if (!event || event.status !== "dispatching") {
+      return { released: false }
+    }
+    await ctx.db.patch(event._id, {
+      dispatchLeaseExpiresAt: undefined,
+      status: "pending",
+      updatedAt: Date.now(),
+    })
+    return { released: true }
+  },
+})
+
+export const workerCompleteQueuedEvent = mutation({
+  args: {
+    queueId: v.id("automationEventQueue"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const event = await ctx.db.get(args.queueId)
+    if (!event) return { completed: false }
+    await ctx.db.patch(event._id, {
+      dispatchLeaseExpiresAt: undefined,
+      status: "started",
+      updatedAt: Date.now(),
+    })
+    return { completed: true }
+  },
+})
+
+/** Scheduler backstop for a worker that died after claiming a queue row or
+ * before starting its drain task. */
+export const workerRecoverEventQueues = mutation({
+  args: {
+    now: v.number(),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const stale = await ctx.db
+      .query("automationEventQueue")
+      .withIndex("by_status_updated", (q) =>
+        q
+          .eq("status", "dispatching")
+          .lt("updatedAt", args.now - EVENT_DISPATCH_LEASE_MS)
+      )
+      .take(EVENT_RECOVERY_LIMIT)
+    for (const event of stale) {
+      await ctx.db.patch(event._id, {
+        dispatchLeaseExpiresAt: undefined,
+        status: "pending",
+        updatedAt: args.now,
+      })
+    }
+
+    const pending = await ctx.db
+      .query("automationEventQueue")
+      .withIndex("by_status_updated", (q) => q.eq("status", "pending"))
+      .take(EVENT_RECOVERY_LIMIT)
+    const expiredDedupe = await ctx.db
+      .query("automationEventQueue")
+      .withIndex("by_status_updated", (q) =>
+        q
+          .eq("status", "started")
+          .lt("updatedAt", args.now - EVENT_DEDUPE_RETENTION_MS)
+      )
+      .take(EVENT_RECOVERY_LIMIT)
+    const created = await ctx.db
+      .query("automationEventQueue")
+      .withIndex("by_status_updated", (q) => q.eq("status", "run_created"))
+      .take(EVENT_RECOVERY_LIMIT)
+    // Rotate attempted rows to the end of the recovery index so a busy
+    // automation cannot starve queues belonging to other automations.
+    await Promise.all(
+      [...pending, ...created].map((event) =>
+        ctx.db.patch(event._id, { updatedAt: args.now })
+      )
+    )
+    await Promise.all(expiredDedupe.map((event) => ctx.db.delete(event._id)))
+    return {
+      automationIds: [
+        ...new Set(
+          [...stale, ...pending, ...created].map((event) => event.automationId)
+        ),
+      ],
+      recovered: stale.length + created.length,
+    }
   },
 })
 
