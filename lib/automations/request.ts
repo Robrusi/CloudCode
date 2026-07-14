@@ -55,6 +55,15 @@ function recordField(body: JsonRecord, field: string): JsonRecord | undefined {
     : undefined
 }
 
+function stringArrayField(body: JsonRecord, field: string) {
+  const value = body[field]
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new Error(`trigger.${field} must be an array of strings.`)
+  }
+  return value.map((item) => item.trim()).filter(Boolean)
+}
+
 /** Parses the trigger config out of a request body. Bodies without a trigger
  * object read as the cron kind from the legacy top-level cron/timezone
  * fields, so older clients keep working unchanged. */
@@ -123,16 +132,28 @@ function parseAutomationTrigger(body: JsonRecord): AutomationTrigger {
       event !== "issueCreated" &&
       event !== "issueAssigned" &&
       event !== "labelAdded" &&
-      event !== "statusChanged"
+      event !== "statusChanged" &&
+      event !== "commentCreated"
+    ) {
+      throw new Error("trigger.event is not a supported Linear event.")
+    }
+    const commentAuthorMode = raw.commentAuthorMode ?? "any"
+    if (
+      commentAuthorMode !== "any" &&
+      commentAuthorMode !== "include" &&
+      commentAuthorMode !== "exclude"
     ) {
       throw new Error(
-        "trigger.event must be issueCreated, issueAssigned, labelAdded, or statusChanged."
+        "trigger.commentAuthorMode must be any, include, or exclude."
       )
     }
     return {
       assigneeId: jsonRawStringField(raw, "assigneeId")?.trim() || undefined,
       assigneeName:
         jsonRawStringField(raw, "assigneeName")?.trim() || undefined,
+      commentAuthorIds: stringArrayField(raw, "commentAuthorIds"),
+      commentAuthorMode,
+      commentAuthorNames: stringArrayField(raw, "commentAuthorNames"),
       event,
       installationId: installationId as Id<"integrationInstallations">,
       labelId: jsonRawStringField(raw, "labelId")?.trim() || undefined,

@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto"
 
 import type {
   IntegrationChatEventPayload,
-  LinearIssueAutomationEvent,
+  LinearAutomationEvent,
 } from "@/lib/integrations/events"
 import { linearAgentSessionThreadId } from "@/lib/integrations/linear-threads"
 
@@ -74,6 +74,24 @@ type LinearIssuePayload = {
     labelIds?: string[]
     stateId?: string
   }
+}
+
+type LinearCommentPayload = {
+  action?: string
+  actor?: {
+    id?: string
+    name?: string
+    type?: string
+  }
+  data?: {
+    body?: string
+    id?: string
+    issueId?: string
+    userId?: string
+  }
+  organizationId?: string
+  type?: string
+  url?: string
 }
 
 type LinearAgentSessionPayload = {
@@ -152,13 +170,47 @@ export function parseCommentlessLinearDelegation(
   }
 }
 
-/** Extracts automation-relevant Issue data changes (creation, assignment,
- * labels added, workflow state changed) from a raw Linear webhook payload.
- * Non-Issue events and unrelated updates return an empty list. */
-export function parseLinearIssueAutomationEvents(payload: unknown): {
-  events: LinearIssueAutomationEvent[]
+/** Extracts automation-relevant Issue changes and human-authored Comment
+ * creations from a raw Linear webhook payload. Unrelated events, comment
+ * edits, and app/integration-authored comments return an empty list. */
+export function parseLinearAutomationEvents(payload: unknown): {
+  events: LinearAutomationEvent[]
   organizationId?: string
 } {
+  const commentPayload = payload as LinearCommentPayload
+  if (
+    commentPayload?.type === "Comment" &&
+    commentPayload.action === "create"
+  ) {
+    const data = commentPayload.data
+    const actorType = commentPayload.actor?.type?.toLowerCase()
+    const authorId = commentPayload.actor?.id ?? data?.userId
+    if (
+      !data?.id ||
+      !data.issueId ||
+      !authorId ||
+      (actorType && actorType !== "user")
+    ) {
+      return { events: [] }
+    }
+    return {
+      events: [
+        {
+          comment: {
+            authorId,
+            authorName: commentPayload.actor?.name,
+            body: data.body,
+            id: data.id,
+            url: commentPayload.url,
+          },
+          event: "commentCreated",
+          issue: { id: data.issueId },
+        },
+      ],
+      organizationId: commentPayload.organizationId,
+    }
+  }
+
   const parsed = payload as LinearIssuePayload
   if (
     !parsed ||
@@ -196,7 +248,7 @@ export function parseLinearIssueAutomationEvents(payload: unknown): {
     url: data.url,
   }
 
-  const events: LinearIssueAutomationEvent[] = []
+  const events: LinearAutomationEvent[] = []
 
   if (parsed.action === "create") {
     return {

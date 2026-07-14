@@ -13,6 +13,7 @@ import {
   shortScheduleLabel,
   type ScheduleDraft,
 } from "@/lib/automations/schedule-draft"
+import type { LinearCommentAuthorMode } from "@/lib/automations/linear-comment-trigger"
 
 export type AutomationRecord = Doc<"automations">
 
@@ -45,7 +46,15 @@ export type TriggerDraft =
   | {
       assigneeId: string
       assigneeName: string
-      event: "issueCreated" | "issueAssigned" | "labelAdded" | "statusChanged"
+      commentAuthorIds: string[]
+      commentAuthorMode: LinearCommentAuthorMode
+      commentAuthorNames: string[]
+      event:
+        | "issueCreated"
+        | "issueAssigned"
+        | "labelAdded"
+        | "statusChanged"
+        | "commentCreated"
       installationId: string
       kind: "linear"
       labelId: string
@@ -81,6 +90,9 @@ export function emptyLinearTrigger(installationId: string): TriggerDraft {
   return {
     assigneeId: "",
     assigneeName: "",
+    commentAuthorIds: [],
+    commentAuthorMode: "any",
+    commentAuthorNames: [],
     event: "labelAdded",
     installationId,
     kind: "linear",
@@ -185,6 +197,9 @@ function triggerDraftFromRecord(automation: AutomationRecord): TriggerDraft {
   return {
     assigneeId: trigger.assigneeId ?? "",
     assigneeName: trigger.assigneeName ?? "",
+    commentAuthorIds: trigger.commentAuthorIds ?? [],
+    commentAuthorMode: trigger.commentAuthorMode ?? "any",
+    commentAuthorNames: trigger.commentAuthorNames ?? [],
     event: trigger.event,
     installationId: trigger.installationId,
     kind: "linear",
@@ -271,6 +286,15 @@ function triggerRequestBody(draft: AutomationDraft) {
   return {
     assigneeId: trigger.assigneeId || undefined,
     assigneeName: trigger.assigneeName || undefined,
+    commentAuthorIds:
+      trigger.commentAuthorMode === "any"
+        ? undefined
+        : trigger.commentAuthorIds,
+    commentAuthorMode: trigger.commentAuthorMode,
+    commentAuthorNames:
+      trigger.commentAuthorMode === "any"
+        ? undefined
+        : trigger.commentAuthorNames,
     event: trigger.event,
     installationId: trigger.installationId,
     kind: "linear" as const,
@@ -303,6 +327,17 @@ export function automationRequestBody(draft: AutomationDraft) {
   }
 }
 
+export function linearCommentTriggerLabel(
+  mode: LinearCommentAuthorMode,
+  names: string[]
+) {
+  const authors =
+    names.length === 1 ? names[0] : `${names.length || "selected"} users`
+  if (mode === "include") return `On comment from ${authors}`
+  if (mode === "exclude") return `On comment except ${authors}`
+  return "On comment from anyone"
+}
+
 /** One-line row label: the schedule for cron automations, the watched event
  * for GitHub/Slack/Linear ones. */
 export function automationTriggerLabel(automation: AutomationRecord) {
@@ -331,6 +366,12 @@ export function automationTriggerLabel(automation: AutomationRecord) {
     return `On push${branch}${actor}`
   }
   const scope = trigger.teamName ? ` in ${trigger.teamName}` : ""
+  if (trigger.event === "commentCreated") {
+    return linearCommentTriggerLabel(
+      trigger.commentAuthorMode ?? "any",
+      trigger.commentAuthorNames ?? []
+    )
+  }
   if (trigger.event === "issueCreated") {
     return `On new issue${scope}`
   }

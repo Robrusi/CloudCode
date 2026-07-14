@@ -12,16 +12,16 @@ import {
 } from "@/lib/integrations/config"
 import {
   parseCommentlessLinearDelegation,
-  parseLinearIssueAutomationEvents,
+  parseLinearAutomationEvents,
   verifyLinearWebhookRequest,
 } from "@/lib/integrations/linear-webhook"
 import type { integrationEvent } from "@/trigger/integrations"
 
 export const runtime = "nodejs"
 
-/** Reads verified events the Chat SDK does not dispatch: Issue data changes
- * for automations and direct agent delegations without a backing comment.
- * Failures here never block the adapter's normal comment-backed chat flow. */
+/** Reads verified events the Chat SDK does not dispatch: Issue/Comment data
+ * changes for automations and direct agent delegations without a backing
+ * comment. Failures here never block the adapter's normal chat flow. */
 async function dispatchPreprocessedEvents(
   request: Request,
   webhookSecret: string
@@ -41,8 +41,7 @@ async function dispatchPreprocessedEvents(
 
     const rawPayload: unknown = JSON.parse(rawBody)
     const delegation = parseCommentlessLinearDelegation(rawPayload)
-    const { events, organizationId } =
-      parseLinearIssueAutomationEvents(rawPayload)
+    const { events, organizationId } = parseLinearAutomationEvents(rawPayload)
 
     const deliveryId = request.headers.get("linear-delivery")
     if (events.length > 0 && organizationId) {

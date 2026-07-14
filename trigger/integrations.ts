@@ -290,8 +290,8 @@ async function handleSlackAutomationEvent(
   return { fired, matched: payload.automationIds.length }
 }
 
-/** Matches Linear Issue data changes (creation, assignment, labels, status)
- * against event automations and fires the hits. */
+/** Matches Linear issue changes and human comment creations against event
+ * automations and fires the hits. */
 async function handleLinearAutomationEvent(
   payload: LinearAutomationEventPayload
 ) {

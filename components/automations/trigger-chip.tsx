@@ -1,14 +1,21 @@
 "use client"
 
 import { ChevronDown } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 
+import {
+  LinearCommentAuthorPicker,
+  type LinearTriggerUser,
+} from "@/components/automations/linear-comment-author-picker"
 import {
   fieldBase,
   MenuSelect,
   type MenuSelectOption,
 } from "@/components/automations/menu-select"
-import type { TriggerDraft } from "@/components/automations/model"
+import {
+  linearCommentTriggerLabel,
+  type TriggerDraft,
+} from "@/components/automations/model"
 import { chipTrigger, popoverPanel } from "@/components/chat/control-styles"
 import { GitHubIcon, LinearIcon, SlackIcon } from "@/components/ui/brand-icons"
 import { useClickOutside } from "@/hooks/use-click-outside"
@@ -27,7 +34,7 @@ type LinearTeam = {
   name: string
   states: Array<{ id: string; name: string }>
 }
-type LinearUser = { email: string; id: string; name: string }
+type LinearUser = LinearTriggerUser
 
 const ANY_VALUE = ""
 
@@ -39,6 +46,20 @@ const GITHUB_EVENT_OPTIONS: MenuSelectOption[] = [
   { label: "Pull request merged", value: "pullRequestMerged" },
   { label: "Review submitted", value: "pullRequestReviewSubmitted" },
   { label: "Push to branch", value: "push" },
+]
+
+const LINEAR_EVENT_OPTIONS: MenuSelectOption[] = [
+  { label: "New issue created", value: "issueCreated" },
+  { label: "Comment created", value: "commentCreated" },
+  { label: "Issue assigned to a person", value: "issueAssigned" },
+  { label: "Label added to an issue", value: "labelAdded" },
+  { label: "Issue status changed", value: "statusChanged" },
+]
+
+const COMMENT_AUTHOR_MODE_OPTIONS: MenuSelectOption[] = [
+  { label: "Any user", value: "any" },
+  { label: "Only selected users", value: "include" },
+  { label: "Everyone except selected", value: "exclude" },
 ]
 
 function githubTriggerLabel(trigger: GitHubTrigger) {
@@ -66,12 +87,14 @@ function TriggerPopover({
   icon,
   open,
   setOpen,
+  wide = false,
 }: {
   children: React.ReactNode
   label: string
   icon: React.ReactNode
   open: boolean
   setOpen: (value: boolean) => void
+  wide?: boolean
 }) {
   const ref = useRef<HTMLDivElement>(null)
   useClickOutside(ref, open, () => setOpen(false))
@@ -94,7 +117,8 @@ function TriggerPopover({
         <div
           className={cn(
             popoverPanel,
-            "top-10 right-0 w-56 overflow-visible p-2"
+            "top-10 right-0 overflow-visible p-2",
+            wide ? "w-64" : "w-56"
           )}
         >
           <div className="space-y-1.5">{children}</div>
@@ -293,6 +317,13 @@ export function SlackTriggerChip({
   )
 }
 
+function sameStrings(left: string[], right: string[]) {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  )
+}
+
 export function LinearTriggerChip({
   onChange,
   open,
@@ -338,8 +369,12 @@ export function LinearTriggerChip({
     }
   }, [teams])
 
+  const usersById = useMemo(
+    () => new Map((users ?? []).map((user) => [user.id, user])),
+    [users]
+  )
   const selectedTeam = teams?.find((team) => team.id === trigger.teamId)
-  const selectedAssignee = users?.find((user) => user.id === trigger.assigneeId)
+  const selectedAssignee = usersById.get(trigger.assigneeId)
 
   const scopedTeams = trigger.teamId
     ? (teams ?? []).filter((team) => team.id === trigger.teamId)
@@ -397,11 +432,13 @@ export function LinearTriggerChip({
   const personOptions = keepSelectedOption(
     users === null
       ? [{ label: "Loading people…", value: ANY_VALUE }]
-      : users.length > 0
-        ? users.map((user) => ({
-            label: `${user.name} (${user.email})`,
-            value: user.id,
-          }))
+      : users.some((user) => user.assignable)
+        ? users
+            .filter((user) => user.assignable)
+            .map((user) => ({
+              label: `${user.name} (${user.email})`,
+              value: user.id,
+            }))
         : [{ label: "No people found", value: ANY_VALUE }],
     trigger.assigneeId,
     trigger.assigneeName ||
@@ -416,6 +453,10 @@ export function LinearTriggerChip({
       assigneeName: trigger.assigneeId
         ? (selectedAssignee?.name ?? trigger.assigneeName)
         : "",
+      commentAuthorNames: trigger.commentAuthorIds.map(
+        (id, index) =>
+          usersById.get(id)?.name ?? trigger.commentAuthorNames[index] ?? id
+      ),
       labelName: trigger.labelId
         ? (selectedLabel?.name ?? trigger.labelName)
         : "",
@@ -426,6 +467,7 @@ export function LinearTriggerChip({
     }
     if (
       resolved.assigneeName === trigger.assigneeName &&
+      sameStrings(resolved.commentAuthorNames, trigger.commentAuthorNames) &&
       resolved.labelName === trigger.labelName &&
       resolved.stateName === trigger.stateName &&
       resolved.teamName === trigger.teamName
@@ -442,6 +484,7 @@ export function LinearTriggerChip({
     teams,
     trigger,
     users,
+    usersById,
   ])
 
   const assigneeName = selectedAssignee?.name ?? trigger.assigneeName
@@ -449,19 +492,24 @@ export function LinearTriggerChip({
   const stateName = selectedState?.name ?? trigger.stateName
 
   const label =
-    trigger.event === "issueCreated"
-      ? "On new issue"
-      : trigger.event === "issueAssigned"
-        ? assigneeName
-          ? `On assigned to ${assigneeName}`
-          : "On issue assigned"
-        : trigger.event === "labelAdded"
-          ? labelName
-            ? `On label “${labelName}”`
-            : "On label added"
-          : stateName
-            ? `On status → ${stateName}`
-            : "On status change"
+    trigger.event === "commentCreated"
+      ? linearCommentTriggerLabel(
+          trigger.commentAuthorMode,
+          trigger.commentAuthorNames
+        )
+      : trigger.event === "issueCreated"
+        ? "On new issue"
+        : trigger.event === "issueAssigned"
+          ? assigneeName
+            ? `On assigned to ${assigneeName}`
+            : "On issue assigned"
+          : trigger.event === "labelAdded"
+            ? labelName
+              ? `On label “${labelName}”`
+              : "On label added"
+            : stateName
+              ? `On status → ${stateName}`
+              : "On status change"
 
   return (
     <TriggerPopover
@@ -469,46 +517,87 @@ export function LinearTriggerChip({
       icon={<LinearIcon className="size-3.5 shrink-0" />}
       open={open}
       setOpen={setOpen}
+      wide={trigger.event === "commentCreated"}
     >
       <MenuSelect
         ariaLabel="Linear event"
         value={trigger.event}
-        options={[
-          { label: "New issue created", value: "issueCreated" },
-          { label: "Issue assigned to a person", value: "issueAssigned" },
-          { label: "Label added to an issue", value: "labelAdded" },
-          { label: "Issue status changed", value: "statusChanged" },
-        ]}
+        options={LINEAR_EVENT_OPTIONS}
         onChange={(event) =>
           onChange({
             ...trigger,
             assigneeId: "",
             assigneeName: "",
+            commentAuthorIds: [],
+            commentAuthorMode: "any",
+            commentAuthorNames: [],
             event: event as LinearTrigger["event"],
             labelId: "",
             labelName: "",
             stateId: "",
             stateName: "",
+            teamId: event === "commentCreated" ? "" : trigger.teamId,
+            teamName: event === "commentCreated" ? "" : trigger.teamName,
           })
         }
       />
-      <MenuSelect
-        ariaLabel="Linear team"
-        value={trigger.teamId}
-        options={teamOptions}
-        onChange={(teamId) =>
-          onChange({
-            ...trigger,
-            labelId: "",
-            labelName: "",
-            stateId: "",
-            stateName: "",
-            teamId,
-            teamName: teams?.find((team) => team.id === teamId)?.name ?? "",
-          })
-        }
-      />
-      {trigger.event === "labelAdded" ? (
+      {trigger.event !== "commentCreated" ? (
+        <MenuSelect
+          ariaLabel="Linear team"
+          value={trigger.teamId}
+          options={teamOptions}
+          onChange={(teamId) =>
+            onChange({
+              ...trigger,
+              labelId: "",
+              labelName: "",
+              stateId: "",
+              stateName: "",
+              teamId,
+              teamName: teams?.find((team) => team.id === teamId)?.name ?? "",
+            })
+          }
+        />
+      ) : null}
+      {trigger.event === "commentCreated" ? (
+        <>
+          <MenuSelect
+            ariaLabel="Linear comment author filter"
+            value={trigger.commentAuthorMode}
+            options={COMMENT_AUTHOR_MODE_OPTIONS}
+            onChange={(commentAuthorMode) =>
+              onChange({
+                ...trigger,
+                commentAuthorIds:
+                  commentAuthorMode === "any" ? [] : trigger.commentAuthorIds,
+                commentAuthorMode:
+                  commentAuthorMode as LinearTrigger["commentAuthorMode"],
+                commentAuthorNames:
+                  commentAuthorMode === "any" ? [] : trigger.commentAuthorNames,
+              })
+            }
+          />
+          {trigger.commentAuthorMode !== "any" ? (
+            <LinearCommentAuthorPicker
+              authorIds={trigger.commentAuthorIds}
+              authorNames={trigger.commentAuthorNames}
+              users={users}
+              usersById={usersById}
+              onChange={(commentAuthorIds, commentAuthorNames) =>
+                onChange({
+                  ...trigger,
+                  commentAuthorIds,
+                  commentAuthorNames,
+                })
+              }
+            />
+          ) : (
+            <p className="px-0.5 text-[11px] leading-4 text-muted-foreground">
+              Runs for comments created by any workspace user.
+            </p>
+          )}
+        </>
+      ) : trigger.event === "labelAdded" ? (
         <MenuSelect
           ariaLabel="Label"
           value={trigger.labelId}

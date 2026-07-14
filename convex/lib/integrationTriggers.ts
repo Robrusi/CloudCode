@@ -34,11 +34,19 @@ export const automationTrigger = v.union(
     // Required for issueAssigned; stored with the name for readable labels.
     assigneeId: v.optional(v.string()),
     assigneeName: v.optional(v.string()),
+    // Comment author filters are only meaningful for commentCreated. "any"
+    // leaves the arrays empty; include/exclude compare stable Linear user IDs.
+    commentAuthorIds: v.optional(v.array(v.string())),
+    commentAuthorMode: v.optional(
+      v.union(v.literal("any"), v.literal("include"), v.literal("exclude"))
+    ),
+    commentAuthorNames: v.optional(v.array(v.string())),
     event: v.union(
       v.literal("issueCreated"),
       v.literal("issueAssigned"),
       v.literal("labelAdded"),
-      v.literal("statusChanged")
+      v.literal("statusChanged"),
+      v.literal("commentCreated")
     ),
     installationId: v.id("integrationInstallations"),
     kind: v.literal("linear"),

@@ -50,9 +50,21 @@ export type SlackAutomationEventPayload = {
   provider: "slack"
 }
 
-export type LinearIssueAutomationEvent = {
+export type LinearAutomationEvent = {
   addedLabels?: Array<{ id: string; name?: string }>
-  event: "issueCreated" | "issueAssigned" | "labelAdded" | "statusChanged"
+  comment?: {
+    authorId: string
+    authorName?: string
+    body?: string
+    id: string
+    url?: string
+  }
+  event:
+    | "issueCreated"
+    | "issueAssigned"
+    | "labelAdded"
+    | "statusChanged"
+    | "commentCreated"
   issue: {
     assigneeId?: string
     assigneeName?: string
@@ -68,12 +80,11 @@ export type LinearIssueAutomationEvent = {
   }
 }
 
-/** Linear Issue data-change events (creation, assignment, labels, workflow
- * state) parsed from the raw webhook before the Chat SDK adapter sees the
- * request. */
+/** Linear issue changes and comment creations parsed from the raw webhook
+ * before the Chat SDK adapter sees the request. */
 export type LinearAutomationEventPayload = {
   deliveryId?: string
-  events: LinearIssueAutomationEvent[]
+  events: LinearAutomationEvent[]
   externalId: string
   kind: "linear_automation"
   provider: "linear"
@@ -165,12 +176,17 @@ export function slackAutomationEventVars(
 }
 
 export function linearAutomationEventVars(
-  event: LinearIssueAutomationEvent
+  event: LinearAutomationEvent
 ): EventContextVars {
   return {
     addedLabels: (event.addedLabels ?? [])
       .map((label) => label.name ?? label.id)
       .join(", "),
+    commentAuthor: event.comment?.authorName ?? "",
+    commentAuthorId: event.comment?.authorId ?? "",
+    commentBody: event.comment?.body ?? "",
+    commentId: event.comment?.id ?? "",
+    commentUrl: event.comment?.url ?? "",
     event: event.event,
     issueAssignee: event.issue.assigneeName ?? event.issue.assigneeId ?? "",
     issueDescription: event.issue.description ?? "",
@@ -239,9 +255,18 @@ export function githubAutomationEventMatches(
  * for matching so renamed labels, statuses, teams, or people stay stable. */
 export function linearAutomationEventMatches(
   trigger: Extract<AutomationTrigger, { kind: "linear" }>,
-  event: LinearIssueAutomationEvent
+  event: LinearAutomationEvent
 ) {
   if (trigger.event !== event.event) return false
+  if (trigger.event === "commentCreated") {
+    const authorId = event.comment?.authorId
+    if (!authorId) return false
+    const authorIds = trigger.commentAuthorIds ?? []
+    const mode = trigger.commentAuthorMode ?? "any"
+    if (mode === "include" && !authorIds.includes(authorId)) return false
+    if (mode === "exclude" && authorIds.includes(authorId)) return false
+    return true
+  }
   if (trigger.teamId && trigger.teamId !== event.issue.teamId) return false
   if (
     trigger.event === "issueAssigned" &&
