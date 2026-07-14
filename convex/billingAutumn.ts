@@ -26,6 +26,11 @@ import {
   type UsageEventResult,
 } from "./billingUsageEvents"
 import type { LocalUsageSummary } from "./billingSandboxSegments"
+import {
+  createAutumnClient,
+  type AutumnClient,
+  type AutumnCustomer,
+} from "./lib/autumnClient"
 
 const BILLING_MINIMUM_START_BALANCE_MICRO_USD = 10_000
 
@@ -44,14 +49,8 @@ async function autumnClient() {
     throw new Error("Set AUTUMN_SECRET_KEY before using billing.")
   }
 
-  const { Autumn } = await import("autumn-js")
-  return new Autumn({ secretKey, timeoutMs: 15_000 })
+  return createAutumnClient(secretKey)
 }
-
-type AutumnClient = Awaited<ReturnType<typeof autumnClient>>
-type AutumnCustomer = Awaited<
-  ReturnType<AutumnClient["customers"]["getOrCreate"]>
->
 
 export function autumnCustomerParams(user: BillingUser) {
   return {

@@ -22,6 +22,7 @@ import type * as files from "../files.js";
 import type * as githubApp from "../githubApp.js";
 import type * as integrations from "../integrations.js";
 import type * as lib_automationRecords from "../lib/automationRecords.js";
+import type * as lib_autumnClient from "../lib/autumnClient.js";
 import type * as lib_codexRunAuth from "../lib/codexRunAuth.js";
 import type * as lib_codexRunLifecycle from "../lib/codexRunLifecycle.js";
 import type * as lib_codexRunLogs from "../lib/codexRunLogs.js";
@@ -78,6 +79,7 @@ declare const fullApi: ApiFromModules<{
   githubApp: typeof githubApp;
   integrations: typeof integrations;
   "lib/automationRecords": typeof lib_automationRecords;
+  "lib/autumnClient": typeof lib_autumnClient;
   "lib/codexRunAuth": typeof lib_codexRunAuth;
   "lib/codexRunLifecycle": typeof lib_codexRunLifecycle;
   "lib/codexRunLogs": typeof lib_codexRunLogs;
