@@ -27,6 +27,7 @@ import {
   type AutomationTrigger,
 } from "./lib/integrationTriggers"
 import { resolveOwnedPresetOrAutoDefault } from "./lib/sandboxPresets"
+import { throwUserError } from "./lib/userErrors"
 import { ensureCurrentUser, getCurrentUser } from "./lib/users"
 import { requireWorkerSecret } from "./lib/workerAuth"
 import {
@@ -34,7 +35,10 @@ import {
   codexAuthReconnectMessage,
 } from "@/lib/codex/auth-errors"
 import { LINEAR_COMMENT_AUTHOR_FILTER_MAX } from "@/lib/automations/linear-comment-trigger"
-import { assertModelSupportsThinking } from "@/lib/chat/options"
+import {
+  modelSupportsThinking,
+  modelThinkingCompatibilityError,
+} from "@/lib/chat/options"
 
 // Guard against a stale client clock or a stale form submitting a nextRunAt
 // that is already far in the past, which would fire immediately.
@@ -94,8 +98,8 @@ async function resolveAutomationTrigger(
   }
 
   if (trigger.kind === "cron") {
-    if (!trigger.cron.trim()) throw new Error("cron is required.")
-    if (!trigger.timezone.trim()) throw new Error("timezone is required.")
+    if (!trigger.cron.trim()) throwUserError("cron is required.")
+    if (!trigger.timezone.trim()) throwUserError("timezone is required.")
     return {
       cron: trigger.cron.trim(),
       kind: "cron",
@@ -118,15 +122,15 @@ async function resolveAutomationTrigger(
     installation.userId !== userId ||
     installation.provider !== trigger.kind
   ) {
-    throw new Error("Connect the integration before using it as a trigger.")
+    throwUserError("Connect the integration before using it as a trigger.")
   }
 
   if (trigger.kind === "slack") {
     if (trigger.event === "keyword" && !trigger.keyword?.trim()) {
-      throw new Error("keyword is required for keyword triggers.")
+      throwUserError("keyword is required for keyword triggers.")
     }
     if (trigger.event === "reaction" && !trigger.emoji?.trim()) {
-      throw new Error("emoji is required for reaction triggers.")
+      throwUserError("emoji is required for reaction triggers.")
     }
     return {
       ...trigger,
@@ -136,10 +140,10 @@ async function resolveAutomationTrigger(
   }
 
   if (trigger.event === "labelAdded" && !trigger.labelId?.trim()) {
-    throw new Error("labelId is required for label triggers.")
+    throwUserError("labelId is required for label triggers.")
   }
   if (trigger.event === "issueAssigned" && !trigger.assigneeId?.trim()) {
-    throw new Error("assigneeId is required for assignment triggers.")
+    throwUserError("assigneeId is required for assignment triggers.")
   }
   if (trigger.event === "commentCreated") {
     const commentAuthorMode = trigger.commentAuthorMode ?? "any"
@@ -149,12 +153,12 @@ async function resolveAutomationTrigger(
       ),
     ]
     if (commentAuthorIds.length > LINEAR_COMMENT_AUTHOR_FILTER_MAX) {
-      throw new Error(
+      throwUserError(
         `Choose at most ${LINEAR_COMMENT_AUTHOR_FILTER_MAX} comment authors.`
       )
     }
     if (commentAuthorMode !== "any" && commentAuthorIds.length === 0) {
-      throw new Error("Choose at least one comment author.")
+      throwUserError("Choose at least one comment author.")
     }
     const nameById = new Map(
       (trigger.commentAuthorIds ?? []).map((id, index) => [
@@ -203,15 +207,19 @@ function triggerColumns(trigger: AutomationTrigger, repoUrl: string) {
 }
 
 function validateAutomationConfig(args: AutomationConfigArgs) {
-  if (!args.name.trim()) throw new Error("name is required.")
-  if (!args.prompt.trim()) throw new Error("prompt is required.")
-  if (!args.repoUrl.trim()) throw new Error("repoUrl is required.")
-  assertModelSupportsThinking(args.model, args.reasoningEffort)
+  if (!args.name.trim()) throwUserError("name is required.")
+  if (!args.prompt.trim()) throwUserError("prompt is required.")
+  if (!args.repoUrl.trim()) throwUserError("repoUrl is required.")
+  if (!modelSupportsThinking(args.model, args.reasoningEffort)) {
+    throwUserError(
+      modelThinkingCompatibilityError(args.model, args.reasoningEffort)
+    )
+  }
 }
 
 function validateNextRunAt(nextRunAt: number) {
   if (nextRunAt < Date.now() - NEXT_RUN_AT_PAST_TOLERANCE_MS) {
-    throw new Error("nextRunAt is in the past.")
+    throwUserError("nextRunAt is in the past.")
   }
 }
 
@@ -222,7 +230,7 @@ async function requireOwnedAutomation(
 ) {
   const automation = await ctx.db.get(automationId)
   if (!automation || automation.userId !== userId) {
-    throw new Error("Automation not found.")
+    throwUserError("Automation not found.")
   }
 
   return automation
@@ -256,7 +264,7 @@ export const create = mutation({
     const nextRunAt = trigger.kind === "cron" ? args.nextRunAt : undefined
     if (trigger.kind === "cron") {
       if (nextRunAt === undefined) {
-        throw new Error("nextRunAt is required for scheduled automations.")
+        throwUserError("nextRunAt is required for scheduled automations.")
       }
       validateNextRunAt(nextRunAt)
     }
@@ -345,7 +353,7 @@ export const update = mutation({
     const nextRunAt = trigger.kind === "cron" ? args.nextRunAt : undefined
     if (automation.enabled && trigger.kind === "cron") {
       if (nextRunAt === undefined) {
-        throw new Error("nextRunAt is required for scheduled automations.")
+        throwUserError("nextRunAt is required for scheduled automations.")
       }
       validateNextRunAt(nextRunAt)
     }
@@ -405,7 +413,7 @@ export const setEnabled = mutation({
     if (args.enabled) {
       const isCron = automationTriggerOf(automation).kind === "cron"
       if (isCron && args.nextRunAt === undefined) {
-        throw new Error("nextRunAt is required when enabling an automation.")
+        throwUserError("nextRunAt is required when enabling an automation.")
       }
       if (isCron && args.nextRunAt !== undefined) {
         validateNextRunAt(args.nextRunAt)

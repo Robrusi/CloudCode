@@ -3,6 +3,7 @@ import { NextResponse } from "next/server"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { nextRunAtAfter } from "@/lib/automations/schedule"
+import { convexErrorMessage } from "@/lib/convex/errors"
 import { currentUserConvexHttpClient } from "@/lib/convex/http"
 import {
   jsonBooleanField,
@@ -55,7 +56,7 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("/api/automations/toggle failed", error)
     return jsonError(
-      error instanceof Error ? error.message : "Unable to update automation.",
+      convexErrorMessage(error, "Unable to update automation."),
       400
     )
   }

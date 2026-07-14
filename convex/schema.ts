@@ -130,6 +130,7 @@ export default defineSchema({
     userId: v.id("users"),
   })
     .index("by_user_updated", ["userId", "updatedAt"])
+    .index("by_user_preset", ["userId", "sandboxPresetId"])
     .index("by_enabled_next", ["enabled", "nextRunAt"])
     .index("by_trigger_source", ["triggerSourceKey", "enabled"])
     .index("by_thread", ["threadId"]),
@@ -171,6 +172,7 @@ export default defineSchema({
     userId: v.id("users"),
   })
     .index("by_user_updated", ["userId", "updatedAt"])
+    .index("by_user_preset", ["userId", "sandboxPresetId"])
     .index("by_repo_enabled", ["repoUrl", "enabled"]),
 
   codexAuth: defineTable({
@@ -703,6 +705,7 @@ export default defineSchema({
     userId: v.id("users"),
   })
     .index("by_user_updated", ["userId", "updatedAt"])
+    .index("by_user_preset", ["userId", "sandboxPresetId"])
     .index("by_sandbox", ["sandboxId"])
     .index("by_user_repo_updated", ["userId", "repoUrl", "updatedAt"]),
 

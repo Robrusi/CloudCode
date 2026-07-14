@@ -481,6 +481,41 @@ export const remove = mutation({
       )
     )
 
+    // Configuration records outlive user-created presets. Clear their
+    // references in the same transaction so editors and future runs resolve
+    // the user's built-in default instead of retaining a dangling ID.
+    const [automations, reviews, threads] = await Promise.all([
+      ctx.db
+        .query("automations")
+        .withIndex("by_user_preset", (q) =>
+          q.eq("userId", userId).eq("sandboxPresetId", args.presetId)
+        )
+        .collect(),
+      ctx.db
+        .query("reviews")
+        .withIndex("by_user_preset", (q) =>
+          q.eq("userId", userId).eq("sandboxPresetId", args.presetId)
+        )
+        .collect(),
+      ctx.db
+        .query("threads")
+        .withIndex("by_user_preset", (q) =>
+          q.eq("userId", userId).eq("sandboxPresetId", args.presetId)
+        )
+        .collect(),
+    ])
+    await Promise.all([
+      ...automations.map((automation) =>
+        ctx.db.patch(automation._id, { sandboxPresetId: undefined })
+      ),
+      ...reviews.map((review) =>
+        ctx.db.patch(review._id, { sandboxPresetId: undefined })
+      ),
+      ...threads.map((thread) =>
+        ctx.db.patch(thread._id, { sandboxPresetId: undefined })
+      ),
+    ])
+
     await ctx.db.delete(args.presetId)
   },
 })

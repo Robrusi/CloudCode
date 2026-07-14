@@ -4,6 +4,7 @@ import { NextResponse } from "next/server"
 
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import { convexErrorMessage } from "@/lib/convex/errors"
 import { currentUserConvexHttpClient } from "@/lib/convex/http"
 import { jsonError, readJsonStringField } from "@/lib/http/api-route"
 import { requireSameOrigin } from "@/lib/http/request-security"
@@ -43,7 +44,7 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("/api/automations/run-now failed", error)
     return jsonError(
-      error instanceof Error ? error.message : "Unable to run automation.",
+      convexErrorMessage(error, "Unable to run automation."),
       500
     )
   }

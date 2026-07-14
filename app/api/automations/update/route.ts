@@ -4,6 +4,7 @@ import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { nextRunAtAfter } from "@/lib/automations/schedule"
 import { parseAutomationRequestConfig } from "@/lib/automations/request"
+import { convexErrorMessage } from "@/lib/convex/errors"
 import { currentUserConvexHttpClient } from "@/lib/convex/http"
 import {
   jsonError,
@@ -60,7 +61,7 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("/api/automations/update failed", error)
     return jsonError(
-      error instanceof Error ? error.message : "Unable to update automation.",
+      convexErrorMessage(error, "Unable to update automation."),
       400
     )
   }

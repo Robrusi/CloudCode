@@ -6,6 +6,7 @@ import {
   isBuiltInAutoEnvironmentPreset,
   isBuiltInDefaultPreset,
 } from "./sandboxPresetConstants"
+import { throwUserError } from "./userErrors"
 
 export async function getDefaultPreset(
   ctx: QueryCtx | MutationCtx,
@@ -109,8 +110,17 @@ export async function resolveOwnedPresetOrAutoDefault(
   }
 
   const preset = await ctx.db.get(presetId)
-  if (!preset || preset.userId !== userId) {
-    throw new Error("Preset not found.")
+  // Presets can disappear while a long-lived automation, review, or thread
+  // still carries the old ID (for example, deletion in another tab). Treat a
+  // genuinely deleted preset exactly like an unset selection so those records
+  // self-heal instead of becoming permanently unsaveable/unrunnable.
+  if (!preset) {
+    const defaultPresetId = await ensureDefaultPreset(ctx, userId)
+    if (options?.autoEnvironment === false) return defaultPresetId
+    return await ensureAutoEnvironmentPreset(ctx, userId)
+  }
+  if (preset.userId !== userId) {
+    throwUserError("Preset not found.")
   }
 
   return preset._id
@@ -124,7 +134,7 @@ export async function requireOwnedPreset(
   const preset = await ctx.db.get(presetId)
 
   if (!preset || preset.userId !== userId) {
-    throw new Error("Preset not found.")
+    throwUserError("Preset not found.")
   }
 
   return preset

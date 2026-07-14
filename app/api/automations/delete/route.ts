@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import { convexErrorMessage } from "@/lib/convex/errors"
 import { currentUserConvexHttpClient } from "@/lib/convex/http"
 import { jsonError, readJsonStringField } from "@/lib/http/api-route"
 import { requireSameOrigin } from "@/lib/http/request-security"
@@ -26,7 +27,7 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("/api/automations/delete failed", error)
     return jsonError(
-      error instanceof Error ? error.message : "Unable to delete automation.",
+      convexErrorMessage(error, "Unable to delete automation."),
       400
     )
   }

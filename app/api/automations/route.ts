@@ -3,6 +3,7 @@ import { NextResponse } from "next/server"
 import { api } from "@/convex/_generated/api"
 import { nextRunAtAfter } from "@/lib/automations/schedule"
 import { parseAutomationRequestConfig } from "@/lib/automations/request"
+import { convexErrorMessage } from "@/lib/convex/errors"
 import { currentUserConvexHttpClient } from "@/lib/convex/http"
 import { jsonError, readJsonRecord } from "@/lib/http/api-route"
 import { requireSameOrigin } from "@/lib/http/request-security"
@@ -56,7 +57,7 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("/api/automations failed", error)
     return jsonError(
-      error instanceof Error ? error.message : "Unable to create automation.",
+      convexErrorMessage(error, "Unable to create automation."),
       400
     )
   }
