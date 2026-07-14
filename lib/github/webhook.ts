@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto"
 
 import { canonicalGitHubRepoUrl } from "@/lib/github/repo"
-import type { ReviewPullRequestContext } from "@/lib/reviews/prompt"
+import type { ReviewPullRequestContext } from "@/lib/reviews/pull-request"
 
 export function isGitHubWebhookConfigured() {
   return Boolean(process.env.GITHUB_APP_WEBHOOK_SECRET)

@@ -13,6 +13,7 @@ import {
 } from "@/lib/github/webhook"
 import { parseGitHubAutomationEvent } from "@/lib/github/automation-events"
 import { jsonError } from "@/lib/http/api-route"
+import { normalizeReviewPullRequestContext } from "@/lib/reviews/pull-request"
 import type { integrationEvent } from "@/trigger/integrations"
 import type { reviewDispatch } from "@/trigger/reviews"
 
@@ -50,7 +51,7 @@ function dispatchPayloadForEvent(
 
     return {
       action: parsed.action,
-      pr: parsed.pr,
+      pr: normalizeReviewPullRequestContext(parsed.pr),
       repoUrl: parsed.repoUrl,
     }
   }

@@ -29,6 +29,7 @@ import { assertModelSupportsThinking } from "@/lib/chat/options"
 import { canonicalGitHubRepoUrl } from "@/lib/github/repo"
 import { parseReviewAuthorFilters } from "@/lib/reviews/config"
 import { buildReviewPrompt } from "@/lib/reviews/prompt"
+import { reviewPullRequestContextValidator } from "@/lib/reviews/pull-request"
 
 const THREAD_TITLE_MAX_LENGTH = 120
 
@@ -65,18 +66,6 @@ type ReviewConfigArgs = {
   sandboxPresetId?: Id<"sandboxPresets">
   speed: Doc<"reviews">["speed"]
 }
-
-const reviewPullRequestArgs = v.object({
-  authorLogin: v.optional(v.string()),
-  baseRef: v.string(),
-  body: v.optional(v.string()),
-  crossFork: v.boolean(),
-  headRef: v.string(),
-  headSha: v.string(),
-  htmlUrl: v.string(),
-  number: v.number(),
-  title: v.string(),
-})
 
 // Reviews are triggered by GitHub webhooks, so the repo must be a GitHub URL
 // stored in canonical form for the webhook's repository lookup to match.
@@ -395,7 +384,7 @@ export const workerCreateRun = mutation({
     githubUsername: v.optional(v.string()),
     manual: v.boolean(),
     notesAccessToken: v.string(),
-    pr: reviewPullRequestArgs,
+    pr: reviewPullRequestContextValidator,
     reviewId: v.id("reviews"),
     requestKey: v.string(),
     workerSecret: v.string(),

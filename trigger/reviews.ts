@@ -20,10 +20,11 @@ import {
 } from "@/lib/github/pull-requests"
 import { parseGitHubRepoUrl, type GitHubRepo } from "@/lib/github/repo"
 import { reviewAllowsAuthor } from "@/lib/reviews/config"
+import { buildReviewRerunContext } from "@/lib/reviews/prompt"
 import {
-  buildReviewRerunContext,
+  normalizeReviewPullRequestContext,
   type ReviewPullRequestContext,
-} from "@/lib/reviews/prompt"
+} from "@/lib/reviews/pull-request"
 import { encryptSecret } from "@/lib/security/secret-crypto"
 import type { cloudcodeRun } from "@/trigger/cloudcode-run"
 
@@ -341,6 +342,11 @@ export const reviewRun = task({
           title: summary.title,
         }
       }
+
+      // The webhook parser needs dispatch-only fields such as `draft`, while
+      // Convex validates an exact object shape. Normalize here as a second
+      // boundary guard so rolling or out-of-order deployments remain safe.
+      pr = normalizeReviewPullRequestContext(pr)
 
       // Re-reviews (new commits) and mentions carry the PR's history so the
       // agent can confirm resolved findings and honor the request.

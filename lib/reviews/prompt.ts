@@ -1,15 +1,4 @@
-/** PR facts injected into every review run, custom prompt or not. */
-export type ReviewPullRequestContext = {
-  authorLogin?: string
-  baseRef: string
-  body?: string
-  crossFork: boolean
-  headRef: string
-  headSha: string
-  htmlUrl: string
-  number: number
-  title: string
-}
+import type { ReviewPullRequestContext } from "@/lib/reviews/pull-request"
 
 export const PR_BODY_CONTEXT_MAX_LENGTH = 4000
 

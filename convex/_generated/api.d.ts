@@ -47,6 +47,7 @@ import type * as lib_threadAccess from "../lib/threadAccess.js";
 import type * as lib_threadContinuation from "../lib/threadContinuation.js";
 import type * as lib_threadNotes from "../lib/threadNotes.js";
 import type * as lib_triggerApi from "../lib/triggerApi.js";
+import type * as lib_userErrors from "../lib/userErrors.js";
 import type * as lib_users from "../lib/users.js";
 import type * as lib_workerAuth from "../lib/workerAuth.js";
 import type * as mcpOauthConnections from "../mcpOauthConnections.js";
@@ -102,6 +103,7 @@ declare const fullApi: ApiFromModules<{
   "lib/threadContinuation": typeof lib_threadContinuation;
   "lib/threadNotes": typeof lib_threadNotes;
   "lib/triggerApi": typeof lib_triggerApi;
+  "lib/userErrors": typeof lib_userErrors;
   "lib/users": typeof lib_users;
   "lib/workerAuth": typeof lib_workerAuth;
   mcpOauthConnections: typeof mcpOauthConnections;
