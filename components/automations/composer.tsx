@@ -73,6 +73,14 @@ function triggerDraftError(draft: AutomationDraft) {
   ) {
     return "Pick a person for the Linear trigger."
   }
+  if (
+    trigger.kind === "linear" &&
+    trigger.event === "commentCreated" &&
+    trigger.commentAuthorMode !== "any" &&
+    trigger.commentAuthorIds.length === 0
+  ) {
+    return "Pick at least one person for the Linear comment trigger."
+  }
   return null
 }
 

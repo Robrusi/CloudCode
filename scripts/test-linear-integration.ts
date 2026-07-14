@@ -4,7 +4,7 @@ import { automationTriggerLabel } from "../components/automations/model"
 import type { Id } from "../convex/_generated/dataModel"
 import {
   parseCommentlessLinearDelegation,
-  parseLinearIssueAutomationEvents,
+  parseLinearAutomationEvents,
 } from "../lib/integrations/linear-webhook"
 import { linearAutomationEventMatches } from "../lib/integrations/events"
 import {
@@ -90,7 +90,7 @@ assert.equal(
 )
 
 assert.deepEqual(
-  parseLinearIssueAutomationEvents({
+  parseLinearAutomationEvents({
     action: "create",
     data: {
       description: "Investigate the regression",
@@ -130,7 +130,7 @@ assert.deepEqual(
 )
 
 assert.deepEqual(
-  parseLinearIssueAutomationEvents({
+  parseLinearAutomationEvents({
     action: "create",
     data: { id: "project-1" },
     organizationId: "organization-1",
@@ -139,8 +139,199 @@ assert.deepEqual(
   { events: [] }
 )
 
+const commentEvent = parseLinearAutomationEvents({
+  action: "create",
+  actor: {
+    id: "user-3",
+    name: "Grace Hopper",
+    type: "user",
+  },
+  data: {
+    body: "Please handle this regression.",
+    id: "comment-1",
+    issueId: "issue-3",
+    userId: "user-3",
+  },
+  organizationId: "organization-1",
+  type: "Comment",
+  url: "https://linear.app/acme/issue/ENG-3#comment-comment-1",
+}).events[0]
+assert.deepEqual(commentEvent, {
+  comment: {
+    authorId: "user-3",
+    authorName: "Grace Hopper",
+    body: "Please handle this regression.",
+    id: "comment-1",
+    url: "https://linear.app/acme/issue/ENG-3#comment-comment-1",
+  },
+  event: "commentCreated",
+  issue: { id: "issue-3" },
+})
+assert.ok(commentEvent)
+
+const commentTrigger = {
+  event: "commentCreated" as const,
+  installationId: "installation-1" as Id<"integrationInstallations">,
+  kind: "linear" as const,
+}
+assert.equal(linearAutomationEventMatches(commentTrigger, commentEvent), true)
+assert.equal(
+  linearAutomationEventMatches(
+    {
+      ...commentTrigger,
+      commentAuthorIds: ["user-3"],
+      commentAuthorMode: "include",
+    },
+    commentEvent
+  ),
+  true
+)
+assert.equal(
+  linearAutomationEventMatches(
+    {
+      ...commentTrigger,
+      commentAuthorIds: ["user-4"],
+      commentAuthorMode: "include",
+    },
+    commentEvent
+  ),
+  false
+)
+assert.equal(
+  linearAutomationEventMatches(
+    {
+      ...commentTrigger,
+      commentAuthorIds: ["user-3"],
+      commentAuthorMode: "exclude",
+    },
+    commentEvent
+  ),
+  false
+)
+const oauthClientComment = parseLinearAutomationEvents({
+  action: "create",
+  actor: { id: "app-1", name: "CloudCode", type: "oauthClient" },
+  data: { body: "Done", id: "comment-2", issueId: "issue-3" },
+  organizationId: "organization-1",
+  type: "Comment",
+}).events[0]
+assert.deepEqual(oauthClientComment, {
+  comment: {
+    authorId: "app-1",
+    authorName: "CloudCode",
+    body: "Done",
+    id: "comment-2",
+    url: undefined,
+  },
+  event: "commentCreated",
+  issue: { id: "issue-3" },
+})
+assert.ok(oauthClientComment)
+assert.equal(
+  linearAutomationEventMatches(commentTrigger, oauthClientComment),
+  true
+)
+
+const legacyBotComment = parseLinearAutomationEvents({
+  action: "create",
+  data: {
+    body: "Legacy app comment",
+    botActor: JSON.stringify({ id: "legacy-app-1", name: "Legacy App" }),
+    id: "comment-3",
+    issueId: "issue-3",
+  },
+  organizationId: "organization-1",
+  type: "Comment",
+}).events[0]
+assert.deepEqual(legacyBotComment, {
+  comment: {
+    authorId: "legacy-app-1",
+    authorName: "Legacy App",
+    body: "Legacy app comment",
+    id: "comment-3",
+    url: undefined,
+  },
+  event: "commentCreated",
+  issue: { id: "issue-3" },
+})
+assert.ok(legacyBotComment)
+assert.equal(
+  linearAutomationEventMatches(commentTrigger, legacyBotComment),
+  true
+)
+assert.equal(
+  linearAutomationEventMatches(
+    {
+      ...commentTrigger,
+      commentAuthorIds: ["user-3"],
+      commentAuthorMode: "exclude",
+    },
+    legacyBotComment
+  ),
+  true
+)
+
+const userLikeLegacyBotComment = parseLinearAutomationEvents({
+  action: "create",
+  actor: { id: "user-3", name: "Installing User", type: "user" },
+  data: {
+    body: "App comment with a user-like actor",
+    botActor: JSON.stringify({ id: "legacy-app-2", name: "Another App" }),
+    id: "comment-4",
+    issueId: "issue-3",
+    userId: "user-3",
+  },
+  organizationId: "organization-1",
+  type: "Comment",
+}).events[0]
+assert.ok(userLikeLegacyBotComment)
+assert.equal(userLikeLegacyBotComment.comment?.authorId, "legacy-app-2")
+assert.equal(
+  linearAutomationEventMatches(commentTrigger, userLikeLegacyBotComment),
+  true
+)
+
+const unidentifiedBotComment = parseLinearAutomationEvents({
+  action: "create",
+  data: {
+    body: "App comment without stable actor data",
+    botActor: "Legacy App",
+    id: "comment-5",
+    issueId: "issue-3",
+  },
+  organizationId: "organization-1",
+  type: "Comment",
+}).events[0]
+assert.ok(unidentifiedBotComment)
+assert.equal(
+  linearAutomationEventMatches(commentTrigger, unidentifiedBotComment),
+  true
+)
+assert.equal(
+  linearAutomationEventMatches(
+    {
+      ...commentTrigger,
+      commentAuthorIds: ["user-3"],
+      commentAuthorMode: "include",
+    },
+    unidentifiedBotComment
+  ),
+  false
+)
+assert.equal(
+  linearAutomationEventMatches(
+    {
+      ...commentTrigger,
+      commentAuthorIds: ["user-3"],
+      commentAuthorMode: "exclude",
+    },
+    unidentifiedBotComment
+  ),
+  true
+)
+
 assert.deepEqual(
-  parseLinearIssueAutomationEvents({
+  parseLinearAutomationEvents({
     action: "update",
     data: {
       id: "issue-3",
@@ -206,7 +397,7 @@ assert.deepEqual(
 )
 
 assert.deepEqual(
-  parseLinearIssueAutomationEvents({
+  parseLinearAutomationEvents({
     action: "update",
     data: {
       assignee: { id: "user-2", name: "Ada Lovelace" },
@@ -244,7 +435,7 @@ assert.deepEqual(
 )
 
 assert.deepEqual(
-  parseLinearIssueAutomationEvents({
+  parseLinearAutomationEvents({
     action: "update",
     data: { assigneeId: null, id: "issue-4" },
     organizationId: "organization-1",
@@ -254,7 +445,7 @@ assert.deepEqual(
   { events: [], organizationId: "organization-1" }
 )
 
-const assignmentEvent = parseLinearIssueAutomationEvents({
+const assignmentEvent = parseLinearAutomationEvents({
   action: "update",
   data: {
     assignee: { id: "user-2", name: "Ada Lovelace" },
@@ -295,6 +486,31 @@ assert.equal(
 )
 
 type AutomationRecord = Parameters<typeof automationTriggerLabel>[0]
+
+assert.equal(
+  automationTriggerLabel({
+    trigger: {
+      commentAuthorMode: "any",
+      event: "commentCreated",
+      installationId: "installation-1" as Id<"integrationInstallations">,
+      kind: "linear",
+    },
+  } as unknown as AutomationRecord),
+  "On comment from anyone"
+)
+assert.equal(
+  automationTriggerLabel({
+    trigger: {
+      commentAuthorIds: ["user-3", "user-4"],
+      commentAuthorMode: "exclude",
+      commentAuthorNames: ["Grace Hopper", "Ada Lovelace"],
+      event: "commentCreated",
+      installationId: "installation-1" as Id<"integrationInstallations">,
+      kind: "linear",
+    },
+  } as unknown as AutomationRecord),
+  "On comment except 2 users"
+)
 
 assert.equal(
   automationTriggerLabel({

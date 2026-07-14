@@ -33,12 +33,12 @@ import {
   codexAuthMissingMessage,
   codexAuthReconnectMessage,
 } from "@/lib/codex/auth-errors"
+import { LINEAR_COMMENT_AUTHOR_FILTER_MAX } from "@/lib/automations/linear-comment-trigger"
 import { assertModelSupportsThinking } from "@/lib/chat/options"
 
 // Guard against a stale client clock or a stale form submitting a nextRunAt
 // that is already far in the past, which would fire immediately.
 const NEXT_RUN_AT_PAST_TOLERANCE_MS = 5 * 60_000
-
 const automationConfigArgs = {
   autoEnvironment: v.optional(v.boolean()),
   baseBranch: v.optional(v.string()),
@@ -141,7 +141,52 @@ async function resolveAutomationTrigger(
   if (trigger.event === "issueAssigned" && !trigger.assigneeId?.trim()) {
     throw new Error("assigneeId is required for assignment triggers.")
   }
-  return trigger
+  if (trigger.event === "commentCreated") {
+    const commentAuthorMode = trigger.commentAuthorMode ?? "any"
+    const commentAuthorIds = [
+      ...new Set(
+        (trigger.commentAuthorIds ?? []).map((id) => id.trim()).filter(Boolean)
+      ),
+    ]
+    if (commentAuthorIds.length > LINEAR_COMMENT_AUTHOR_FILTER_MAX) {
+      throw new Error(
+        `Choose at most ${LINEAR_COMMENT_AUTHOR_FILTER_MAX} comment authors.`
+      )
+    }
+    if (commentAuthorMode !== "any" && commentAuthorIds.length === 0) {
+      throw new Error("Choose at least one comment author.")
+    }
+    const nameById = new Map(
+      (trigger.commentAuthorIds ?? []).map((id, index) => [
+        id.trim(),
+        trigger.commentAuthorNames?.[index]?.trim(),
+      ])
+    )
+    return {
+      ...trigger,
+      assigneeId: undefined,
+      assigneeName: undefined,
+      commentAuthorIds:
+        commentAuthorMode === "any" ? undefined : commentAuthorIds,
+      commentAuthorMode,
+      commentAuthorNames:
+        commentAuthorMode === "any"
+          ? undefined
+          : commentAuthorIds.map((id) => nameById.get(id) || id),
+      labelId: undefined,
+      labelName: undefined,
+      stateId: undefined,
+      stateName: undefined,
+      teamId: undefined,
+      teamName: undefined,
+    }
+  }
+  return {
+    ...trigger,
+    commentAuthorIds: undefined,
+    commentAuthorMode: undefined,
+    commentAuthorNames: undefined,
+  }
 }
 
 /** Denormalized trigger columns stored alongside the trigger object: the

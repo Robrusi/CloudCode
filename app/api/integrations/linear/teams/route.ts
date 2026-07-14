@@ -70,11 +70,9 @@ export async function GET(request: Request) {
         }
 
         const users = userConnection.nodes
-          .filter(
-            (user) =>
-              user.active && user.isAssignable && !user.app && !user.archivedAt
-          )
+          .filter((user) => user.active && !user.app && !user.archivedAt)
           .map((user) => ({
+            assignable: user.isAssignable,
             email: user.email,
             id: user.id,
             name: user.name,

@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto"
 
 import type {
   IntegrationChatEventPayload,
-  LinearIssueAutomationEvent,
+  LinearAutomationEvent,
 } from "@/lib/integrations/events"
 import { linearAgentSessionThreadId } from "@/lib/integrations/linear-threads"
 
@@ -74,6 +74,63 @@ type LinearIssuePayload = {
     labelIds?: string[]
     stateId?: string
   }
+}
+
+type LinearCommentActor = {
+  id?: string
+  name?: string
+  userDisplayName?: string
+}
+
+type LinearCommentPayload = {
+  action?: string
+  actor?: {
+    id?: string
+    name?: string
+    type?: string
+  }
+  data?: {
+    botActor?: string | LinearCommentActor
+    body?: string
+    id?: string
+    issueId?: string
+    user?: { id?: string; name?: string }
+    userId?: string
+  }
+  organizationId?: string
+  type?: string
+  url?: string
+}
+
+/** Linear exposes legacy actor=application metadata through the Comment
+ * payload's botActor string. Normalize JSON-encoded actor data when present,
+ * and accept an object if Linear normalizes that webhook field in the future. */
+function parseLinearCommentBotActor(
+  value: string | LinearCommentActor | undefined
+): LinearCommentActor | undefined {
+  if (!value) return undefined
+  if (typeof value !== "string") return value
+
+  const trimmed = value.trim()
+  if (!trimmed) return undefined
+  try {
+    const parsed = JSON.parse(trimmed) as unknown
+    if (typeof parsed === "string") return { name: parsed }
+    if (parsed && typeof parsed === "object") {
+      const actor = parsed as LinearCommentActor
+      return {
+        id: typeof actor.id === "string" ? actor.id : undefined,
+        name: typeof actor.name === "string" ? actor.name : undefined,
+        userDisplayName:
+          typeof actor.userDisplayName === "string"
+            ? actor.userDisplayName
+            : undefined,
+      }
+    }
+  } catch {
+    // Older payloads may contain a display name rather than JSON.
+  }
+  return { name: trimmed }
 }
 
 type LinearAgentSessionPayload = {
@@ -152,13 +209,47 @@ export function parseCommentlessLinearDelegation(
   }
 }
 
-/** Extracts automation-relevant Issue data changes (creation, assignment,
- * labels added, workflow state changed) from a raw Linear webhook payload.
- * Non-Issue events and unrelated updates return an empty list. */
-export function parseLinearIssueAutomationEvents(payload: unknown): {
-  events: LinearIssueAutomationEvent[]
+/** Extracts automation-relevant Issue changes and all Comment creations from
+ * a raw Linear webhook payload. Unrelated events and comment edits return an
+ * empty list. */
+export function parseLinearAutomationEvents(payload: unknown): {
+  events: LinearAutomationEvent[]
   organizationId?: string
 } {
+  const commentPayload = payload as LinearCommentPayload
+  if (
+    commentPayload?.type === "Comment" &&
+    commentPayload.action === "create"
+  ) {
+    const data = commentPayload.data
+    if (!data?.id || !data.issueId) {
+      return { events: [] }
+    }
+    const botActor = parseLinearCommentBotActor(data.botActor)
+    const authorId = botActor
+      ? botActor.id
+      : (data.userId ?? data.user?.id ?? commentPayload.actor?.id)
+    const authorName = botActor
+      ? (botActor.userDisplayName ?? botActor.name)
+      : (data.user?.name ?? commentPayload.actor?.name)
+    return {
+      events: [
+        {
+          comment: {
+            authorId,
+            authorName,
+            body: data.body,
+            id: data.id,
+            url: commentPayload.url,
+          },
+          event: "commentCreated",
+          issue: { id: data.issueId },
+        },
+      ],
+      organizationId: commentPayload.organizationId,
+    }
+  }
+
   const parsed = payload as LinearIssuePayload
   if (
     !parsed ||
@@ -196,7 +287,7 @@ export function parseLinearIssueAutomationEvents(payload: unknown): {
     url: data.url,
   }
 
-  const events: LinearIssueAutomationEvent[] = []
+  const events: LinearAutomationEvent[] = []
 
   if (parsed.action === "create") {
     return {
