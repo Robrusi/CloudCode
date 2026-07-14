@@ -48,6 +48,7 @@
     "clsx": "^2.1.1",
     "convex": "^1.42.1",
     "cron-parser": "^5.6.1",
+    "form-data": "^4.0.6",
     "geist": "^1.7.2",
     "ioredis": "^5.11.1",
     "lucide-react": "^1.23.0",
