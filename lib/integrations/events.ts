@@ -53,7 +53,7 @@ export type SlackAutomationEventPayload = {
 export type LinearAutomationEvent = {
   addedLabels?: Array<{ id: string; name?: string }>
   comment?: {
-    authorId: string
+    authorId?: string
     authorName?: string
     body?: string
     id: string
@@ -260,11 +260,14 @@ export function linearAutomationEventMatches(
   if (trigger.event !== event.event) return false
   if (trigger.event === "commentCreated") {
     const authorId = event.comment?.authorId
-    if (!authorId) return false
     const authorIds = trigger.commentAuthorIds ?? []
     const mode = trigger.commentAuthorMode ?? "any"
-    if (mode === "include" && !authorIds.includes(authorId)) return false
-    if (mode === "exclude" && authorIds.includes(authorId)) return false
+    if (mode === "include") {
+      return Boolean(authorId && authorIds.includes(authorId))
+    }
+    if (mode === "exclude") {
+      return !authorId || !authorIds.includes(authorId)
+    }
     return true
   }
   if (trigger.teamId && trigger.teamId !== event.issue.teamId) return false

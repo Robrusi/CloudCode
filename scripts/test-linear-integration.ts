@@ -208,15 +208,126 @@ assert.equal(
   ),
   false
 )
-assert.deepEqual(
-  parseLinearAutomationEvents({
-    action: "create",
-    actor: { id: "app-1", name: "CloudCode", type: "oauthClient" },
-    data: { body: "Done", id: "comment-2", issueId: "issue-3" },
-    organizationId: "organization-1",
-    type: "Comment",
-  }),
-  { events: [] }
+const oauthClientComment = parseLinearAutomationEvents({
+  action: "create",
+  actor: { id: "app-1", name: "CloudCode", type: "oauthClient" },
+  data: { body: "Done", id: "comment-2", issueId: "issue-3" },
+  organizationId: "organization-1",
+  type: "Comment",
+}).events[0]
+assert.deepEqual(oauthClientComment, {
+  comment: {
+    authorId: "app-1",
+    authorName: "CloudCode",
+    body: "Done",
+    id: "comment-2",
+    url: undefined,
+  },
+  event: "commentCreated",
+  issue: { id: "issue-3" },
+})
+assert.ok(oauthClientComment)
+assert.equal(
+  linearAutomationEventMatches(commentTrigger, oauthClientComment),
+  true
+)
+
+const legacyBotComment = parseLinearAutomationEvents({
+  action: "create",
+  data: {
+    body: "Legacy app comment",
+    botActor: JSON.stringify({ id: "legacy-app-1", name: "Legacy App" }),
+    id: "comment-3",
+    issueId: "issue-3",
+  },
+  organizationId: "organization-1",
+  type: "Comment",
+}).events[0]
+assert.deepEqual(legacyBotComment, {
+  comment: {
+    authorId: "legacy-app-1",
+    authorName: "Legacy App",
+    body: "Legacy app comment",
+    id: "comment-3",
+    url: undefined,
+  },
+  event: "commentCreated",
+  issue: { id: "issue-3" },
+})
+assert.ok(legacyBotComment)
+assert.equal(
+  linearAutomationEventMatches(commentTrigger, legacyBotComment),
+  true
+)
+assert.equal(
+  linearAutomationEventMatches(
+    {
+      ...commentTrigger,
+      commentAuthorIds: ["user-3"],
+      commentAuthorMode: "exclude",
+    },
+    legacyBotComment
+  ),
+  true
+)
+
+const userLikeLegacyBotComment = parseLinearAutomationEvents({
+  action: "create",
+  actor: { id: "user-3", name: "Installing User", type: "user" },
+  data: {
+    body: "App comment with a user-like actor",
+    botActor: JSON.stringify({ id: "legacy-app-2", name: "Another App" }),
+    id: "comment-4",
+    issueId: "issue-3",
+    userId: "user-3",
+  },
+  organizationId: "organization-1",
+  type: "Comment",
+}).events[0]
+assert.ok(userLikeLegacyBotComment)
+assert.equal(userLikeLegacyBotComment.comment?.authorId, "legacy-app-2")
+assert.equal(
+  linearAutomationEventMatches(commentTrigger, userLikeLegacyBotComment),
+  true
+)
+
+const unidentifiedBotComment = parseLinearAutomationEvents({
+  action: "create",
+  data: {
+    body: "App comment without stable actor data",
+    botActor: "Legacy App",
+    id: "comment-5",
+    issueId: "issue-3",
+  },
+  organizationId: "organization-1",
+  type: "Comment",
+}).events[0]
+assert.ok(unidentifiedBotComment)
+assert.equal(
+  linearAutomationEventMatches(commentTrigger, unidentifiedBotComment),
+  true
+)
+assert.equal(
+  linearAutomationEventMatches(
+    {
+      ...commentTrigger,
+      commentAuthorIds: ["user-3"],
+      commentAuthorMode: "include",
+    },
+    unidentifiedBotComment
+  ),
+  false
+)
+assert.equal(
+  linearAutomationEventMatches(
+    {
+      ...commentTrigger,
+      commentAuthorIds: ["user-3"],
+      commentAuthorMode: "exclude",
+    },
+    unidentifiedBotComment
+  ),
+  true
 )
 
 assert.deepEqual(
