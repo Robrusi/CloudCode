@@ -3,8 +3,10 @@ import { runs, task, tasks } from "@trigger.dev/sdk"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { getWorkerSecret, workerConvexClient } from "@/lib/codex/run-worker"
+import { queueFactoryWakeRuns } from "@/lib/factory/wake-dispatch"
 import { createWorkerGitHubRepoCredential } from "@/lib/github/app-worker"
 import { canClonePublicGitHubRepo } from "@/lib/github/repo-api"
+import { postSlackMessage } from "@/lib/integrations/outbound"
 import { deleteWorkerDaytonaSandbox } from "@/lib/sandbox/delete"
 import { encryptSecret } from "@/lib/security/secret-crypto"
 import type { cloudcodeRun } from "@/trigger/cloudcode-run"
@@ -119,6 +121,95 @@ export const factoryDispatch = task({
       return { dispatched: true, triggerRunId: handle.id }
     } catch (error) {
       await failDispatch(errorMessage(error))
+      throw error
+    }
+  },
+})
+
+type FactoryWaitArmPayload = {
+  channelId: string
+  markdown: string
+  slackTeamId: string
+  threadTs?: string
+  // Absent for post-only sends (the slack_post_message tool).
+  waitId?: Id<"factoryWaits">
+}
+
+const WAIT_ARM_MAX_ATTEMPTS = 3
+
+function resolveWaitArmPayload(
+  payload: FactoryWaitArmPayload | string
+): FactoryWaitArmPayload {
+  const resolved =
+    typeof payload === "string"
+      ? (JSON.parse(payload) as FactoryWaitArmPayload)
+      : payload
+  if (
+    !resolved ||
+    typeof resolved.channelId !== "string" ||
+    !resolved.channelId ||
+    typeof resolved.markdown !== "string" ||
+    !resolved.markdown
+  ) {
+    throw new Error("factory-wait-arm payload is incomplete.")
+  }
+  return resolved
+}
+
+// Posts an agent-authored Slack message on behalf of the ask_human and
+// slack_post_message tools. Provider SDKs (and the OAuth bot tokens in the
+// Chat SDK state store) live in Trigger workers, not Convex, so the Convex
+// action creates the wait in "arming" and this task confirms the post and
+// arms it with the message timestamp. A post that exhausts its retries fails
+// the wait and wakes the agent so a question is never silently lost.
+export const factoryWaitArm = task({
+  id: "factory-wait-arm",
+  retry: {
+    maxAttempts: WAIT_ARM_MAX_ATTEMPTS,
+  },
+  run: async (rawPayload: FactoryWaitArmPayload | string, { ctx }) => {
+    const payload = resolveWaitArmPayload(rawPayload)
+    const client = workerConvexClient()
+    const workerSecret = getWorkerSecret()
+
+    try {
+      const posted = await postSlackMessage(
+        { slackTeamId: payload.slackTeamId },
+        {
+          channel: payload.channelId,
+          markdown: payload.markdown,
+          threadTs: payload.threadTs,
+        }
+      )
+
+      if (payload.waitId) {
+        await client.mutation(api.factoryWaits.workerArmWait, {
+          channelId: payload.channelId,
+          messageTs: posted.ts,
+          threadTs: payload.threadTs,
+          waitId: payload.waitId,
+          workerSecret,
+        })
+      }
+      return { posted: true, ts: posted.ts }
+    } catch (error) {
+      if (ctx.attempt.number < WAIT_ARM_MAX_ATTEMPTS) throw error
+
+      if (payload.waitId) {
+        const failed = await client
+          .mutation(api.factoryWaits.workerFailWaitArm, {
+            error:
+              error instanceof Error ? error.message : "The Slack post failed.",
+            notify: true,
+            waitId: payload.waitId,
+            workerSecret,
+          })
+          .catch((failError) => {
+            console.warn("Unable to mark wait arm failed.", failError)
+            return undefined
+          })
+        await queueFactoryWakeRuns(failed?.factoryWakeRuns)
+      }
       throw error
     }
   },

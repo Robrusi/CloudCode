@@ -17,6 +17,7 @@ import {
   ensureManagedIntegrationMcpServer,
   ensureManagedIntegrationMcpServersForUser,
 } from "./lib/integrationMcp"
+import { installationForProviderExternal } from "./lib/integrationInstallations"
 import { integrationProvider } from "./lib/integrationTriggers"
 import { resolveOwnedPresetOrAutoDefault } from "./lib/sandboxPresets"
 import { threadContinuationInput } from "./lib/threadContinuation"
@@ -80,19 +81,6 @@ function integrationRunOptions(
     ok: true as const,
     reasoningEffort: selectedEffort,
   }
-}
-
-async function installationForProviderExternal(
-  ctx: QueryCtx | MutationCtx,
-  provider: Doc<"integrationInstallations">["provider"],
-  externalId: string
-) {
-  return await ctx.db
-    .query("integrationInstallations")
-    .withIndex("by_provider_external", (q) =>
-      q.eq("provider", provider).eq("externalId", externalId)
-    )
-    .first()
 }
 
 async function bridgeForExternalThread(

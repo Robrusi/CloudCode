@@ -9,6 +9,7 @@ import {
   getWorkerSecret,
   workerConvexClient,
 } from "@/lib/codex/run-worker"
+import { queueFactoryWakeRuns } from "@/lib/factory/wake-dispatch"
 import { createWorkerGitHubRepoCredential } from "@/lib/github/app-worker"
 import { canClonePublicGitHubRepo } from "@/lib/github/repo-api"
 import {
@@ -192,6 +193,36 @@ export const automationsTick = schedules.task({
         })
     }
 
+    // Factory waits: expire overdue waits (each wakes its thread with a
+    // timeout event), then redeliver wakes stranded by a worker that died
+    // between recording an event and dispatching the run.
+    let expiredWaits = 0
+    try {
+      const expired = await client.mutation(
+        api.factoryWaits.workerExpireWaits,
+        {
+          now,
+          workerSecret,
+        }
+      )
+      expiredWaits = expired.expired
+      await queueFactoryWakeRuns(expired.factoryWakeRuns)
+
+      const stalledThreads = await client.query(
+        api.factoryWaits.workerRecoverWaitWakes,
+        { now, workerSecret }
+      )
+      if (stalledThreads.length > 0) {
+        const delivered = await client.mutation(
+          api.factoryWaits.workerDeliverPendingWaitWakes,
+          { threadIds: stalledThreads, workerSecret }
+        )
+        await queueFactoryWakeRuns(delivered.factoryWakeRuns)
+      }
+    } catch (error) {
+      console.warn("Unable to sweep factory waits.", error)
+    }
+
     const leaked = await client.query(
       api.codexRuns.workerListLeakedEphemeralSandboxes,
       { now, workerSecret }
@@ -216,6 +247,7 @@ export const automationsTick = schedules.task({
     return {
       dispatched,
       due: due.length,
+      expiredWaits,
       recoveredEventQueues: recovered.recovered,
       sweptSandboxes: leaked.length,
     }

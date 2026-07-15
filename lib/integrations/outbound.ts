@@ -18,7 +18,7 @@ export type IntegrationThreadRef = {
 
 /** Runs a Slack API call with the right bot token in scope: the stored
  * workspace installation in OAuth mode, or the env token in token mode. */
-async function withSlackToken<T>(
+export async function withSlackToken<T>(
   ref: IntegrationThreadRef,
   fn: () => Promise<T>
 ): Promise<T> {
@@ -55,6 +55,43 @@ async function withLinearInstallation(
   }
   await instance.linear.withInstallation(ref.linearOrganizationId, () =>
     fn(instance.bot)
+  )
+}
+
+/** Posts a Slack message through the Web API and returns its `ts`, which the
+ * Chat SDK's generic post helpers swallow. Waits key their reply/reaction
+ * matching on that timestamp, so factory-authored questions go through here
+ * rather than postToIntegrationThread. */
+export async function postSlackMessage(
+  ref: Pick<IntegrationThreadRef, "slackTeamId">,
+  message: { channel: string; markdown: string; threadTs?: string }
+): Promise<{ ts: string }> {
+  const { slack } = await getInitializedIntegrationsBot()
+  if (!slack) throw new Error("The Slack integration is not configured.")
+
+  return await withSlackToken(
+    { externalThreadId: "", provider: "slack", slackTeamId: ref.slackTeamId },
+    async () => {
+      const response = await slack.webClient.chat.postMessage({
+        // The markdown block type postdates the Web API typings.
+        blocks: [
+          {
+            text: message.markdown.slice(0, SLACK_BLOCK_TEXT_MAX),
+            type: "markdown",
+          },
+        ] as never,
+        channel: message.channel,
+        text: message.markdown.slice(0, 2900),
+        ...(message.threadTs ? { thread_ts: message.threadTs } : {}),
+        unfurl_links: false,
+      })
+      if (!response.ok || !response.ts) {
+        throw new Error(
+          `Slack rejected the message${response.error ? `: ${response.error}` : "."}`
+        )
+      }
+      return { ts: response.ts }
+    }
   )
 }
 

@@ -10,6 +10,8 @@ import {
   parseThinking,
 } from "@/lib/chat/options"
 import { getWorkerSecret, workerConvexClient } from "@/lib/codex/run-worker"
+import { queueFactoryWakeRuns } from "@/lib/factory/wake-dispatch"
+import { isGitHubAutomationTriggerEvent } from "@/lib/github/automation-events"
 import { dispatchIntegrationRun } from "@/lib/integrations/dispatch"
 import { getInitializedIntegrationsBot } from "@/lib/integrations/bot"
 import {
@@ -19,6 +21,8 @@ import {
   linearAutomationEventMatches,
   linearAutomationEventVars,
   slackAutomationEventVars,
+  type EventContextVars,
+  type FactoryWaitEventPayload,
   type IntegrationChatEventPayload,
   type IntegrationEventPayload,
   type GitHubAutomationEventPayload,
@@ -438,6 +442,77 @@ async function handleLinearAutomationEvent(
   return { fired, matched: automations.length }
 }
 
+/** Best-effort Slack author-name lookup for wait events, and the summary
+ * line the wake prompt leads with. Enrichment failures fall back to the raw
+ * user id — a wake with a plain id beats a lost wake. */
+async function enrichSlackWaitEventVars(
+  slackInfo: NonNullable<FactoryWaitEventPayload["slack"]>,
+  eventVars: EventContextVars,
+  eventName: string
+): Promise<EventContextVars> {
+  let author = slackInfo.actorUserId ?? "someone"
+  try {
+    const { slack } = await getInitializedIntegrationsBot()
+    if (slack && slackInfo.actorUserId) {
+      const installation = await slack
+        .getInstallation(slackInfo.externalId)
+        .catch(() => null)
+      const lookupUser = () =>
+        slack.getUser(slackInfo.actorUserId!).catch(() => null)
+      const user = installation
+        ? await slack.withBotToken(installation.botToken, lookupUser)
+        : await lookupUser()
+      author = user?.fullName ?? user?.userName ?? author
+    }
+  } catch (error) {
+    console.warn("Unable to enrich Slack wait event author.", error)
+  }
+
+  const channel = eventVars.channel ? `<#${eventVars.channel}>` : "Slack"
+  const summary =
+    eventName === "reaction"
+      ? `Slack reaction :${eventVars.emoji || "?"}: from ${author} on your message in ${channel}`
+      : `Slack reply from ${author} in ${channel}`
+  return { ...eventVars, author, summary }
+}
+
+/** Records a pre-matched provider event on each wait and dispatches the
+ * coalesced wake runs the recording mutations created. Dedupe lives in the
+ * mutation (waitId + eventKey), so task retries and webhook redeliveries
+ * converge. */
+async function handleWaitEvent(payload: FactoryWaitEventPayload) {
+  const client = workerConvexClient()
+  const workerSecret = getWorkerSecret()
+
+  const eventVars =
+    payload.provider === "slack" && payload.slack
+      ? await enrichSlackWaitEventVars(
+          payload.slack,
+          payload.eventVars,
+          payload.eventName
+        )
+      : payload.eventVars
+
+  let queued = 0
+  for (const wait of payload.waits) {
+    const result = await client.mutation(
+      api.factoryWaits.workerRecordWaitEvent,
+      {
+        eventKey: payload.eventKey,
+        eventName: payload.eventName,
+        eventVars,
+        externalThreadId: payload.externalThreadId,
+        waitId: wait.waitId,
+        workerSecret,
+      }
+    )
+    if (result.queued) queued += 1
+    await queueFactoryWakeRuns(result.factoryWakeRuns)
+  }
+
+  return { matched: payload.waits.length, queued }
+}
+
 /** Matches repository-scoped GitHub events and dispatches each automation
  * after the shared feedback-loop rate claim succeeds. */
 async function handleGitHubAutomationEvent(
@@ -446,6 +521,12 @@ async function handleGitHubAutomationEvent(
   const client = workerConvexClient()
   const workerSecret = getWorkerSecret()
   const event = payload.event
+  // Wait-only events (PR closed/reopened, review comments, check suites)
+  // have no automation trigger kind; the webhook route filters them, and
+  // this guard keeps redeliveries of stale queue entries safe too.
+  if (!isGitHubAutomationTriggerEvent(event.event)) {
+    return { fired: 0, matched: 0 }
+  }
   const eventId =
     payload.deliveryId ??
     event.comment?.id ??
@@ -509,6 +590,8 @@ export const integrationEvent = task({
         return await handleLinearAutomationEvent(payload)
       case "github_automation":
         return await handleGitHubAutomationEvent(payload)
+      case "wait_event":
+        return await handleWaitEvent(payload)
     }
   },
 })

@@ -19,34 +19,19 @@ import { createWebhookTaskTracker } from "@/lib/integrations/webhook-tasks"
 import {
   parseSlackAutomationWebhookEvent,
   verifySlackWebhookRequest,
+  type SlackAutomationWebhookEvent,
 } from "@/lib/integrations/slack-webhook"
+import { slackThreadParts } from "@/lib/integrations/slack-threads"
 import { getWorkerSecret } from "@/lib/security/worker-secret"
 import type { integrationEvent } from "@/trigger/integrations"
 
 export const runtime = "nodejs"
 
-async function dispatchAutomationEvent(
-  request: Request,
-  signingSecret: string
+async function dispatchSlackAutomations(
+  client: ConvexHttpClient,
+  event: SlackAutomationWebhookEvent,
+  eventId: string
 ) {
-  const rawBody = await request.clone().text()
-  if (
-    !verifySlackWebhookRequest(
-      rawBody,
-      request.headers.get("x-slack-signature"),
-      request.headers.get("x-slack-request-timestamp"),
-      signingSecret
-    )
-  ) {
-    return
-  }
-
-  const event = parseSlackAutomationWebhookEvent(JSON.parse(rawBody))
-  if (!event) return
-  const eventId =
-    event.eventId ??
-    `body:${createHash("sha256").update(rawBody).digest("hex")}`
-  const client = new ConvexHttpClient(requireConvexUrl())
   const matches = await client.query(api.integrations.workerMatchSlackEvent, {
     actorUserId: event.actorUserId,
     channelId: event.channelId,
@@ -71,6 +56,91 @@ async function dispatchAutomationEvent(
       idempotencyKey: `sla:${eventId}`,
     }
   )
+}
+
+/** Factory waits: does this channel message or reaction land on a thread or
+ * message an agent registered a wait for? Replies match on their thread root
+ * ts, reactions on the reacted message's ts. */
+async function dispatchSlackWaitEvent(
+  client: ConvexHttpClient,
+  event: SlackAutomationWebhookEvent,
+  eventId: string
+) {
+  const waitEventName = event.event === "reaction" ? "reaction" : "reply"
+  const messageTs =
+    event.event === "reaction"
+      ? event.messageId
+      : (slackThreadParts(event.externalThreadId).threadTs ?? event.messageId)
+  const matches = await client.query(
+    api.factoryWaits.workerMatchSlackWaitEvent,
+    {
+      actorUserId: event.actorUserId,
+      channelId: event.channelId,
+      event: waitEventName,
+      externalId: event.externalId,
+      messageTs,
+      workerSecret: getWorkerSecret(),
+    }
+  )
+  if (matches.length === 0) return
+
+  await tasks.trigger<typeof integrationEvent>(
+    "integration-event",
+    {
+      eventKey: eventId,
+      eventName: waitEventName,
+      eventVars: {
+        channel: event.channelId,
+        emoji: event.emoji ?? "",
+        event: waitEventName,
+        messageTs: event.messageId,
+        text: event.messageText ?? "",
+        workspace: event.externalId,
+      },
+      externalThreadId: event.externalThreadId,
+      kind: "wait_event",
+      provider: "slack",
+      slack: {
+        actorUserId: event.actorUserId,
+        externalId: event.externalId,
+      },
+      waits: matches.map((match) => ({
+        threadId: match.threadId,
+        waitId: match.waitId,
+      })),
+    },
+    {
+      idempotencyKey: `fws:${eventId}`,
+    }
+  )
+}
+
+async function dispatchAutomationEvent(
+  request: Request,
+  signingSecret: string
+) {
+  const rawBody = await request.clone().text()
+  if (
+    !verifySlackWebhookRequest(
+      rawBody,
+      request.headers.get("x-slack-signature"),
+      request.headers.get("x-slack-request-timestamp"),
+      signingSecret
+    )
+  ) {
+    return
+  }
+
+  const event = parseSlackAutomationWebhookEvent(JSON.parse(rawBody))
+  if (!event) return
+  const eventId =
+    event.eventId ??
+    `body:${createHash("sha256").update(rawBody).digest("hex")}`
+  const client = new ConvexHttpClient(requireConvexUrl())
+  await Promise.all([
+    dispatchSlackAutomations(client, event, eventId),
+    dispatchSlackWaitEvent(client, event, eventId),
+  ])
 }
 
 // Slack is the caller: automation events are verified and durably handed to

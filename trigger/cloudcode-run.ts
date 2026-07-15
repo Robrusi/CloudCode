@@ -39,6 +39,7 @@ import {
   codexRunStreamAvailable,
   createCodexRunStreamPublisher,
 } from "@/lib/codex/run-stream"
+import { queueFactoryWakeRuns } from "@/lib/factory/wake-dispatch"
 import { notifyIntegrationRunFinished } from "@/lib/integrations/notify"
 import {
   createBillingAbortController,
@@ -48,38 +49,12 @@ import {
   pauseSandboxForBilling,
   type ActiveBillingSandboxSegment,
 } from "@/trigger/cloudcode-run-billing"
-import type { factoryDispatch } from "@/trigger/factory"
 import type { automationEventDispatch } from "@/trigger/automations"
 
 function errorMessage(error: unknown) {
   return redactCodexAuthPayloads(
     error instanceof Error ? error.message : "Codex run failed."
   )
-}
-
-type FactoryWakeRunRef = {
-  runId: Id<"codexRuns">
-  threadId: Id<"threads">
-  userId: Id<"users">
-}
-
-/** Factory wake-up runs created by the terminal-status mutations sit queued
- * until a factory-dispatch task picks them up; queue one per created run. */
-async function queueFactoryWakeRuns(wakeRuns?: FactoryWakeRunRef[]) {
-  for (const wake of wakeRuns ?? []) {
-    await tasks
-      .trigger<typeof factoryDispatch>(
-        "factory-dispatch",
-        { runId: wake.runId },
-        {
-          idempotencyKey: `factory-dispatch:${wake.runId}`,
-          tags: [`user:${wake.userId}`, `thread:${wake.threadId}`],
-        }
-      )
-      .catch((error) => {
-        console.warn("Unable to queue factory wake-up run.", error)
-      })
-  }
 }
 
 async function queueAutomationEventDrain(

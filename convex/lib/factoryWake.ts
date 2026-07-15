@@ -3,9 +3,26 @@ import type { MutationCtx } from "../_generated/server"
 import { findCodexAuth } from "./codexRunAuth"
 import { activeRunForThread } from "./codexRunLifecycle"
 import { insertFactoryRunRecords, type FactoryRunCreated } from "./factoryRuns"
+import {
+  closeWait,
+  isActiveWaitStatus,
+  pendingWaitEventsForThread,
+} from "./factoryWaits"
 import { resolveOwnedPresetOrAutoDefault } from "./sandboxPresets"
 
 const TERMINAL_CHILD_STATUSES = ["succeeded", "failed", "canceled"] as const
+
+/** Pending wait events drained into one wake run. Anything beyond the cap is
+ * delivered by the next wake — the wake run's own completion re-runs the
+ * check, so a backlog drains itself. */
+const WAKE_WAIT_EVENT_BATCH = 50
+
+const WAIT_EVENT_TEXT_MAX = 1500
+
+type WaitEventDelivery = {
+  event: Doc<"factoryWaitEvents">
+  wait: Doc<"factoryWaits"> | null
+}
 
 async function unreportedFinishedChildren(
   ctx: MutationCtx,
@@ -28,38 +45,80 @@ async function unreportedFinishedChildren(
     .sort((a, b) => a.createdAt - b.createdAt)
 }
 
-function factoryWakePrompt(
-  children: Array<{ run: Doc<"codexRuns">; title?: string }>
-) {
-  const lines = children.map(({ run, title }) =>
-    [
-      `- ${run._id}`,
-      run.status,
-      title,
-      run.branchName ? `branch ${run.branchName}` : undefined,
-      run.prUrl,
-      run.error ? `error: ${run.error}` : undefined,
-    ]
-      .filter(Boolean)
-      .join(" | ")
-  )
+function waitEventLines(deliveries: WaitEventDelivery[]) {
+  return deliveries.flatMap(({ event, wait }) => {
+    const label = wait?.note
+      ? `Wait ${event.waitId} (${wait.note})`
+      : `Wait ${event.waitId}`
+    const summary =
+      event.eventVars.summary ?? event.eventVars.event ?? "event received"
+    const lines = [`- ${label} — ${summary}`]
 
-  return [
-    children.length === 1
-      ? "Factory update: a run you dispatched has finished."
-      : `Factory update: ${children.length} runs you dispatched have finished.`,
-    "",
-    ...lines,
-    "",
-    "Read their results with run_output and run_status, verify the work, and continue orchestrating. Use run_message for rework on a finished thread, run_dispatch for new tasks, and post a summary when everything is done.",
-  ].join("\n")
+    const text = event.eventVars.text
+    if (text) {
+      const truncated =
+        text.length > WAIT_EVENT_TEXT_MAX
+          ? `${text.slice(0, WAIT_EVENT_TEXT_MAX)}…`
+          : text
+      lines.push(...truncated.split("\n").map((line) => `  > ${line}`))
+    }
+    if (event.eventVars.url) lines.push(`  ${event.eventVars.url}`)
+    return lines
+  })
+}
+
+function factoryWakePrompt(
+  children: Array<{ run: Doc<"codexRuns">; title?: string }>,
+  waitDeliveries: WaitEventDelivery[]
+) {
+  const parts: string[] = []
+
+  if (children.length) {
+    const lines = children.map(({ run, title }) =>
+      [
+        `- ${run._id}`,
+        run.status,
+        title,
+        run.branchName ? `branch ${run.branchName}` : undefined,
+        run.prUrl,
+        run.error ? `error: ${run.error}` : undefined,
+      ]
+        .filter(Boolean)
+        .join(" | ")
+    )
+    parts.push(
+      children.length === 1
+        ? "Factory update: a run you dispatched has finished."
+        : `Factory update: ${children.length} runs you dispatched have finished.`,
+      "",
+      ...lines,
+      "",
+      "Read their results with run_output and run_status, verify the work, and continue orchestrating. Use run_message for rework on a finished thread, run_dispatch for new tasks, and post a summary when everything is done."
+    )
+  }
+
+  if (waitDeliveries.length) {
+    if (parts.length) parts.push("")
+    parts.push(
+      waitDeliveries.length === 1
+        ? "Factory update: an event you registered a wait for has arrived."
+        : `Factory update: ${waitDeliveries.length} events you registered waits for have arrived.`,
+      "",
+      ...waitEventLines(waitDeliveries),
+      "",
+      "These waits are now consumed — register a new one with ask_human or wait_create if you need to keep listening. Continue the task with this new information."
+    )
+  }
+
+  return parts.join("\n")
 }
 
 /** Delivers pending factory wake-ups for one thread: when it has finished
- * dispatched children that were never reported and no run is active on it,
- * queues one follow-up "wake" run summarizing all of them and marks them
- * reported. Coalesces naturally — children finishing while the thread is
- * busy are picked up in a single wake once the active run completes. */
+ * dispatched children that were never reported, or queued wait events, and
+ * no run is active on it, queues one follow-up "wake" run summarizing all of
+ * them and marks them reported. Coalesces naturally — children finishing and
+ * events arriving while the thread is busy are picked up in a single wake
+ * once the active run completes. */
 export async function maybeCreateFactoryWakeRun(
   ctx: MutationCtx,
   threadId: Id<"threads">
@@ -67,8 +126,11 @@ export async function maybeCreateFactoryWakeRun(
   const thread = await ctx.db.get(threadId)
   if (!thread) return null
 
-  const children = await unreportedFinishedChildren(ctx, threadId)
-  if (!children.length) return null
+  const [children, waitEvents] = await Promise.all([
+    unreportedFinishedChildren(ctx, threadId),
+    pendingWaitEventsForThread(ctx, threadId, WAKE_WAIT_EVENT_BATCH),
+  ])
+  if (!children.length && !waitEvents.length) return null
 
   if (thread.hasPendingMessage) {
     const activeRun = await activeRunForThread(ctx, threadId)
@@ -100,17 +162,23 @@ export async function maybeCreateFactoryWakeRun(
   })
   if (!auth || auth.invalidatedAt) return null
 
-  const [sandboxPresetId, latestMessage, childThreads] = await Promise.all([
-    resolveOwnedPresetOrAutoDefault(
-      ctx,
-      latest.sandboxPresetId ?? thread.sandboxPresetId,
-      thread.userId
-    ),
-    ctx.db.get(latest.assistantMessageId),
-    Promise.all(children.map((child) => ctx.db.get(child.threadId))),
-  ])
+  const [sandboxPresetId, latestMessage, childThreads, waitDocs] =
+    await Promise.all([
+      resolveOwnedPresetOrAutoDefault(
+        ctx,
+        latest.sandboxPresetId ?? thread.sandboxPresetId,
+        thread.userId
+      ),
+      ctx.db.get(latest.assistantMessageId),
+      Promise.all(children.map((child) => ctx.db.get(child.threadId))),
+      Promise.all(waitEvents.map((event) => ctx.db.get(event.waitId))),
+    ])
+  const waitDeliveries: WaitEventDelivery[] = waitEvents.map(
+    (event, index) => ({ event, wait: waitDocs[index] })
+  )
   const prompt = factoryWakePrompt(
-    children.map((run, index) => ({ run, title: childThreads[index]?.title }))
+    children.map((run, index) => ({ run, title: childThreads[index]?.title })),
+    waitDeliveries
   )
 
   const created = await insertFactoryRunRecords(ctx, {
@@ -138,9 +206,32 @@ export async function maybeCreateFactoryWakeRun(
   })
 
   const now = Date.now()
-  await Promise.all(
-    children.map((child) => ctx.db.patch(child._id, { wakeReportedAt: now }))
-  )
+  await Promise.all([
+    ...children.map((child) =>
+      ctx.db.patch(child._id, { wakeReportedAt: now })
+    ),
+    ...waitEvents.map((event) =>
+      ctx.db.patch(event._id, {
+        status: "reported" as const,
+        updatedAt: now,
+        wakeRunId: created.runId,
+      })
+    ),
+  ])
+
+  // The wake consumes every wait it delivered for: single-shot semantics, so
+  // a chatty PR or channel cannot wake the thread in a loop. Waits already
+  // terminal (expired, failed) keep their status — only their queued events
+  // needed delivering.
+  const consumedWaits = new Map<string, Doc<"factoryWaits">>()
+  for (const { wait } of waitDeliveries) {
+    if (wait && isActiveWaitStatus(wait.status)) {
+      consumedWaits.set(wait._id, wait)
+    }
+  }
+  for (const wait of consumedWaits.values()) {
+    await closeWait(ctx, wait, "fired")
+  }
 
   return created
 }

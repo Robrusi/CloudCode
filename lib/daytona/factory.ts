@@ -10,15 +10,21 @@ import {
 } from "@/lib/daytona/sandbox"
 import {
   FACTORY_MAX_ACTIVE_DISPATCHED_RUNS_PER_USER,
+  FACTORY_MAX_ACTIVE_WAITS_PER_THREAD,
   FACTORY_MAX_AGENT_CREATED_AUTOMATIONS,
   FACTORY_MAX_DISPATCHES_PER_ROOT_THREAD,
   FACTORY_MAX_SPAWN_DEPTH,
+  FACTORY_WAIT_DEFAULT_TTL_MS,
+  FACTORY_WAIT_MAX_TTL_MS,
 } from "@/lib/factory/limits"
 
 // Bumped for instruction changes too: the version feeds the hot-continuation
 // fingerprint, forcing a cold setup that rewrites AGENTS.md on reused
 // sandboxes so updated guidance actually reaches the agent.
-const FACTORY_TOOL_VERSION = "5"
+const FACTORY_TOOL_VERSION = "6"
+
+const WAIT_DEFAULT_TTL_DAYS = FACTORY_WAIT_DEFAULT_TTL_MS / (24 * 60 * 60_000)
+const WAIT_MAX_TTL_DAYS = FACTORY_WAIT_MAX_TTL_MS / (24 * 60 * 60_000)
 
 type FactoryConfigInput = {
   accessToken?: string
@@ -138,6 +144,18 @@ function boolArg(args, key) {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function numberArg(args, key) {
+  const value = args?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function stringArrayArg(args, key) {
+  const value = args?.[key];
+  if (!Array.isArray(value)) return undefined;
+  const items = value.filter((item) => typeof item === "string" && item.trim());
+  return items.length ? items : undefined;
+}
+
 async function convex(kind, path, args) {
   const state = requireState();
   const response = await fetch(state.convexUrl + "/api/" + kind, {
@@ -179,6 +197,27 @@ function runLine(run) {
   if (run.branchName) parts.push("branch:" + run.branchName);
   if (run.prUrl) parts.push(run.prUrl);
   return parts.join(" | ");
+}
+
+function waitLine(wait) {
+  const parts = [wait.waitId, wait.provider, wait.status, "events:" + wait.events.join(",")];
+  if (wait.note) parts.push(wait.note);
+  if (wait.channelId) parts.push("channel:" + wait.channelId + (wait.messageTs ? " ts:" + wait.messageTs : ""));
+  if (wait.prNumber) parts.push("PR #" + wait.prNumber);
+  if (wait.issueId) parts.push("issue:" + wait.issueId);
+  if (wait.pendingEvents) parts.push(wait.pendingEvents + " queued event(s)");
+  parts.push("expires:" + new Date(wait.expiresAt).toISOString());
+  return parts.join(" | ");
+}
+
+function optionalWaitParams(args) {
+  const ttlSeconds = numberArg(args, "ttlSeconds");
+  const events = stringArrayArg(args, "events");
+  return {
+    ...(events ? { events } : {}),
+    ...(stringArg(args, "note") ? { note: stringArg(args, "note") } : {}),
+    ...(ttlSeconds === undefined ? {} : { ttlSeconds }),
+  };
 }
 
 async function callTool(name, args = {}) {
@@ -294,6 +333,58 @@ async function callTool(name, args = {}) {
         enabled,
       });
       return text(result.enabled ? "Automation enabled." : "Automation disabled.", result);
+    }
+    case "ask_human": {
+      const result = await convex("action", "factoryWaits:askHuman", {
+        ...accessArgs(),
+        ...optionalWaitParams(args),
+        ...(stringArg(args, "channelId") ? { channelId: stringArg(args, "channelId") } : {}),
+        message: requiredStringArg(args, "message"),
+        ...(stringArg(args, "threadTs") ? { threadTs: stringArg(args, "threadTs") } : {}),
+      });
+      return text(
+        "Question queued for posting to Slack channel " + result.channelId + " (wait " + result.waitId + ", expires " + new Date(result.expiresAt).toISOString() + "). Finish your turn with a status note - a wake-up run resumes this thread on a reply, reaction, or timeout.",
+        result
+      );
+    }
+    case "wait_create": {
+      const prNumber = numberArg(args, "prNumber");
+      const result = await convex("mutation", "factoryWaits:createWait", {
+        ...accessArgs(),
+        ...optionalWaitParams(args),
+        ...(stringArg(args, "channelId") ? { channelId: stringArg(args, "channelId") } : {}),
+        ...(stringArg(args, "issueId") ? { issueId: stringArg(args, "issueId") } : {}),
+        kind: requiredStringArg(args, "kind"),
+        ...(stringArg(args, "messageTs") ? { messageTs: stringArg(args, "messageTs") } : {}),
+        ...(prNumber === undefined ? {} : { prNumber }),
+        ...(stringArg(args, "prUrl") ? { prUrl: stringArg(args, "prUrl") } : {}),
+        ...(stringArg(args, "threadTs") ? { threadTs: stringArg(args, "threadTs") } : {}),
+      });
+      return text(
+        "Wait " + result.waitId + " armed for events [" + result.events.join(", ") + "], expires " + new Date(result.expiresAt).toISOString() + ". Finish your turn with a status note - a wake-up run resumes this thread when a matching event or the timeout arrives.",
+        result
+      );
+    }
+    case "wait_list": {
+      const waits = await convex("query", "factoryWaits:listWaits", accessArgs());
+      if (!waits.length) return text("No active waits on this thread.", { waits });
+      return text(waits.map(waitLine).join("\n"), { waits });
+    }
+    case "wait_cancel": {
+      const result = await convex("mutation", "factoryWaits:cancelWait", {
+        ...accessArgs(),
+        waitId: requiredStringArg(args, "waitId"),
+      });
+      return text(result.canceled ? "Wait canceled." : "Wait was already " + result.status + ".", result);
+    }
+    case "slack_post_message": {
+      const result = await convex("action", "factoryWaits:slackPostMessage", {
+        ...accessArgs(),
+        ...(stringArg(args, "channelId") ? { channelId: stringArg(args, "channelId") } : {}),
+        message: requiredStringArg(args, "message"),
+        ...(stringArg(args, "threadTs") ? { threadTs: stringArg(args, "threadTs") } : {}),
+      });
+      return text("Message queued for posting to Slack channel " + result.channelId + ".", result);
     }
     default:
       throw new Error("Unknown Cloudcode factory tool: " + name);
@@ -411,6 +502,71 @@ const tools = [
       },
     },
   },
+  {
+    name: "ask_human",
+    description: "Ask a human a question in Slack and durably wait for the answer: posts the message and registers a wait in one call. A wake-up run resumes this thread when someone replies in the message's thread or reacts to it (or when the wait times out) - even days later, after this run has finished and its sandbox is paused. Register, then finish your turn with a status note; never poll.",
+    inputSchema: {
+      type: "object",
+      required: ["message"],
+      properties: {
+        message: { type: "string", description: "The question to post (markdown)." },
+        channelId: { type: "string", description: "Slack channel ID (like C0123456789). Defaults to this session's originating Slack conversation when it started from Slack; otherwise required." },
+        threadTs: { type: "string", description: "Post inside an existing Slack thread instead of top-level." },
+        events: { type: "array", items: { type: "string", enum: ["reply", "reaction"] }, description: "Which events wake you. Default: both." },
+        ttlSeconds: { type: "number", description: "Wait lifetime in seconds. Default ${WAIT_DEFAULT_TTL_DAYS} days, max ${WAIT_MAX_TTL_DAYS} days; on timeout you are woken with a timeout notice." },
+        note: { type: "string", description: "Short label echoed in the wake-up message so you can tell waits apart." },
+      },
+    },
+  },
+  {
+    name: "wait_create",
+    description: "Register a durable wait on something that already exists: a Slack message or thread, a pull request on this repository (for example one you just created), or a Linear issue. A wake-up run resumes this thread with the event content when a matching event or the timeout arrives - even long after this run finished. Waits are single-shot: one wake-up consumes them; re-register from the wake-up run to keep listening. Register, then finish your turn; never poll.",
+    inputSchema: {
+      type: "object",
+      required: ["kind"],
+      properties: {
+        kind: { type: "string", enum: ["slack_thread", "github_pr", "linear_issue"] },
+        events: { type: "array", items: { type: "string" }, description: "Event filter. slack_thread: reply, reaction. github_pr: comment, review, merged, closed, reopened, checks. linear_issue: comment. Default: every event of the kind." },
+        channelId: { type: "string", description: "slack_thread: channel ID of the watched message." },
+        messageTs: { type: "string", description: "slack_thread: ts of the watched message (reactions match on it)." },
+        threadTs: { type: "string", description: "slack_thread: thread root ts when the watched message sits inside a thread (replies match on it)." },
+        prNumber: { type: "number", description: "github_pr: pull request number on this repository." },
+        prUrl: { type: "string", description: "github_pr: pull request URL, as an alternative to prNumber." },
+        issueId: { type: "string", description: "linear_issue: the Linear issue ID (UUID)." },
+        ttlSeconds: { type: "number", description: "Wait lifetime in seconds. Default ${WAIT_DEFAULT_TTL_DAYS} days, max ${WAIT_MAX_TTL_DAYS} days; on timeout you are woken with a timeout notice." },
+        note: { type: "string", description: "Short label echoed in the wake-up message so you can tell waits apart." },
+      },
+    },
+  },
+  {
+    name: "wait_list",
+    description: "List this thread's active waits with their targets, event filters, queued events, and expiry.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "wait_cancel",
+    description: "Cancel an active wait registered on this thread. Events it already queued are dropped.",
+    inputSchema: {
+      type: "object",
+      required: ["waitId"],
+      properties: {
+        waitId: { type: "string", description: "The waitId from ask_human, wait_create, or wait_list." },
+      },
+    },
+  },
+  {
+    name: "slack_post_message",
+    description: "Post a message to Slack without waiting on anything (status updates, FYIs). Use ask_human instead when you need the answer.",
+    inputSchema: {
+      type: "object",
+      required: ["message"],
+      properties: {
+        message: { type: "string", description: "The message to post (markdown)." },
+        channelId: { type: "string", description: "Slack channel ID. Defaults to this session's originating Slack conversation when it started from Slack; otherwise required." },
+        threadTs: { type: "string", description: "Post inside an existing Slack thread instead of top-level." },
+      },
+    },
+  },
 ];
 
 async function handle(message) {
@@ -425,7 +581,7 @@ async function handle(message) {
           protocolVersion: params?.protocolVersion || "2025-06-18",
           capabilities: { tools: {} },
           serverInfo: { name: "cloudcode-factory", version: "1.0.0" },
-          instructions: "Use these tools to dispatch parallel Cloudcode agent runs on this repository, follow their progress, send follow-up work to them, and schedule recurring agent runs. Dispatched runs bill usage like normal runs and are capped server-side.",
+          instructions: "Use these tools to dispatch parallel Cloudcode agent runs on this repository, follow their progress, send follow-up work to them, schedule recurring agent runs, and register durable waits on external events (Slack replies/reactions via ask_human, PR activity and Linear comments via wait_create) that wake this thread when they fire. Dispatched runs bill usage like normal runs and are capped server-side.",
         },
       });
       return;
@@ -482,6 +638,18 @@ export function cloudcodeFactoryAgentInstructions() {
     "- `run_list`, `run_status`, and `run_output` follow dispatched runs and read their results.",
     "- `run_message` sends a follow-up prompt to a thread dispatched in this tree (rework, review fixes).",
     "- `automation_create`, `automation_list`, and `automation_set_enabled` manage recurring scheduled agent runs (cron).",
+    "- `ask_human` posts a question to Slack and registers a durable wait on the answer; `wait_create` registers a wait on an existing Slack message, pull request, or Linear issue; `wait_list` and `wait_cancel` manage them; `slack_post_message` posts without waiting.",
+    "",
+    "Waiting on humans and external events:",
+    "- Use `ask_human` when you need human input to proceed (a decision, credentials location, approval). Use `wait_create` to watch something that already exists — most importantly a PR you just created (`kind: github_pr`, events like comment/review/merged/checks) or a Linear issue's comments.",
+    "- Waits are durable: register one, finish your turn with a brief status note, and a wake-up run resumes this thread with the event content when it fires — even days later, after this run finished and the sandbox paused. Never poll or busy-wait for an answer.",
+    "- Every wait has a TTL (default " +
+      String(WAIT_DEFAULT_TTL_DAYS) +
+      " days, max " +
+      String(WAIT_MAX_TTL_DAYS) +
+      " days, ttlSeconds to change). On timeout you are woken with a timeout notice — decide then whether to re-ask, escalate, or proceed without the answer.",
+    "- Waits are single-shot and coalesced: several events arriving while you work are delivered in one wake-up, which consumes the waits it reports. Re-register from the wake-up run if you need to keep listening.",
+    `- At most ${FACTORY_MAX_ACTIVE_WAITS_PER_THREAD} active waits per thread. Cancel waits you no longer need with wait_cancel.`,
     "",
     "Choosing a subagent mechanism:",
     '- When the user says "factory subagents", "factory agents", or asks to dispatch runs/threads, use `run_dispatch`: each child is a separate cloud run with its own thread and sandbox, appears in the user\'s sidebar, bills usage on its own, can push branches and file PRs, and reports back through wake-ups.',
@@ -502,9 +670,9 @@ export function cloudcodeFactoryAgentInstructions() {
 
 export function cloudcodeFactoryAgentContext() {
   return [
-    "Cloudcode provides the `cloudcode_factory` MCP tools to dispatch parallel child agent runs on this repository (`run_dispatch`), follow them (`run_list`, `run_status`, `run_output`), send follow-up work to them (`run_message`), and schedule recurring agent runs (`automation_create`).",
+    "Cloudcode provides the `cloudcode_factory` MCP tools to dispatch parallel child agent runs on this repository (`run_dispatch`), follow them (`run_list`, `run_status`, `run_output`), send follow-up work to them (`run_message`), schedule recurring agent runs (`automation_create`), and register durable waits on external events (`ask_human` for Slack questions, `wait_create` for PR or Linear activity).",
     "Dispatch prompts must be self-sufficient — children share none of your context. Dispatched work bills usage and is capped server-side, so dispatch deliberately.",
-    "When a dispatched run finishes you are woken with a summary message on this thread — dispatch, end your turn with a status note, and continue when woken instead of polling.",
+    "When a dispatched run finishes — or an event you registered a wait for arrives or times out — you are woken with a summary message on this thread. Dispatch or register the wait, end your turn with a status note, and continue when woken instead of polling.",
     'Reserve these tools for requests that say "factory" subagents/agents or ask for dispatched runs; a request for plain "subagents" means your built-in Codex collaborator subagents inside this run, not run_dispatch.',
   ].join("\n")
 }

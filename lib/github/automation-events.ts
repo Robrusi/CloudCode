@@ -6,13 +6,54 @@ export type GitHubAutomationEventName =
   | "issueCommented"
   | "pullRequestOpened"
   | "pullRequestMerged"
+  | "pullRequestClosed"
+  | "pullRequestReopened"
+  | "pullRequestReviewSubmitted"
+  | "pullRequestReviewCommented"
+  | "checkSuiteCompleted"
+  | "push"
+
+/** The subset of events automation triggers can be configured on (the
+ * trigger union in convex/lib/integrationTriggers). The remaining events are
+ * parsed for factory waits only, and must not be dispatched to the
+ * automation pipeline. */
+export type GitHubAutomationTriggerEventName =
+  | "issueOpened"
+  | "issueClosed"
+  | "issueCommented"
+  | "pullRequestOpened"
+  | "pullRequestMerged"
   | "pullRequestReviewSubmitted"
   | "push"
+
+const AUTOMATION_TRIGGER_EVENTS: ReadonlySet<GitHubAutomationEventName> =
+  new Set([
+    "issueOpened",
+    "issueClosed",
+    "issueCommented",
+    "pullRequestOpened",
+    "pullRequestMerged",
+    "pullRequestReviewSubmitted",
+    "push",
+  ] satisfies GitHubAutomationTriggerEventName[])
+
+export function isGitHubAutomationTriggerEvent(
+  event: GitHubAutomationEventName
+): event is GitHubAutomationTriggerEventName {
+  return AUTOMATION_TRIGGER_EVENTS.has(event)
+}
 
 export type GitHubAutomationEvent = {
   action: string
   actorLogin?: string
   branch?: string
+  checkSuite?: {
+    conclusion?: string
+    headBranch?: string
+    headSha?: string
+    // Same-repo PRs the suite belongs to; forks arrive with an empty list.
+    pullRequests: number[]
+  }
   comment?: {
     body?: string
     id?: string
@@ -52,6 +93,12 @@ export type GitHubAutomationEvent = {
 
 type GitHubWebhookPayload = {
   action?: unknown
+  check_suite?: {
+    conclusion?: unknown
+    head_branch?: unknown
+    head_sha?: unknown
+    pull_requests?: Array<{ number?: unknown }> | null
+  } | null
   comment?: {
     body?: unknown
     html_url?: unknown
@@ -192,17 +239,70 @@ export function parseGitHubAutomationEvent(
         ...repository,
       }
     }
-    if (action === "closed" && payload.pull_request?.merged === true) {
+    if (action === "closed") {
       return {
         action,
         actorLogin: senderLogin,
-        event: "pullRequestMerged",
+        event:
+          payload.pull_request?.merged === true
+            ? "pullRequestMerged"
+            : "pullRequestClosed",
+        installationId,
+        pullRequest,
+        ...repository,
+      }
+    }
+    if (action === "reopened") {
+      return {
+        action,
+        actorLogin: senderLogin,
+        event: "pullRequestReopened",
         installationId,
         pullRequest,
         ...repository,
       }
     }
     return null
+  }
+
+  if (webhookEvent === "pull_request_review_comment" && action === "created") {
+    const pullRequest = pullRequestContext(payload.pull_request)
+    const commentId = identifier(payload.comment?.id)
+    if (!pullRequest || !commentId) return null
+    return {
+      action,
+      actorLogin: optionalString(payload.comment?.user?.login) ?? senderLogin,
+      comment: {
+        body: optionalString(payload.comment?.body),
+        id: commentId,
+        url: optionalString(payload.comment?.html_url),
+      },
+      event: "pullRequestReviewCommented",
+      installationId,
+      pullRequest,
+      ...repository,
+    }
+  }
+
+  if (webhookEvent === "check_suite" && action === "completed") {
+    const suite = payload.check_suite
+    if (!suite) return null
+    const pullRequests = (suite.pull_requests ?? [])
+      .map((pr) => (typeof pr?.number === "number" ? pr.number : undefined))
+      .filter((number): number is number => number !== undefined)
+    return {
+      action,
+      actorLogin: senderLogin,
+      checkSuite: {
+        conclusion: optionalString(suite.conclusion),
+        headBranch: optionalString(suite.head_branch),
+        headSha: optionalString(suite.head_sha),
+        pullRequests,
+      },
+      event: "checkSuiteCompleted",
+      installationId,
+      ...repository,
+    }
   }
 
   if (webhookEvent === "pull_request_review" && action === "submitted") {

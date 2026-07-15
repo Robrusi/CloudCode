@@ -1,6 +1,13 @@
 import { tasks } from "@trigger.dev/sdk"
+import { ConvexHttpClient } from "convex/browser"
 import { NextResponse } from "next/server"
 
+import { api } from "@/convex/_generated/api"
+import {
+  githubWaitEventName,
+  githubWaitSourceKey,
+} from "@/convex/lib/factoryWaitTriggers"
+import { requireConvexUrl } from "@/lib/convex/env"
 import {
   commentMentionsCloudcode,
   isCloudcodeSelfPush,
@@ -11,9 +18,18 @@ import {
   parsePullRequestWebhookEvent,
   verifyGitHubWebhookSignature,
 } from "@/lib/github/webhook"
-import { parseGitHubAutomationEvent } from "@/lib/github/automation-events"
+import {
+  isGitHubAutomationTriggerEvent,
+  parseGitHubAutomationEvent,
+  type GitHubAutomationEvent,
+} from "@/lib/github/automation-events"
 import { jsonError } from "@/lib/http/api-route"
+import {
+  githubWaitEventVars,
+  githubWaitPullRequestNumbers,
+} from "@/lib/integrations/events"
 import { normalizeReviewPullRequestContext } from "@/lib/reviews/pull-request"
+import { getWorkerSecret } from "@/lib/security/worker-secret"
 import type { integrationEvent } from "@/trigger/integrations"
 import type { reviewDispatch } from "@/trigger/reviews"
 
@@ -82,6 +98,51 @@ function dispatchPayloadForEvent(
   return null
 }
 
+/** Factory waits: does this event land on a PR an agent registered a wait
+ * for? Pre-matched here (one indexed Convex query) so unmatched traffic —
+ * notably every check suite completion — costs no Trigger task. */
+async function waitEventPayloadForEvent(
+  event: GitHubAutomationEvent,
+  deliveryId: string | null
+): Promise<IntegrationEventPayload | null> {
+  const eventName = githubWaitEventName(event.event)
+  if (!eventName) return null
+  // The agent's own PR comments and reviews (posted as the app's bot) must
+  // not wake the wait watching for human feedback. State changes (merged,
+  // closed, checks) count regardless of the actor.
+  if (
+    (eventName === "comment" || eventName === "review") &&
+    isCloudcodeActor(event.actorLogin)
+  ) {
+    return null
+  }
+  const prNumbers = githubWaitPullRequestNumbers(event)
+  if (prNumbers.length === 0) return null
+
+  const client = new ConvexHttpClient(requireConvexUrl())
+  const matches = await client.query(api.factoryWaits.workerMatchWaitEvents, {
+    sourceKeys: prNumbers.map((number) =>
+      githubWaitSourceKey(event.repoUrl, number)
+    ),
+    workerSecret: getWorkerSecret(),
+  })
+  const waits = matches
+    .filter((match) => match.events.includes(eventName))
+    .map((match) => ({ threadId: match.threadId, waitId: match.waitId }))
+  if (waits.length === 0) return null
+
+  return {
+    eventKey:
+      deliveryId ??
+      `${event.event}:${prNumbers.join(",")}:${event.comment?.id ?? event.actorLogin ?? "unknown"}`,
+    eventName,
+    eventVars: githubWaitEventVars(event, eventName),
+    kind: "wait_event",
+    provider: "github",
+    waits,
+  }
+}
+
 // GitHub is the caller, so there is no session and no same-origin check: the
 // HMAC signature over the raw body is the authentication. GitHub times out
 // after 10s, so the route only verifies, filters, and hands off to Trigger.
@@ -110,22 +171,35 @@ export async function POST(request: Request) {
     return jsonError("Invalid JSON payload.", 400)
   }
 
+  const deliveryId = request.headers.get("x-github-delivery")
   const reviewPayload = dispatchPayloadForEvent(event, payload)
   const githubEvent = parseGitHubAutomationEvent(event, payload)
   const automationPayload: IntegrationEventPayload | null =
-    githubEvent && !isCloudcodeActor(githubEvent.actorLogin)
+    githubEvent &&
+    isGitHubAutomationTriggerEvent(githubEvent.event) &&
+    !isCloudcodeActor(githubEvent.actorLogin)
       ? {
-          deliveryId: request.headers.get("x-github-delivery") ?? undefined,
+          deliveryId: deliveryId ?? undefined,
           event: githubEvent,
           kind: "github_automation",
           provider: "github",
         }
       : null
-  if (!reviewPayload && !automationPayload) {
+
+  let waitPayload: IntegrationEventPayload | null = null
+  if (githubEvent) {
+    try {
+      waitPayload = await waitEventPayloadForEvent(githubEvent, deliveryId)
+    } catch (error) {
+      console.error("/api/github/webhook wait matching failed", error)
+      return jsonError("Unable to match GitHub wait events.", 500)
+    }
+  }
+
+  if (!reviewPayload && !automationPayload && !waitPayload) {
     return NextResponse.json({ ignored: true })
   }
 
-  const deliveryId = request.headers.get("x-github-delivery")
   const dispatches: Promise<unknown>[] = []
   if (reviewPayload) {
     dispatches.push(
@@ -144,6 +218,15 @@ export async function POST(request: Request) {
       )
     )
   }
+  if (waitPayload) {
+    dispatches.push(
+      tasks.trigger<typeof integrationEvent>(
+        "integration-event",
+        waitPayload,
+        deliveryId ? { idempotencyKey: `fwg:${deliveryId}` } : undefined
+      )
+    )
+  }
 
   try {
     await Promise.all(dispatches)
@@ -156,5 +239,6 @@ export async function POST(request: Request) {
     automationDispatched: Boolean(automationPayload),
     dispatched: true,
     reviewDispatched: Boolean(reviewPayload),
+    waitDispatched: Boolean(waitPayload),
   })
 }
