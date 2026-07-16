@@ -60,9 +60,6 @@ const WAIT_EVENT_RETENTION_MS = 30 * 24 * 60 * 60_000
  * recorded them died before dispatching the wake; the tick redelivers. */
 const WAIT_WAKE_RECOVERY_AGE_MS = 5 * 60_000
 
-/** How far back the stranded-dispatch backstop looks at reported events. */
-const WAKE_DISPATCH_RECOVERY_WINDOW_MS = 24 * 60 * 60_000
-
 /** An arming wait older than this was orphaned (the process died between
  * creating it and enqueueing the post, or the arm task was lost); far beyond
  * any legitimate post-retry latency. */
@@ -768,12 +765,75 @@ export const workerMatchLinearWaitEvent = query({
   },
 })
 
+type MatchedWaitEvent = {
+  eventKey: string
+  eventName: string
+  eventVars: Record<string, string>
+  externalThreadId?: string
+  receivedAt?: number
+}
+
+/** Records one matched event on one wait without creating a wake, so a
+ * caller with several matches can record them all first and coalesce into
+ * one wake per thread. Returns the thread to wake when the event queued. */
+async function recordMatchedWaitEvent(
+  ctx: MutationCtx,
+  waitId: Id<"factoryWaits">,
+  event: MatchedWaitEvent
+): Promise<{ queued: boolean; reason?: string; threadId?: Id<"threads"> }> {
+  const wait = await ctx.db.get(waitId)
+  if (!wait) return { queued: false, reason: "gone" }
+
+  // A Slack reply on this thread's own bridged conversation is already
+  // delivered as a follow-up run by the integration pipeline; queueing it
+  // here would run the thread twice for one message. The wait still counts
+  // as answered.
+  if (
+    wait.provider === "slack" &&
+    event.eventName === "reply" &&
+    event.externalThreadId &&
+    wait.status === "armed"
+  ) {
+    const bridge = await ctx.db
+      .query("integrationThreads")
+      .withIndex("by_thread", (q) => q.eq("threadId", wait.threadId))
+      .first()
+    if (
+      bridge &&
+      bridge.provider === "slack" &&
+      bridge.externalThreadId === event.externalThreadId
+    ) {
+      await closeWait(
+        ctx,
+        wait,
+        "fired",
+        "Answered in the thread's own Slack conversation; delivered by the follow-up run."
+      )
+      // The follow-up run supersedes anything this wait queued earlier;
+      // leaving those events pending would wake the thread a second time.
+      await deletePendingWaitEvents(ctx, wait._id)
+      return { queued: false, reason: "bridged_follow_up" }
+    }
+  }
+
+  const result = await recordWaitEvent(ctx, wait, event)
+  if (!result.queued) return { queued: false, reason: result.reason }
+  return { queued: true, threadId: wait.threadId }
+}
+
+const matchedWaitEventArgs = {
+  eventKey: v.string(),
+  eventName: v.string(),
+  eventVars: v.record(v.string(), v.string()),
+  externalThreadId: v.optional(v.string()),
+  receivedAt: v.optional(v.number()),
+}
+
+/** Single-wait variant kept for Trigger workers deployed against the
+ * previous protocol; new workers batch through workerRecordWaitEvents. */
 export const workerRecordWaitEvent = mutation({
   args: {
-    eventKey: v.string(),
-    eventName: v.string(),
-    eventVars: v.record(v.string(), v.string()),
-    externalThreadId: v.optional(v.string()),
+    ...matchedWaitEventArgs,
     waitId: v.id("factoryWaits"),
     workerSecret: v.string(),
   },
@@ -787,56 +847,48 @@ export const workerRecordWaitEvent = mutation({
   }> => {
     requireWorkerSecret(args.workerSecret)
 
-    const wait = await ctx.db.get(args.waitId)
-    if (!wait) return { factoryWakeRuns: [], queued: false, reason: "gone" }
-
-    // A Slack reply on this thread's own bridged conversation is already
-    // delivered as a follow-up run by the integration pipeline; queueing it
-    // here would run the thread twice for one message. The wait still counts
-    // as answered.
-    if (
-      wait.provider === "slack" &&
-      args.eventName === "reply" &&
-      args.externalThreadId &&
-      wait.status === "armed"
-    ) {
-      const bridge = await ctx.db
-        .query("integrationThreads")
-        .withIndex("by_thread", (q) => q.eq("threadId", wait.threadId))
-        .first()
-      if (
-        bridge &&
-        bridge.provider === "slack" &&
-        bridge.externalThreadId === args.externalThreadId
-      ) {
-        await closeWait(
-          ctx,
-          wait,
-          "fired",
-          "Answered in the thread's own Slack conversation; delivered by the follow-up run."
-        )
-        // The follow-up run supersedes anything this wait queued earlier;
-        // leaving those events pending would wake the thread a second time.
-        await deletePendingWaitEvents(ctx, wait._id)
-        return {
-          factoryWakeRuns: [],
-          queued: false,
-          reason: "bridged_follow_up",
-        }
-      }
-    }
-
-    const result = await recordWaitEvent(ctx, wait, {
-      eventKey: args.eventKey,
-      eventName: args.eventName,
-      eventVars: args.eventVars,
-    })
-    if (!result.queued) {
+    const result = await recordMatchedWaitEvent(ctx, args.waitId, args)
+    if (!result.queued || !result.threadId) {
       return { factoryWakeRuns: [], queued: false, reason: result.reason }
     }
 
-    const wake = await maybeCreateFactoryWakeRun(ctx, wait.threadId)
+    const wake = await maybeCreateFactoryWakeRun(ctx, result.threadId)
     return { factoryWakeRuns: wake ? [wake] : [], queued: true }
+  },
+})
+
+/** Records one provider event on every wait it matched, then creates at most
+ * one wake per affected thread. Recording per-wait but waking per-thread is
+ * what keeps a delivery matching several waits on one thread coalesced into
+ * a single continuation run instead of a chain. */
+export const workerRecordWaitEvents = mutation({
+  args: {
+    ...matchedWaitEventArgs,
+    waitIds: v.array(v.id("factoryWaits")),
+    workerSecret: v.string(),
+  },
+  handler: async (
+    ctx,
+    args
+  ): Promise<{ factoryWakeRuns: FactoryRunCreated[]; queued: number }> => {
+    requireWorkerSecret(args.workerSecret)
+
+    const threadIds = new Set<Id<"threads">>()
+    let queued = 0
+    for (const waitId of new Set(args.waitIds)) {
+      const result = await recordMatchedWaitEvent(ctx, waitId, args)
+      if (result.queued && result.threadId) {
+        queued += 1
+        threadIds.add(result.threadId)
+      }
+    }
+
+    const factoryWakeRuns: FactoryRunCreated[] = []
+    for (const threadId of threadIds) {
+      const wake = await maybeCreateFactoryWakeRun(ctx, threadId)
+      if (wake) factoryWakeRuns.push(wake)
+    }
+    return { factoryWakeRuns, queued }
   },
 })
 
@@ -937,7 +989,10 @@ export const workerExpireWaits = mutation({
     }
 
     // Reported events past retention, plus pending events stuck on threads
-    // that never free up (e.g. user-canceled), are swept together.
+    // that never free up (e.g. user-canceled), are swept together. A
+    // reported event whose wake run is still stranded (queued, no Trigger
+    // run) is kept — it is the only breadcrumb workerRecoverWakeDispatches
+    // has, so deleting it would make that wake unrecoverable.
     const cutoff = now - WAIT_EVENT_RETENTION_MS
     const staleByStatus = await Promise.all(
       (["reported", "pending"] as const).map((status) =>
@@ -949,9 +1004,13 @@ export const workerExpireWaits = mutation({
           .take(100)
       )
     )
-    await Promise.all(
-      staleByStatus.flat().map((event) => ctx.db.delete(event._id))
-    )
+    for (const event of staleByStatus.flat()) {
+      if (event.status === "reported" && event.wakeRunId) {
+        const run = await ctx.db.get(event.wakeRunId)
+        if (run && run.status === "queued" && !run.triggerRunId) continue
+      }
+      await ctx.db.delete(event._id)
+    }
 
     return { expired: due.length, factoryWakeRuns }
   },
@@ -996,7 +1055,15 @@ export const workerRecoverWaitWakes = query({
  * (queueFactoryWakeRuns is fire-and-forget). Reported events whose wake run
  * is still queued with no Trigger run attached identify exactly those
  * stranded wakes; the tick re-enqueues them under the run's idempotency key,
- * so a wake that merely has not been picked up yet is a no-op. */
+ * so a wake that merely has not been picked up yet is a no-op.
+ *
+ * The scan covers the event's whole retained life (the GC keeps a reported
+ * event alive while its wake is stranded), so a wake stays recoverable until
+ * dispatch succeeds no matter how long the outage lasted. Healthy reported
+ * events are re-checked each tick until swept; that steady cost buys not
+ * needing a dispatch ledger. Under scan saturation an event is examined at
+ * latest once it is among the oldest rows before aging out, because rows
+ * only leave the window at the old end. */
 export const workerRecoverWakeDispatches = query({
   args: {
     now: v.optional(v.number()),
@@ -1006,23 +1073,32 @@ export const workerRecoverWakeDispatches = query({
     requireWorkerSecret(args.workerSecret)
     const now = args.now ?? Date.now()
 
-    // Healthy reported events stay in this window for a day and are
-    // re-checked each tick; that steady cost buys not needing a dispatch
-    // ledger. A wake stranded longer than the window means the tick itself
-    // was down that long.
-    const reported = await ctx.db
-      .query("factoryWaitEvents")
-      .withIndex("by_status_updated", (q) =>
-        q
-          .eq("status", "reported")
-          .gt("updatedAt", now - WAKE_DISPATCH_RECOVERY_WINDOW_MS)
-          .lt("updatedAt", now - WAIT_WAKE_RECOVERY_AGE_MS)
-      )
-      .take(WAKE_RECOVERY_SCAN_LIMIT)
+    // Both ends of the index: newest-first finds fresh strandings within
+    // minutes even when older healthy rows saturate the scan; oldest-first
+    // guarantees every row is examined before the GC would reach it.
+    const [recent, oldest] = await Promise.all([
+      ctx.db
+        .query("factoryWaitEvents")
+        .withIndex("by_status_updated", (q) =>
+          q
+            .eq("status", "reported")
+            .lt("updatedAt", now - WAIT_WAKE_RECOVERY_AGE_MS)
+        )
+        .order("desc")
+        .take(WAKE_RECOVERY_SCAN_LIMIT),
+      ctx.db
+        .query("factoryWaitEvents")
+        .withIndex("by_status_updated", (q) =>
+          q
+            .eq("status", "reported")
+            .lt("updatedAt", now - WAIT_WAKE_RECOVERY_AGE_MS)
+        )
+        .take(WAKE_RECOVERY_SCAN_LIMIT),
+    ])
 
     const runIds = [
       ...new Set(
-        reported
+        [...recent, ...oldest]
           .map((event) => event.wakeRunId)
           .filter((runId): runId is Id<"codexRuns"> => Boolean(runId))
       ),

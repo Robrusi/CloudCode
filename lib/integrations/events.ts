@@ -112,6 +112,9 @@ export type FactoryWaitEventPayload = {
   externalThreadId?: string
   kind: "wait_event"
   provider: "slack" | "github" | "linear"
+  // When the verified webhook was received; wait expiry is judged against
+  // this so task-queue delay cannot turn an in-time answer into a timeout.
+  receivedAt?: number
   // Inputs for the Slack author-name enrichment done in the worker.
   slack?: {
     actorUserId?: string

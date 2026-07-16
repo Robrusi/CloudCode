@@ -212,13 +212,17 @@ export async function recordWaitEvent(
     eventKey: string
     eventName: string
     eventVars: Record<string, string>
+    // When the verified provider webhook was received. Expiry is judged
+    // against this, not the recording time, so an answer that arrived
+    // in time still wins after sitting in the task queue past the deadline.
+    receivedAt?: number
   }
 ): Promise<RecordWaitEventResult> {
   if (wait.status !== "armed") return { queued: false, reason: "not_armed" }
-  // The TTL is the contract, not the sweep schedule: an event landing after
-  // the deadline is refused even when the minute sweep has not flipped the
-  // wait yet, so timeout-vs-answer never depends on sweep timing.
-  if (Date.now() > wait.expiresAt) {
+  // The TTL is the contract, not the sweep schedule: an event first received
+  // after the deadline is refused even when the minute sweep has not flipped
+  // the wait yet, so timeout-vs-answer never depends on sweep timing.
+  if ((event.receivedAt ?? Date.now()) > wait.expiresAt) {
     return { queued: false, reason: "expired" }
   }
   if (!wait.events.includes(event.eventName)) {

@@ -476,10 +476,10 @@ async function enrichSlackWaitEventVars(
   return { ...eventVars, author, summary }
 }
 
-/** Records a pre-matched provider event on each wait and dispatches the
- * coalesced wake runs the recording mutations created. Dedupe lives in the
- * mutation (waitId + eventKey), so task retries and webhook redeliveries
- * converge. */
+/** Records a pre-matched provider event on every wait it matched in one
+ * mutation, which creates at most one coalesced wake per affected thread,
+ * then dispatches those wakes. Dedupe lives in the mutation (waitId +
+ * eventKey), so task retries and webhook redeliveries converge. */
 async function handleWaitEvent(payload: FactoryWaitEventPayload) {
   const client = workerConvexClient()
   const workerSecret = getWorkerSecret()
@@ -493,24 +493,21 @@ async function handleWaitEvent(payload: FactoryWaitEventPayload) {
         )
       : payload.eventVars
 
-  let queued = 0
-  for (const wait of payload.waits) {
-    const result = await client.mutation(
-      api.factoryWaits.workerRecordWaitEvent,
-      {
-        eventKey: payload.eventKey,
-        eventName: payload.eventName,
-        eventVars,
-        externalThreadId: payload.externalThreadId,
-        waitId: wait.waitId,
-        workerSecret,
-      }
-    )
-    if (result.queued) queued += 1
-    await queueFactoryWakeRuns(result.factoryWakeRuns)
-  }
+  const result = await client.mutation(
+    api.factoryWaits.workerRecordWaitEvents,
+    {
+      eventKey: payload.eventKey,
+      eventName: payload.eventName,
+      eventVars,
+      externalThreadId: payload.externalThreadId,
+      receivedAt: payload.receivedAt,
+      waitIds: payload.waits.map((wait) => wait.waitId),
+      workerSecret,
+    }
+  )
+  await queueFactoryWakeRuns(result.factoryWakeRuns)
 
-  return { matched: payload.waits.length, queued }
+  return { matched: payload.waits.length, queued: result.queued }
 }
 
 /** Matches repository-scoped GitHub events and dispatches each automation

@@ -70,6 +70,7 @@ export async function dispatchSlackWaitEvent(
       externalThreadId: event.externalThreadId,
       kind: "wait_event",
       provider: "slack",
+      receivedAt: Date.now(),
       slack: {
         actorUserId: event.actorUserId,
         externalId: event.externalId,
@@ -132,6 +133,7 @@ export async function dispatchGitHubWaitEvent(
         eventVars: githubWaitEventVars(event, eventName),
         kind: "wait_event",
         provider: "github",
+        receivedAt: Date.now(),
         waits,
       },
       deliveryId ? { idempotencyKey: `fwg:${deliveryId}` } : undefined
@@ -176,6 +178,7 @@ export async function dispatchLinearWaitEvents(
         eventVars: linearWaitEventVars(event),
         kind: "wait_event",
         provider: "linear",
+        receivedAt: Date.now(),
         waits: matches.map((match) => ({
           threadId: match.threadId,
           waitId: match.waitId,
