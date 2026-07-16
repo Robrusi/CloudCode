@@ -395,7 +395,8 @@ export default defineSchema({
   })
     .index("by_thread_status", ["threadId", "status"])
     .index("by_user_status", ["userId", "status"])
-    .index("by_status_expires", ["status", "expiresAt"]),
+    .index("by_status_expires", ["status", "expiresAt"])
+    .index("by_status_created", ["status", "createdAt"]),
 
   // One row per matchable source key of an armed wait. Rows exist only while
   // the wait is armed (deleted on fire/cancel/expire/fail), so webhook

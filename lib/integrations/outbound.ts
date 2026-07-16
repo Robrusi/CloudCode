@@ -58,13 +58,25 @@ async function withLinearInstallation(
   )
 }
 
+/** Message metadata event type stamped on factory-authored Slack posts.
+ * Reconciliation after an ambiguous post failure finds the already-accepted
+ * message by its dedupe key instead of re-posting. */
+const FACTORY_POST_METADATA_EVENT = "cloudcode_factory_post"
+
+const SLACK_MESSAGE_ERROR_PREFIX = "Slack rejected the message"
+
 /** Posts a Slack message through the Web API and returns its `ts`, which the
  * Chat SDK's generic post helpers swallow. Waits key their reply/reaction
  * matching on that timestamp, so factory-authored questions go through here
  * rather than postToIntegrationThread. */
 export async function postSlackMessage(
   ref: Pick<IntegrationThreadRef, "slackTeamId">,
-  message: { channel: string; markdown: string; threadTs?: string }
+  message: {
+    channel: string
+    dedupeKey?: string
+    markdown: string
+    threadTs?: string
+  }
 ): Promise<{ ts: string }> {
   const { slack } = await getInitializedIntegrationsBot()
   if (!slack) throw new Error("The Slack integration is not configured.")
@@ -81,16 +93,103 @@ export async function postSlackMessage(
           },
         ] as never,
         channel: message.channel,
+        ...(message.dedupeKey
+          ? {
+              metadata: {
+                event_payload: { dedupeKey: message.dedupeKey },
+                event_type: FACTORY_POST_METADATA_EVENT,
+              },
+            }
+          : {}),
         text: message.markdown.slice(0, 2900),
         ...(message.threadTs ? { thread_ts: message.threadTs } : {}),
         unfurl_links: false,
       })
       if (!response.ok || !response.ts) {
         throw new Error(
-          `Slack rejected the message${response.error ? `: ${response.error}` : "."}`
+          `${SLACK_MESSAGE_ERROR_PREFIX}${response.error ? `: ${response.error}` : "."}`
         )
       }
       return { ts: response.ts }
+    }
+  )
+}
+
+/** True when Slack definitively responded with a rejection — the message was
+ * not posted, so a retry cannot duplicate it. Transport failures (timeouts,
+ * lost responses) are ambiguous: the post may have been accepted. */
+export function isDefiniteSlackRejection(error: unknown) {
+  if (
+    error instanceof Error &&
+    error.message.startsWith(SLACK_MESSAGE_ERROR_PREFIX)
+  ) {
+    return true
+  }
+  const data = (error as { data?: { error?: unknown; ok?: unknown } } | null)
+    ?.data
+  return data?.ok === false && typeof data.error === "string"
+}
+
+/** Looks for a recently posted factory message carrying the dedupe key, to
+ * reconcile an ambiguous post failure with what Slack actually accepted. */
+export async function findSlackMessageByDedupeKey(
+  ref: Pick<IntegrationThreadRef, "slackTeamId">,
+  query: {
+    channel: string
+    dedupeKey: string
+    oldestTs?: string
+    threadTs?: string
+  }
+): Promise<{ ts: string } | null> {
+  const { slack } = await getInitializedIntegrationsBot()
+  if (!slack) throw new Error("The Slack integration is not configured.")
+
+  return await withSlackToken(
+    { externalThreadId: "", provider: "slack", slackTeamId: ref.slackTeamId },
+    async () => {
+      const request = {
+        channel: query.channel,
+        include_all_metadata: true,
+        limit: 30,
+        ...(query.oldestTs ? { oldest: query.oldestTs } : {}),
+      }
+      const response = query.threadTs
+        ? await slack.webClient.conversations.replies({
+            ...request,
+            ts: query.threadTs,
+          })
+        : await slack.webClient.conversations.history(request)
+      const match = (response.messages ?? []).find((candidate) => {
+        const metadata = candidate.metadata as
+          | { event_payload?: { dedupeKey?: unknown }; event_type?: string }
+          | undefined
+        return (
+          metadata?.event_type === FACTORY_POST_METADATA_EVENT &&
+          metadata.event_payload?.dedupeKey === query.dedupeKey
+        )
+      })
+      return match?.ts ? { ts: match.ts } : null
+    }
+  )
+}
+
+/** Removes a factory-authored Slack message (best-effort callers only): used
+ * to retract a question whose wait went terminal before it could arm, so an
+ * unanswerable prompt does not linger. */
+export async function deleteSlackMessage(
+  ref: Pick<IntegrationThreadRef, "slackTeamId">,
+  message: { channel: string; ts: string }
+) {
+  const { slack } = await getInitializedIntegrationsBot()
+  if (!slack) throw new Error("The Slack integration is not configured.")
+
+  await withSlackToken(
+    { externalThreadId: "", provider: "slack", slackTeamId: ref.slackTeamId },
+    async () => {
+      await slack.webClient.chat.delete({
+        channel: message.channel,
+        ts: message.ts,
+      })
     }
   )
 }

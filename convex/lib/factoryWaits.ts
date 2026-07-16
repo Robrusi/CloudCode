@@ -218,11 +218,21 @@ export async function recordWaitEvent(
     receivedAt?: number
   }
 ): Promise<RecordWaitEventResult> {
+  const receivedAt = event.receivedAt ?? Date.now()
+  // An answer received before the deadline wins even when the expiry sweep
+  // beat its processing to the wait: the sweep's timeout is superseded.
+  if (
+    wait.status === "expired" &&
+    receivedAt <= wait.expiresAt &&
+    wait.events.includes(event.eventName)
+  ) {
+    return await supersedeExpiryWithAnswer(ctx, wait, event)
+  }
   if (wait.status !== "armed") return { queued: false, reason: "not_armed" }
   // The TTL is the contract, not the sweep schedule: an event first received
   // after the deadline is refused even when the minute sweep has not flipped
   // the wait yet, so timeout-vs-answer never depends on sweep timing.
-  if ((event.receivedAt ?? Date.now()) > wait.expiresAt) {
+  if (receivedAt > wait.expiresAt) {
     return { queued: false, reason: "expired" }
   }
   if (!wait.events.includes(event.eventName)) {
@@ -258,6 +268,44 @@ export async function recordWaitEvent(
     }),
     insertWaitEvent(ctx, wait, event),
   ])
+  return { queued: true }
+}
+
+/** Delivers an in-time answer to a wait the expiry sweep already closed: the
+ * event's webhook was received before the deadline but its worker processing
+ * lost the race. The wait becomes fired and the undelivered timeout notice
+ * (if the wake has not picked it up yet) is withdrawn so the agent never
+ * reads a contradiction. Only dedupe applies — the wait is closed, so the
+ * volume caps have nothing left to protect. */
+async function supersedeExpiryWithAnswer(
+  ctx: MutationCtx,
+  wait: Doc<"factoryWaits">,
+  event: { eventKey: string; eventVars: Record<string, string> }
+): Promise<RecordWaitEventResult> {
+  const existing = await ctx.db
+    .query("factoryWaitEvents")
+    .withIndex("by_wait_event", (q) =>
+      q.eq("waitId", wait._id).eq("eventKey", event.eventKey)
+    )
+    .first()
+  if (existing) return { queued: false, reason: "duplicate" }
+
+  const timeoutEvent = await ctx.db
+    .query("factoryWaitEvents")
+    .withIndex("by_wait_event", (q) =>
+      q.eq("waitId", wait._id).eq("eventKey", `timeout:${wait._id}`)
+    )
+    .first()
+  if (timeoutEvent?.status === "pending") {
+    await ctx.db.delete(timeoutEvent._id)
+  }
+
+  await ctx.db.patch(wait._id, {
+    status: "fired",
+    statusReason: "Answered before expiry; processed after the deadline.",
+    updatedAt: Date.now(),
+  })
+  await insertWaitEvent(ctx, wait, event)
   return { queued: true }
 }
 

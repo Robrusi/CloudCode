@@ -617,6 +617,22 @@ export const listThreadWaits = query({
 // Worker functions (Trigger tasks and webhook routes).
 // ---------------------------------------------------------------------------
 
+/** Pre-post check for the factory-wait-arm task: a task that starts late
+ * (after the wait was canceled, expired, or failed by the orphan sweep) must
+ * not post a question nobody is listening for. */
+export const workerGetWaitState = query({
+  args: {
+    waitId: v.id("factoryWaits"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const wait = await ctx.db.get(args.waitId)
+    if (!wait) return null
+    return { expiresAt: wait.expiresAt, status: wait.status }
+  },
+})
+
 export const workerArmWait = mutation({
   args: {
     channelId: v.string(),
@@ -958,12 +974,14 @@ export const workerExpireWaits = mutation({
     // Waits stuck in "arming" were orphaned before the post task could run
     // (or the task was lost). Fail them with a wake now instead of letting
     // them hold capacity until their TTL reads as an ordinary timeout.
-    const staleArming = (
-      await ctx.db
-        .query("factoryWaits")
-        .withIndex("by_status_expires", (q) => q.eq("status", "arming"))
-        .take(100)
-    ).filter((wait) => now - wait.createdAt > ARMING_TIMEOUT_MS)
+    // Selected directly by age, so fresh arming waits can never crowd an
+    // old orphan out of the page.
+    const staleArming = await ctx.db
+      .query("factoryWaits")
+      .withIndex("by_status_created", (q) =>
+        q.eq("status", "arming").lt("createdAt", now - ARMING_TIMEOUT_MS)
+      )
+      .take(100)
     for (const wait of staleArming) {
       await closeWait(
         ctx,

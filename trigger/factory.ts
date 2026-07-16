@@ -6,7 +6,12 @@ import { getWorkerSecret, workerConvexClient } from "@/lib/codex/run-worker"
 import { queueFactoryWakeRuns } from "@/lib/factory/wake-dispatch"
 import { createWorkerGitHubRepoCredential } from "@/lib/github/app-worker"
 import { canClonePublicGitHubRepo } from "@/lib/github/repo-api"
-import { postSlackMessage } from "@/lib/integrations/outbound"
+import {
+  deleteSlackMessage,
+  findSlackMessageByDedupeKey,
+  isDefiniteSlackRejection,
+  postSlackMessage,
+} from "@/lib/integrations/outbound"
 import { deleteWorkerDaytonaSandbox } from "@/lib/sandbox/delete"
 import { encryptSecret } from "@/lib/security/secret-crypto"
 import type { cloudcodeRun } from "@/trigger/cloudcode-run"
@@ -178,6 +183,48 @@ async function withArmRetries<T>(
   throw lastError
 }
 
+/** Posts the question at-most-once per wait: a definite Slack rejection is
+ * safe to retry, but an ambiguous transport failure (the response was lost)
+ * is first reconciled against channel history by the wait-scoped dedupe key
+ * stamped in the message metadata. Retries therefore converge on the single
+ * message Slack actually accepted instead of posting another copy. */
+async function postSlackQuestion(
+  payload: FactoryWaitArmPayload
+): Promise<{ ts: string }> {
+  const ref = { slackTeamId: payload.slackTeamId }
+  const message = {
+    channel: payload.channelId,
+    dedupeKey: payload.waitId,
+    markdown: payload.markdown,
+    threadTs: payload.threadTs,
+  }
+  const oldestTs = String(Math.floor((Date.now() - 15 * 60_000) / 1000))
+
+  let lastError: unknown
+  for (let attempt = 1; attempt <= WAIT_ARM_POST_ATTEMPTS; attempt += 1) {
+    try {
+      return await postSlackMessage(ref, message)
+    } catch (error) {
+      lastError = error
+      if (payload.waitId && !isDefiniteSlackRejection(error)) {
+        const accepted = await findSlackMessageByDedupeKey(ref, {
+          channel: payload.channelId,
+          dedupeKey: payload.waitId,
+          oldestTs,
+          threadTs: payload.threadTs,
+        }).catch(() => null)
+        if (accepted) return accepted
+      }
+      if (attempt < WAIT_ARM_POST_ATTEMPTS) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, WAIT_ARM_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1))
+        )
+      }
+    }
+  }
+  throw lastError
+}
+
 // Posts an agent-authored Slack message on behalf of the ask_human and
 // slack_post_message tools. Provider SDKs (and the OAuth bot tokens in the
 // Chat SDK state store) live in Trigger workers, not Convex, so the Convex
@@ -185,12 +232,11 @@ async function withArmRetries<T>(
 // arms it with the message timestamp.
 //
 // The task runs a single Trigger attempt and manages retries itself: the
-// post is retried only until it first succeeds, and the arm mutation is
-// retried separately afterwards. A task-level retry would re-run the whole
-// body and post the question a second time whenever the arm step failed —
-// duplicate messages a human might answer while the wait watches only the
-// last copy. Either stage exhausting its retries fails the wait and wakes
-// the agent, so a question is never silently lost.
+// post converges on one accepted message (see postSlackQuestion), and the
+// arm mutation retries separately afterwards. A task-level retry would
+// re-run the whole body and could post the question a second time. Either
+// stage exhausting its retries fails the wait and wakes the agent, so a
+// question is never silently lost.
 export const factoryWaitArm = task({
   id: "factory-wait-arm",
   retry: {
@@ -217,18 +263,24 @@ export const factoryWaitArm = task({
       await queueFactoryWakeRuns(failed?.factoryWakeRuns)
     }
 
+    // A task starting late — after the wait was canceled, expired, or failed
+    // by the orphan sweep — must not post a question nobody is listening
+    // for. Best-effort: if the state read fails, posting stays the priority.
+    if (payload.waitId) {
+      const state = await client
+        .query(api.factoryWaits.workerGetWaitState, {
+          waitId: payload.waitId,
+          workerSecret,
+        })
+        .catch(() => null)
+      if (state && state.status !== "arming") {
+        return { posted: false, reason: state.status }
+      }
+    }
+
     let posted: { ts: string }
     try {
-      posted = await withArmRetries(WAIT_ARM_POST_ATTEMPTS, () =>
-        postSlackMessage(
-          { slackTeamId: payload.slackTeamId },
-          {
-            channel: payload.channelId,
-            markdown: payload.markdown,
-            threadTs: payload.threadTs,
-          }
-        )
-      )
+      posted = await postSlackQuestion(payload)
     } catch (error) {
       await failWait(
         `The Slack message could not be posted: ${errorMessage(error)}.`
@@ -237,8 +289,9 @@ export const factoryWaitArm = task({
     }
 
     if (payload.waitId) {
+      let armed: { armed: boolean }
       try {
-        await withArmRetries(WAIT_ARM_MUTATION_ATTEMPTS, () =>
+        armed = await withArmRetries(WAIT_ARM_MUTATION_ATTEMPTS, () =>
           client.mutation(api.factoryWaits.workerArmWait, {
             channelId: payload.channelId,
             messageTs: posted.ts,
@@ -253,9 +306,25 @@ export const factoryWaitArm = task({
         )
         throw error
       }
+
+      if (!armed.armed) {
+        // The wait went terminal between the post and the arm (canceled,
+        // expired, or swept). Retract the now-unanswerable question so it
+        // does not invite replies that can never wake the agent.
+        await deleteSlackMessage(
+          { slackTeamId: payload.slackTeamId },
+          { channel: payload.channelId, ts: posted.ts }
+        ).catch((deleteError) => {
+          console.warn(
+            "Unable to retract orphaned Slack question.",
+            deleteError
+          )
+        })
+        return { armed: false, posted: true, ts: posted.ts }
+      }
     }
 
-    return { posted: true, ts: posted.ts }
+    return { armed: Boolean(payload.waitId), posted: true, ts: posted.ts }
   },
 })
 
