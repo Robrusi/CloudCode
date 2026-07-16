@@ -63,6 +63,11 @@ const WAIT_WAKE_RECOVERY_AGE_MS = 5 * 60_000
 /** How far back the stranded-dispatch backstop looks at reported events. */
 const WAKE_DISPATCH_RECOVERY_WINDOW_MS = 24 * 60 * 60_000
 
+/** An arming wait older than this was orphaned (the process died between
+ * creating it and enqueueing the post, or the arm task was lost); far beyond
+ * any legitimate post-retry latency. */
+const ARMING_TIMEOUT_MS = 15 * 60_000
+
 const WAKE_RECOVERY_SCAN_LIMIT = 500
 const WAKE_RECOVERY_DELIVERY_LIMIT = 20
 
@@ -893,6 +898,33 @@ export const workerExpireWaits = mutation({
         eventVars: {
           event: "timeout",
           summary: `timed out after ${formatWaitDuration(wait.expiresAt - wait.createdAt)} with no response. The wait is closed — decide how to proceed: re-ask, escalate, or continue without the answer.`,
+        },
+      })
+      threadIds.add(wait.threadId)
+    }
+
+    // Waits stuck in "arming" were orphaned before the post task could run
+    // (or the task was lost). Fail them with a wake now instead of letting
+    // them hold capacity until their TTL reads as an ordinary timeout.
+    const staleArming = (
+      await ctx.db
+        .query("factoryWaits")
+        .withIndex("by_status_expires", (q) => q.eq("status", "arming"))
+        .take(100)
+    ).filter((wait) => now - wait.createdAt > ARMING_TIMEOUT_MS)
+    for (const wait of staleArming) {
+      await closeWait(
+        ctx,
+        wait,
+        "failed",
+        "The Slack post was never confirmed."
+      )
+      await insertWaitEvent(ctx, wait, {
+        eventKey: `arm_failed:${wait._id}`,
+        eventVars: {
+          event: "arm_failed",
+          summary:
+            "ask_human failed: the Slack post was never confirmed, so the question was likely not delivered. The wait is closed — retry ask_human or continue without the answer.",
         },
       })
       threadIds.add(wait.threadId)
