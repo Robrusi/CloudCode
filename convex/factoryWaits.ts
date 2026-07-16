@@ -645,7 +645,19 @@ export const workerArmWait = mutation({
     requireWorkerSecret(args.workerSecret)
 
     const wait = await ctx.db.get(args.waitId)
-    if (!wait || wait.status !== "arming" || !wait.installationId) {
+    if (!wait) return { armed: false }
+    // Idempotent success: a retry of an arm whose mutation committed but
+    // whose response was lost sees the wait already armed on this exact
+    // message. Reporting armed:false here would make the caller retract a
+    // live question the armed wait still watches.
+    if (
+      wait.status === "armed" &&
+      wait.messageTs === args.messageTs &&
+      wait.messageChannelId === args.channelId
+    ) {
+      return { armed: true }
+    }
+    if (wait.status !== "arming" || !wait.installationId) {
       return { armed: false }
     }
     // A post delayed past the wait's own deadline must not arm a listener

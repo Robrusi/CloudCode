@@ -272,6 +272,14 @@ async function postSlackQuestion(
 // re-run the whole body and could post the question a second time. Either
 // stage exhausting its retries fails the wait and wakes the agent, so a
 // question is never silently lost.
+//
+// Accepted limitation: the question is visible in Slack for the seconds
+// between the post and the arm mutation committing its match keys, so a
+// reply or reaction landing inside that window is never recorded and the
+// wait resolves as an ordinary timeout. Humans do not answer in seconds;
+// closing the window would need a post-arm history reconciliation sweep
+// feeding gap events through recording — more machinery than the window
+// warrants.
 export const factoryWaitArm = task({
   id: "factory-wait-arm",
   retry: {

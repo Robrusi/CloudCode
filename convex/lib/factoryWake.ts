@@ -224,21 +224,22 @@ export async function maybeCreateFactoryWakeRun(
 
   // The wake consumes every wait it delivered for: single-shot semantics, so
   // a chatty PR or channel cannot wake the thread in a loop. Waits already
-  // terminal (expired, failed) keep their status — only their queued events
-  // needed delivering.
-  const consumedWaits = new Map<string, Doc<"factoryWaits">>()
+  // terminal (expired, failed, or fired early by the answered-before-expiry
+  // sweep) keep their status — only their queued events needed delivering.
+  const representedWaits = new Map<string, Doc<"factoryWaits">>()
   for (const { wait } of waitDeliveries) {
-    if (wait && isActiveWaitStatus(wait.status)) {
-      consumedWaits.set(wait._id, wait)
-    }
+    if (wait) representedWaits.set(wait._id, wait)
   }
-  for (const wait of consumedWaits.values()) {
-    await closeWait(ctx, wait, "fired")
-    // A consumed wait may still have events beyond this wake's batch cap;
-    // left pending, they would spawn another continuation for a wait that
-    // is already fired. Single-shot means one wake — the agent re-registers
-    // if it wants the rest. (The delivered events were flipped to
-    // "reported" above, so only the surplus is dropped.)
+  for (const wait of representedWaits.values()) {
+    if (isActiveWaitStatus(wait.status)) {
+      await closeWait(ctx, wait, "fired")
+    }
+    // Every wait represented in this wake — active or already terminal —
+    // may still have events beyond the batch cap; left pending, they would
+    // spawn another continuation for a wait that is already consumed.
+    // Single-shot means one wake: the agent re-registers if it wants more.
+    // (The delivered events were flipped to "reported" above, so only the
+    // surplus is dropped.)
     await deletePendingWaitEvents(ctx, wait._id)
   }
 
