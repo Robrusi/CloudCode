@@ -5,7 +5,6 @@ import type { Doc, Id } from "./_generated/dataModel"
 import {
   action,
   internalMutation,
-  internalQuery,
   mutation,
   query,
   type MutationCtx,
@@ -451,27 +450,6 @@ export const workerCreateArmingWait = internalMutation({
   },
 })
 
-export const workerResolveSlackPost = internalQuery({
-  args: {
-    ...factoryAccessArgs,
-    channelId: v.optional(v.string()),
-    threadTs: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const run = await requireActiveFactoryRunAccess(ctx, args)
-    const target = await resolveSlackPostTarget(ctx, run, {
-      channelId: args.channelId,
-      threadTs: args.threadTs,
-    })
-    return {
-      channelId: target.channelId,
-      slackTeamId: target.slackTeamId,
-      threadTs: target.threadTs,
-      userId: run.userId,
-    }
-  },
-})
-
 /** ask_human: posts a question to Slack and registers a wait on replies and
  * reactions in one call. The post happens in the factory-wait-arm Trigger
  * task (provider SDKs live in Node workers, not Convex); until it confirms,
@@ -548,49 +526,6 @@ export const askHuman = action({
       status: "arming",
       waitId: created.waitId,
     }
-  },
-})
-
-/** Post-only variant of ask_human: sends a Slack message without waiting on
- * anything. Delivery is best-effort, matching run-finished notifications. */
-export const slackPostMessage = action({
-  args: {
-    ...factoryAccessArgs,
-    channelId: v.optional(v.string()),
-    message: v.string(),
-    threadTs: v.optional(v.string()),
-  },
-  handler: async (
-    ctx,
-    args
-  ): Promise<{ channelId: string; queued: boolean }> => {
-    const message = args.message.trim()
-    if (!message) throw new Error("message is required.")
-
-    const target = await ctx.runQuery(
-      internal.factoryWaits.workerResolveSlackPost,
-      {
-        accessToken: args.accessToken,
-        channelId: args.channelId,
-        runId: args.runId,
-        threadId: args.threadId,
-        threadTs: args.threadTs,
-      }
-    )
-
-    await triggerTaskViaApi({
-      idempotencyKey: `factory-slack-post:${crypto.randomUUID()}`,
-      payload: {
-        channelId: target.channelId,
-        markdown: message,
-        slackTeamId: target.slackTeamId,
-        threadTs: target.threadTs,
-      },
-      tags: [`user:${target.userId}`, `thread:${args.threadId}`],
-      taskId: "factory-wait-arm",
-    })
-
-    return { channelId: target.channelId, queued: true }
   },
 })
 
