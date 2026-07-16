@@ -3,6 +3,7 @@ import { tasks } from "@trigger.dev/sdk"
 import { after } from "next/server"
 
 import { jsonError } from "@/lib/http/api-route"
+import { dispatchLinearWaitEvents } from "@/lib/integrations/wait-dispatch"
 import {
   getInitializedIntegrationsBot,
   getIntegrationsBot,
@@ -60,6 +61,7 @@ async function dispatchPreprocessedEvents(
         },
         { idempotencyKey: `lind:${deliveryId}` }
       )
+      await dispatchLinearWaitEvents(events, organizationId, deliveryId)
     }
 
     if (delegation) {

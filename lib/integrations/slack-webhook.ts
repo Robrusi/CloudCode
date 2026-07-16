@@ -67,10 +67,11 @@ export function verifySlackWebhookRequest(
   )
 }
 
-/** Extracts only the Slack events that can drive automations. Chat mentions,
- * DMs, bot messages, edits, removals, and non-message reactions remain owned
- * by the Chat SDK path. */
-export function parseSlackAutomationWebhookEvent(
+/** Extracts the Slack events that can drive factory waits: human messages
+ * (including DMs — ask_human questions posted to a bridged DM must still be
+ * answerable) and reactions. Chat mentions, bot messages, edits, removals,
+ * and non-message reactions remain owned by the Chat SDK path. */
+export function parseSlackWaitWebhookEvent(
   value: unknown
 ): SlackAutomationWebhookEvent | null {
   if (!value || typeof value !== "object") return null
@@ -92,7 +93,6 @@ export function parseSlackAutomationWebhookEvent(
     const messageText = stringValue(event.text)
     if (
       !channelId ||
-      channelId.startsWith("D") ||
       !messageId ||
       !messageText ||
       event.subtype !== undefined ||
@@ -131,4 +131,21 @@ export function parseSlackAutomationWebhookEvent(
     externalThreadId: `slack:${channelId}:${messageId}`,
     messageId,
   }
+}
+
+/** DM messages never drive channel automations; they stay owned by the Chat
+ * SDK session path. Factory waits still see them. */
+export function isSlackAutomationEligibleEvent(
+  event: SlackAutomationWebhookEvent
+) {
+  return !(event.event === "keyword" && event.channelId.startsWith("D"))
+}
+
+/** Extracts only the Slack events that can drive automations: the wait
+ * events minus DM messages. */
+export function parseSlackAutomationWebhookEvent(
+  value: unknown
+): SlackAutomationWebhookEvent | null {
+  const parsed = parseSlackWaitWebhookEvent(value)
+  return parsed && isSlackAutomationEligibleEvent(parsed) ? parsed : null
 }

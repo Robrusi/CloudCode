@@ -1,7 +1,17 @@
+import { v } from "convex/values"
+
 import type { Doc, Id } from "../_generated/dataModel"
 import type { MutationCtx, QueryCtx } from "../_generated/server"
 import { isActiveCodexRunStatus } from "./codexRunLifecycle"
 import { codexRunInput } from "./codexRunRecords"
+
+/** Argument set every factory MCP tool call carries: the per-run access
+ * token plus the run and thread ids from the sandbox state file. */
+export const factoryAccessArgs = {
+  accessToken: v.string(),
+  runId: v.id("codexRuns"),
+  threadId: v.id("threads"),
+}
 
 /**
  * Authenticates a factory MCP tool call: the caller must present the per-run

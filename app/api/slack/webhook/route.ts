@@ -17,36 +17,24 @@ import {
 } from "@/lib/integrations/slack-webhook-context"
 import { createWebhookTaskTracker } from "@/lib/integrations/webhook-tasks"
 import {
-  parseSlackAutomationWebhookEvent,
+  isSlackAutomationEligibleEvent,
+  parseSlackWaitWebhookEvent,
   verifySlackWebhookRequest,
+  type SlackAutomationWebhookEvent,
 } from "@/lib/integrations/slack-webhook"
+import { dispatchSlackWaitEvent } from "@/lib/integrations/wait-dispatch"
 import { getWorkerSecret } from "@/lib/security/worker-secret"
 import type { integrationEvent } from "@/trigger/integrations"
 
 export const runtime = "nodejs"
 
-async function dispatchAutomationEvent(
-  request: Request,
-  signingSecret: string
+async function dispatchSlackAutomations(
+  client: ConvexHttpClient,
+  event: SlackAutomationWebhookEvent,
+  eventId: string
 ) {
-  const rawBody = await request.clone().text()
-  if (
-    !verifySlackWebhookRequest(
-      rawBody,
-      request.headers.get("x-slack-signature"),
-      request.headers.get("x-slack-request-timestamp"),
-      signingSecret
-    )
-  ) {
-    return
-  }
+  if (!isSlackAutomationEligibleEvent(event)) return
 
-  const event = parseSlackAutomationWebhookEvent(JSON.parse(rawBody))
-  if (!event) return
-  const eventId =
-    event.eventId ??
-    `body:${createHash("sha256").update(rawBody).digest("hex")}`
-  const client = new ConvexHttpClient(requireConvexUrl())
   const matches = await client.query(api.integrations.workerMatchSlackEvent, {
     actorUserId: event.actorUserId,
     channelId: event.channelId,
@@ -71,6 +59,34 @@ async function dispatchAutomationEvent(
       idempotencyKey: `sla:${eventId}`,
     }
   )
+}
+
+async function dispatchAutomationEvent(
+  request: Request,
+  signingSecret: string
+) {
+  const rawBody = await request.clone().text()
+  if (
+    !verifySlackWebhookRequest(
+      rawBody,
+      request.headers.get("x-slack-signature"),
+      request.headers.get("x-slack-request-timestamp"),
+      signingSecret
+    )
+  ) {
+    return
+  }
+
+  const event = parseSlackWaitWebhookEvent(JSON.parse(rawBody))
+  if (!event) return
+  const eventId =
+    event.eventId ??
+    `body:${createHash("sha256").update(rawBody).digest("hex")}`
+  const client = new ConvexHttpClient(requireConvexUrl())
+  await Promise.all([
+    dispatchSlackAutomations(client, event, eventId),
+    dispatchSlackWaitEvent(client, event, eventId),
+  ])
 }
 
 // Slack is the caller: automation events are verified and durably handed to

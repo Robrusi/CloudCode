@@ -107,13 +107,15 @@ type IssueCommentWebhookPayload = {
   repository?: { full_name?: unknown } | null
 }
 
-/** Comment authors who may trigger a review by mentioning the app; anyone
- * else with a GitHub account can comment on a public PR. */
-const MENTION_TRUSTED_ASSOCIATIONS = new Set([
-  "COLLABORATOR",
-  "MEMBER",
-  "OWNER",
-])
+/** Authors whose comments and reviews may drive agent work (mentions and
+ * factory waits); anyone else with a GitHub account can comment on a public
+ * PR, so untrusted associations must never place instructions in front of a
+ * privileged run. */
+const TRUSTED_AUTHOR_ASSOCIATIONS = new Set(["COLLABORATOR", "MEMBER", "OWNER"])
+
+export function isTrustedGitHubAssociation(association: string | undefined) {
+  return Boolean(association && TRUSTED_AUTHOR_ASSOCIATIONS.has(association))
+}
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
@@ -130,7 +132,7 @@ export function commentMentionsCloudcode(event: IssueCommentWebhookEvent) {
 }
 
 export function isTrustedMentionAuthor(event: IssueCommentWebhookEvent) {
-  return MENTION_TRUSTED_ASSOCIATIONS.has(event.authorAssociation)
+  return isTrustedGitHubAssociation(event.authorAssociation)
 }
 
 /** Parses issue_comment payloads, returning null for comments that are not

@@ -18,6 +18,10 @@ import {
   automationTriggerKind,
   integrationProvider,
 } from "./lib/integrationTriggers"
+import {
+  factoryWaitProvider,
+  factoryWaitStatus,
+} from "./lib/factoryWaitTriggers"
 
 const sandboxPresetMode = v.union(v.literal("manual"), v.literal("auto"))
 const mcpTransport = v.union(v.literal("stdio"), v.literal("http"))
@@ -348,6 +352,86 @@ export default defineSchema({
   })
     .index("by_run", ["runId"])
     .index("by_user_updated", ["userId", "updatedAt"]),
+
+  // Durable agent-registered waits on external events (Slack replies and
+  // reactions, PR activity, Linear comments). A wait belongs to the thread
+  // that resumes when it fires; the creating run is usually long finished and
+  // its sandbox stopped by then. Single-shot: a wake run consumes the wait,
+  // and the agent re-arms if it wants to keep listening.
+  factoryWaits: defineTable({
+    createdAt: v.number(),
+    createdByRunId: v.id("codexRuns"),
+    // Fine event filter applied after the coarse sourceKey match:
+    // slack reply/reaction; github comment/review/merged/closed/reopened/
+    // checks; linear comment.
+    events: v.array(v.string()),
+    // Sliding-window counter capping how many events one wait may record, so
+    // a busy PR or channel cannot flood the queue.
+    eventFireCount: v.optional(v.number()),
+    eventFireWindowStart: v.optional(v.number()),
+    expiresAt: v.number(),
+    installationId: v.optional(v.id("integrationInstallations")),
+    linearIssueId: v.optional(v.string()),
+    // Slack message the wait watches; set by the arm task once ask_human's
+    // message is posted (waits created against an existing message carry it
+    // from creation).
+    messageChannelId: v.optional(v.string()),
+    messageThreadTs: v.optional(v.string()),
+    messageTs: v.optional(v.string()),
+    // Agent-supplied label echoed into the wake prompt so the agent can tell
+    // its waits apart without extra bookkeeping.
+    note: v.optional(v.string()),
+    prNumber: v.optional(v.number()),
+    provider: factoryWaitProvider,
+    repoUrl: v.optional(v.string()),
+    status: factoryWaitStatus,
+    statusReason: v.optional(v.string()),
+    // Denormalized copy of the wait's match keys for display and debugging;
+    // the authoritative match rows live in factoryWaitKeys.
+    sourceKeys: v.array(v.string()),
+    threadId: v.id("threads"),
+    updatedAt: v.number(),
+    userId: v.id("users"),
+  })
+    .index("by_thread_status", ["threadId", "status"])
+    .index("by_user_status", ["userId", "status"])
+    .index("by_status_expires", ["status", "expiresAt"])
+    .index("by_status_created", ["status", "createdAt"]),
+
+  // One row per matchable source key of an armed wait. Rows exist only while
+  // the wait is armed (deleted on fire/cancel/expire/fail), so webhook
+  // matching is a single indexed lookup with no status filtering. A Slack
+  // wait needs two keys — the thread root for replies and the message ts for
+  // reactions — which is why keys are normalized out of factoryWaits.
+  factoryWaitKeys: defineTable({
+    sourceKey: v.string(),
+    threadId: v.id("threads"),
+    userId: v.id("users"),
+    waitId: v.id("factoryWaits"),
+  })
+    .index("by_source", ["sourceKey"])
+    .index("by_wait", ["waitId"]),
+
+  // Durable queue of matched wait events. Provider deliveries land here
+  // before any wake run exists, so a busy thread or transient dispatch outage
+  // delays a wake instead of dropping the event. pending rows are drained
+  // all-at-once into one coalesced wake run; reported rows are retained for
+  // dedupe and swept later.
+  factoryWaitEvents: defineTable({
+    createdAt: v.number(),
+    // Provider delivery id; dedupes redelivered webhooks per wait.
+    eventKey: v.string(),
+    eventVars: v.record(v.string(), v.string()),
+    status: v.union(v.literal("pending"), v.literal("reported")),
+    threadId: v.id("threads"),
+    updatedAt: v.number(),
+    userId: v.id("users"),
+    waitId: v.id("factoryWaits"),
+    wakeRunId: v.optional(v.id("codexRuns")),
+  })
+    .index("by_wait_event", ["waitId", "eventKey"])
+    .index("by_thread_status_created", ["threadId", "status", "createdAt"])
+    .index("by_status_updated", ["status", "updatedAt"]),
 
   billingCustomers: defineTable({
     autumnCustomerId: v.string(),

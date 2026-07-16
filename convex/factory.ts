@@ -21,6 +21,7 @@ import {
 import { codexRunCheckpoint, codexRunInput } from "./lib/codexRunRecords"
 import {
   countActiveDispatchedRuns,
+  factoryAccessArgs,
   factoryRootThreadId,
   isRunInFactoryTree,
   requireActiveFactoryRunAccess,
@@ -73,12 +74,6 @@ const BILLING_EXHAUSTED_ERROR =
 const THREAD_TITLE_MAX_LENGTH = 120
 const RUN_OUTPUT_MAX_LENGTH = 8000
 const AUTOMATION_PROMPT_PREVIEW_LENGTH = 300
-
-const factoryAccessArgs = {
-  accessToken: v.string(),
-  runId: v.id("codexRuns"),
-  threadId: v.id("threads"),
-}
 
 const dispatchParamArgs = {
   baseBranch: v.optional(v.string()),

@@ -1,4 +1,5 @@
 import type { Id } from "@/convex/_generated/dataModel"
+import type { GitHubWaitEvent } from "@/convex/lib/factoryWaitTriggers"
 import type { AutomationTrigger } from "@/convex/lib/integrationTriggers"
 import type { GitHubAutomationEvent } from "@/lib/github/automation-events"
 
@@ -99,11 +100,35 @@ export type GitHubAutomationEventPayload = {
   provider: "github"
 }
 
+/** A provider event that pre-matched at least one armed factory wait in the
+ * webhook handler. The eventVars carry the human-readable pieces the wake
+ * prompt renders: summary (one line), text (quoted body), and url. */
+export type FactoryWaitEventPayload = {
+  eventKey: string
+  eventName: string
+  eventVars: EventContextVars
+  // Slack replies carry the event's external thread id so the recorder can
+  // detect threads whose replies the follow-up pipeline already delivers.
+  externalThreadId?: string
+  kind: "wait_event"
+  provider: "slack" | "github" | "linear"
+  // When the verified webhook was received; wait expiry is judged against
+  // this so task-queue delay cannot turn an in-time answer into a timeout.
+  receivedAt?: number
+  // Inputs for the Slack author-name enrichment done in the worker.
+  slack?: {
+    actorUserId?: string
+    externalId: string
+  }
+  waits: Array<{ threadId: Id<"threads">; waitId: Id<"factoryWaits"> }>
+}
+
 export type IntegrationEventPayload =
   | IntegrationChatEventPayload
   | SlackAutomationEventPayload
   | LinearAutomationEventPayload
   | GitHubAutomationEventPayload
+  | FactoryWaitEventPayload
 
 /** Template variables an event exposes to automation prompts as
  * {{event.name}} placeholders. */
@@ -229,6 +254,93 @@ export function githubAutomationEventVars(
     pushBefore: event.push?.before ?? "",
     pushCompareUrl: event.push?.compareUrl ?? "",
     pushHeadCommitMessage: event.push?.headCommitMessage ?? "",
+  }
+}
+
+/** Same-repo pull requests a GitHub event concerns, for wait matching. A
+ * comment on a plain issue (or a fork's check suite) yields none and can
+ * never wake a PR wait. */
+export function githubWaitPullRequestNumbers(
+  event: GitHubAutomationEvent
+): number[] {
+  if (event.pullRequest) return [event.pullRequest.number]
+  if (event.issue?.isPullRequest) return [event.issue.number]
+  if (event.checkSuite) return event.checkSuite.pullRequests
+  return []
+}
+
+export function githubWaitEventVars(
+  event: GitHubAutomationEvent,
+  waitEventName: GitHubWaitEvent
+): EventContextVars {
+  const prLabel = githubWaitPullRequestNumbers(event)
+    .map((number) => `#${number}`)
+    .join(", ")
+  const actor = event.actorLogin ?? "someone"
+  const base: EventContextVars = {
+    actor,
+    event: waitEventName,
+    prNumber: githubWaitPullRequestNumbers(event).join(","),
+    repository: event.repoFullName,
+    source: "github",
+  }
+
+  switch (waitEventName) {
+    case "comment":
+      return {
+        ...base,
+        summary: `GitHub PR ${prLabel} comment from ${actor}`,
+        text: event.comment?.body ?? "",
+        url: event.comment?.url ?? event.pullRequest?.url ?? "",
+      }
+    case "review":
+      return {
+        ...base,
+        summary: `GitHub PR ${prLabel} review ${event.review?.state ?? "submitted"} by ${actor}`,
+        text: event.review?.body ?? "",
+        url: event.review?.url ?? event.pullRequest?.url ?? "",
+      }
+    case "merged":
+      return {
+        ...base,
+        summary: `GitHub PR ${prLabel} was merged by ${actor}`,
+        url: event.pullRequest?.url ?? "",
+      }
+    case "closed":
+      return {
+        ...base,
+        summary: `GitHub PR ${prLabel} was closed without merging by ${actor}`,
+        url: event.pullRequest?.url ?? "",
+      }
+    case "reopened":
+      return {
+        ...base,
+        summary: `GitHub PR ${prLabel} was reopened by ${actor}`,
+        url: event.pullRequest?.url ?? "",
+      }
+    case "checks":
+      return {
+        ...base,
+        conclusion: event.checkSuite?.conclusion ?? "",
+        summary: `GitHub checks completed with ${event.checkSuite?.conclusion ?? "an unknown conclusion"} on ${event.checkSuite?.headBranch ?? "?"} (PR ${prLabel})`,
+      }
+  }
+}
+
+export function linearWaitEventVars(
+  event: LinearAutomationEvent
+): EventContextVars {
+  const author =
+    event.comment?.authorName ?? event.comment?.authorId ?? "someone"
+  const issueLabel = event.issue.identifier ?? event.issue.id
+  return {
+    author,
+    event: "comment",
+    issueId: event.issue.id,
+    source: "linear",
+    summary: `Linear comment from ${author} on ${issueLabel}${event.issue.title ? ` (${event.issue.title})` : ""}`,
+    text: event.comment?.body ?? "",
+    url: event.comment?.url ?? event.issue.url ?? "",
   }
 }
 

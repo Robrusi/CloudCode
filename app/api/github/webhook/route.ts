@@ -11,8 +11,12 @@ import {
   parsePullRequestWebhookEvent,
   verifyGitHubWebhookSignature,
 } from "@/lib/github/webhook"
-import { parseGitHubAutomationEvent } from "@/lib/github/automation-events"
+import {
+  isGitHubAutomationTriggerEvent,
+  parseGitHubAutomationEvent,
+} from "@/lib/github/automation-events"
 import { jsonError } from "@/lib/http/api-route"
+import { dispatchGitHubWaitEvent } from "@/lib/integrations/wait-dispatch"
 import { normalizeReviewPullRequestContext } from "@/lib/reviews/pull-request"
 import type { integrationEvent } from "@/trigger/integrations"
 import type { reviewDispatch } from "@/trigger/reviews"
@@ -110,22 +114,33 @@ export async function POST(request: Request) {
     return jsonError("Invalid JSON payload.", 400)
   }
 
+  const deliveryId = request.headers.get("x-github-delivery")
   const reviewPayload = dispatchPayloadForEvent(event, payload)
   const githubEvent = parseGitHubAutomationEvent(event, payload)
   const automationPayload: IntegrationEventPayload | null =
-    githubEvent && !isCloudcodeActor(githubEvent.actorLogin)
+    githubEvent &&
+    isGitHubAutomationTriggerEvent(githubEvent.event) &&
+    !isCloudcodeActor(githubEvent.actorLogin)
       ? {
-          deliveryId: request.headers.get("x-github-delivery") ?? undefined,
+          deliveryId: deliveryId ?? undefined,
           event: githubEvent,
           kind: "github_automation",
           provider: "github",
         }
       : null
-  if (!reviewPayload && !automationPayload) {
+
+  // Wait matching and dispatch are best-effort and fully decoupled from the
+  // review/automation dispatches below: GitHub never redelivers a failed
+  // webhook, so a wait-subsystem outage must not drop them (an undelivered
+  // wait event still resolves through the wait's TTL timeout).
+  const waitDispatched = githubEvent
+    ? await dispatchGitHubWaitEvent(githubEvent, deliveryId)
+    : false
+
+  if (!reviewPayload && !automationPayload && !waitDispatched) {
     return NextResponse.json({ ignored: true })
   }
 
-  const deliveryId = request.headers.get("x-github-delivery")
   const dispatches: Promise<unknown>[] = []
   if (reviewPayload) {
     dispatches.push(
@@ -144,7 +159,6 @@ export async function POST(request: Request) {
       )
     )
   }
-
   try {
     await Promise.all(dispatches)
   } catch (error) {
@@ -156,5 +170,6 @@ export async function POST(request: Request) {
     automationDispatched: Boolean(automationPayload),
     dispatched: true,
     reviewDispatched: Boolean(reviewPayload),
+    waitDispatched,
   })
 }
