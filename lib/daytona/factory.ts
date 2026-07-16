@@ -21,7 +21,7 @@ import {
 // Bumped for instruction changes too: the version feeds the hot-continuation
 // fingerprint, forcing a cold setup that rewrites AGENTS.md on reused
 // sandboxes so updated guidance actually reaches the agent.
-const FACTORY_TOOL_VERSION = "6"
+const FACTORY_TOOL_VERSION = "7"
 
 const WAIT_DEFAULT_TTL_DAYS = FACTORY_WAIT_DEFAULT_TTL_MS / (24 * 60 * 60_000)
 const WAIT_MAX_TTL_DAYS = FACTORY_WAIT_MAX_TTL_MS / (24 * 60 * 60_000)
@@ -377,15 +377,6 @@ async function callTool(name, args = {}) {
       });
       return text(result.canceled ? "Wait canceled." : "Wait was already " + result.status + ".", result);
     }
-    case "slack_post_message": {
-      const result = await convex("action", "factoryWaits:slackPostMessage", {
-        ...accessArgs(),
-        ...(stringArg(args, "channelId") ? { channelId: stringArg(args, "channelId") } : {}),
-        message: requiredStringArg(args, "message"),
-        ...(stringArg(args, "threadTs") ? { threadTs: stringArg(args, "threadTs") } : {}),
-      });
-      return text("Message queued for posting to Slack channel " + result.channelId + ".", result);
-    }
     default:
       throw new Error("Unknown Cloudcode factory tool: " + name);
   }
@@ -554,19 +545,6 @@ const tools = [
       },
     },
   },
-  {
-    name: "slack_post_message",
-    description: "Post a message to Slack without waiting on anything (status updates, FYIs). Use ask_human instead when you need the answer.",
-    inputSchema: {
-      type: "object",
-      required: ["message"],
-      properties: {
-        message: { type: "string", description: "The message to post (markdown)." },
-        channelId: { type: "string", description: "Slack channel ID. Defaults to this session's originating Slack conversation when it started from Slack; otherwise required." },
-        threadTs: { type: "string", description: "Post inside an existing Slack thread instead of top-level." },
-      },
-    },
-  },
 ];
 
 async function handle(message) {
@@ -638,7 +616,7 @@ export function cloudcodeFactoryAgentInstructions() {
     "- `run_list`, `run_status`, and `run_output` follow dispatched runs and read their results.",
     "- `run_message` sends a follow-up prompt to a thread dispatched in this tree (rework, review fixes).",
     "- `automation_create`, `automation_list`, and `automation_set_enabled` manage recurring scheduled agent runs (cron).",
-    "- `ask_human` posts a question to Slack and registers a durable wait on the answer; `wait_create` registers a wait on an existing Slack message, pull request, or Linear issue; `wait_list` and `wait_cancel` manage them; `slack_post_message` posts without waiting.",
+    "- `ask_human` posts a question to Slack and registers a durable wait on the answer; `wait_create` registers a wait on an existing Slack message, pull request, or Linear issue; `wait_list` and `wait_cancel` manage them. For Slack posts that wait on nothing (status updates, FYIs), use the Slack MCP tools instead.",
     "",
     "Waiting on humans and external events:",
     "- Use `ask_human` when you need human input to proceed (a decision, credentials location, approval). Use `wait_create` to watch something that already exists — most importantly a PR you just created (`kind: github_pr`, events like comment/review/merged/checks) or a Linear issue's comments.",

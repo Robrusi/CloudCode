@@ -136,7 +136,8 @@ type FactoryWaitArmPayload = {
   markdown: string
   slackTeamId: string
   threadTs?: string
-  // Absent for post-only sends (the slack_post_message tool).
+  // Optional only for tolerance of payloads queued by the retired
+  // slack_post_message tool; every current producer (ask_human) sets it.
   waitId?: Id<"factoryWaits">
 }
 
@@ -260,11 +261,10 @@ async function postSlackQuestion(
   throw lastError
 }
 
-// Posts an agent-authored Slack message on behalf of the ask_human and
-// slack_post_message tools. Provider SDKs (and the OAuth bot tokens in the
-// Chat SDK state store) live in Trigger workers, not Convex, so the Convex
-// action creates the wait in "arming" and this task confirms the post and
-// arms it with the message timestamp.
+// Posts the ask_human question to Slack. Provider SDKs (and the OAuth bot
+// tokens in the Chat SDK state store) live in Trigger workers, not Convex,
+// so the Convex action creates the wait in "arming" and this task confirms
+// the post and arms it with the message timestamp.
 //
 // The task runs a single Trigger attempt and manages retries itself: the
 // post converges on one accepted message (see postSlackQuestion), and the
