@@ -142,6 +142,7 @@ type FactoryWaitArmPayload = {
 
 const WAIT_ARM_POST_ATTEMPTS = 3
 const WAIT_ARM_MUTATION_ATTEMPTS = 4
+const WAIT_ARM_RECONCILE_ATTEMPTS = 3
 const WAIT_ARM_RETRY_BASE_DELAY_MS = 1_000
 
 function resolveWaitArmPayload(
@@ -183,11 +184,45 @@ async function withArmRetries<T>(
   throw lastError
 }
 
+/** Resolves an ambiguous post outcome against channel history using the
+ * wait-scoped dedupe key stamped in the message metadata. Distinguishes
+ * three results: the accepted message was found, its absence was positively
+ * confirmed by a successful lookup, or the lookup itself failed and nothing
+ * about delivery is known. */
+async function reconcilePostedQuestion(
+  ref: { slackTeamId: string },
+  payload: FactoryWaitArmPayload,
+  oldestTs: string
+): Promise<{ accepted: { ts: string } | null; confirmedAbsent: boolean }> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= WAIT_ARM_RECONCILE_ATTEMPTS; attempt += 1) {
+    try {
+      const accepted = await findSlackMessageByDedupeKey(ref, {
+        channel: payload.channelId,
+        dedupeKey: payload.waitId!,
+        oldestTs,
+        threadTs: payload.threadTs,
+      })
+      return { accepted, confirmedAbsent: !accepted }
+    } catch (error) {
+      lastError = error
+      if (attempt < WAIT_ARM_RECONCILE_ATTEMPTS) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, WAIT_ARM_RETRY_BASE_DELAY_MS * attempt)
+        )
+      }
+    }
+  }
+  console.warn("Unable to reconcile ambiguous Slack post.", lastError)
+  return { accepted: null, confirmedAbsent: false }
+}
+
 /** Posts the question at-most-once per wait: a definite Slack rejection is
- * safe to retry, but an ambiguous transport failure (the response was lost)
- * is first reconciled against channel history by the wait-scoped dedupe key
- * stamped in the message metadata. Retries therefore converge on the single
- * message Slack actually accepted instead of posting another copy. */
+ * safe to retry, but after an ambiguous transport failure (the response was
+ * lost) another post is only issued once a successful history lookup has
+ * positively confirmed non-delivery. If delivery can be neither confirmed
+ * nor ruled out, the post fails rather than risking a duplicate question a
+ * human might answer while the wait watches a different copy. */
 async function postSlackQuestion(
   payload: FactoryWaitArmPayload
 ): Promise<{ ts: string }> {
@@ -207,13 +242,13 @@ async function postSlackQuestion(
     } catch (error) {
       lastError = error
       if (payload.waitId && !isDefiniteSlackRejection(error)) {
-        const accepted = await findSlackMessageByDedupeKey(ref, {
-          channel: payload.channelId,
-          dedupeKey: payload.waitId,
-          oldestTs,
-          threadTs: payload.threadTs,
-        }).catch(() => null)
-        if (accepted) return accepted
+        const reconciled = await reconcilePostedQuestion(ref, payload, oldestTs)
+        if (reconciled.accepted) return reconciled.accepted
+        if (!reconciled.confirmedAbsent) {
+          throw new Error(
+            `The Slack response was lost and delivery could not be verified, so the question was not re-posted: ${errorMessage(error)}`
+          )
+        }
       }
       if (attempt < WAIT_ARM_POST_ATTEMPTS) {
         await new Promise((resolve) =>
@@ -289,6 +324,22 @@ export const factoryWaitArm = task({
     }
 
     if (payload.waitId) {
+      // Shared by every arm-failure path: a question whose wait cannot be
+      // armed is unanswerable, so retract it rather than invite replies that
+      // can never wake the agent. Best-effort — when arming failed because
+      // Convex is down, this Slack call is the only cleanup still possible.
+      const retractQuestion = async () => {
+        await deleteSlackMessage(
+          { slackTeamId: payload.slackTeamId },
+          { channel: payload.channelId, ts: posted.ts }
+        ).catch((deleteError) => {
+          console.warn(
+            "Unable to retract orphaned Slack question.",
+            deleteError
+          )
+        })
+      }
+
       let armed: { armed: boolean }
       try {
         armed = await withArmRetries(WAIT_ARM_MUTATION_ATTEMPTS, () =>
@@ -301,25 +352,17 @@ export const factoryWaitArm = task({
           })
         )
       } catch (error) {
+        await retractQuestion()
         await failWait(
-          `The question was posted to Slack, but the wait could not be armed: ${errorMessage(error)}. Replies to it will not wake this thread.`
+          `The question was posted to Slack but the wait could not be armed, so the question was retracted: ${errorMessage(error)}.`
         )
         throw error
       }
 
       if (!armed.armed) {
         // The wait went terminal between the post and the arm (canceled,
-        // expired, or swept). Retract the now-unanswerable question so it
-        // does not invite replies that can never wake the agent.
-        await deleteSlackMessage(
-          { slackTeamId: payload.slackTeamId },
-          { channel: payload.channelId, ts: posted.ts }
-        ).catch((deleteError) => {
-          console.warn(
-            "Unable to retract orphaned Slack question.",
-            deleteError
-          )
-        })
+        // expired, or swept).
+        await retractQuestion()
         return { armed: false, posted: true, ts: posted.ts }
       }
     }

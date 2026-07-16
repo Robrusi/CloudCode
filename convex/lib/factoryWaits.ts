@@ -276,7 +276,19 @@ export async function recordWaitEvent(
  * lost the race. The wait becomes fired and the undelivered timeout notice
  * (if the wake has not picked it up yet) is withdrawn so the agent never
  * reads a contradiction. Only dedupe applies — the wait is closed, so the
- * volume caps have nothing left to protect. */
+ * volume caps have nothing left to protect.
+ *
+ * Accepted limitation: when the sweep already baked the timeout into a
+ * queued wake run (idle thread, timeout event "reported"), that wake cannot
+ * be withdrawn — its prompt is persisted in the run's message rows — so the
+ * agent is woken with the timeout first and this answer arrives as a second
+ * wake right after. Self-correcting and confined to answers received within
+ * roughly a task-queue delay of the deadline; eliminating it would require
+ * canceling or rewriting queued wake runs (and durably reserving matched
+ * events inside the webhook request), machinery judged riskier than the
+ * race it removes. The same holds for the narrower pre-match window: a wait
+ * whose keys the sweep deletes in the milliseconds before the webhook's
+ * match query never records the event and resolves as an ordinary timeout. */
 async function supersedeExpiryWithAnswer(
   ctx: MutationCtx,
   wait: Doc<"factoryWaits">,
