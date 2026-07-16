@@ -1,16 +1,9 @@
 import { createHash } from "node:crypto"
 import { tasks } from "@trigger.dev/sdk"
-import { ConvexHttpClient } from "convex/browser"
 import { after } from "next/server"
 
-import { api } from "@/convex/_generated/api"
-import { requireConvexUrl } from "@/lib/convex/env"
 import { jsonError } from "@/lib/http/api-route"
-import {
-  linearWaitEventVars,
-  type LinearAutomationEvent,
-} from "@/lib/integrations/events"
-import { getWorkerSecret } from "@/lib/security/worker-secret"
+import { dispatchLinearWaitEvents } from "@/lib/integrations/wait-dispatch"
 import {
   getInitializedIntegrationsBot,
   getIntegrationsBot,
@@ -28,50 +21,6 @@ import { createWebhookTaskTracker } from "@/lib/integrations/webhook-tasks"
 import type { integrationEvent } from "@/trigger/integrations"
 
 export const runtime = "nodejs"
-
-/** Factory waits: new comments on issues an agent registered a wait for.
- * Pre-matched with one indexed Convex query per commented issue so ordinary
- * Linear traffic costs no Trigger task. */
-async function dispatchLinearWaitEvents(
-  events: LinearAutomationEvent[],
-  organizationId: string,
-  deliveryId: string
-) {
-  const comments = events.filter(
-    (event) => event.event === "commentCreated" && event.comment
-  )
-  if (comments.length === 0) return
-
-  const client = new ConvexHttpClient(requireConvexUrl())
-  for (const event of comments) {
-    const matches = await client.query(
-      api.factoryWaits.workerMatchLinearWaitEvent,
-      {
-        actorId: event.comment?.authorId,
-        externalId: organizationId,
-        issueId: event.issue.id,
-        workerSecret: getWorkerSecret(),
-      }
-    )
-    if (matches.length === 0) continue
-
-    await tasks.trigger<typeof integrationEvent>(
-      "integration-event",
-      {
-        eventKey: event.comment?.id ?? deliveryId,
-        eventName: "comment",
-        eventVars: linearWaitEventVars(event),
-        kind: "wait_event",
-        provider: "linear",
-        waits: matches.map((match) => ({
-          threadId: match.threadId,
-          waitId: match.waitId,
-        })),
-      },
-      { idempotencyKey: `fwl:${event.comment?.id ?? deliveryId}` }
-    )
-  }
-}
 
 /** Reads verified events the Chat SDK does not dispatch: Issue/Comment data
  * changes for automations and direct agent delegations without a backing

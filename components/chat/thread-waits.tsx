@@ -1,5 +1,7 @@
 "use client"
 
+import { useEffect, useState } from "react"
+
 import { useQuery } from "convex/react"
 import { Hourglass } from "lucide-react"
 
@@ -38,8 +40,14 @@ export function ThreadWaits({ threadId }: { threadId: Id<"threads"> | null }) {
     api.factoryWaits.listThreadWaits,
     threadId ? { threadId } : "skip"
   )
+  // Waits are long-lived and the query only pushes updates when a wait
+  // changes, so the expiry labels need their own clock to stay honest.
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60_000)
+    return () => clearInterval(timer)
+  }, [])
   if (!waits?.length) return null
-  const now = Date.now()
 
   return (
     <div className="space-y-2">

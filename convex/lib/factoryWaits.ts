@@ -157,6 +157,25 @@ export async function pendingEventCountForWait(
   return events.filter((row) => row.status === "pending").length
 }
 
+/** Drops a wait's undelivered events. Used when a wait is consumed without a
+ * wake (canceled, or answered through the bridged follow-up pipeline) so the
+ * recovery sweep can never wake the thread for a wait that is already
+ * settled. */
+export async function deletePendingWaitEvents(
+  ctx: MutationCtx,
+  waitId: Id<"factoryWaits">
+) {
+  const events = await ctx.db
+    .query("factoryWaitEvents")
+    .withIndex("by_wait_event", (q) => q.eq("waitId", waitId))
+    .collect()
+  await Promise.all(
+    events
+      .filter((event) => event.status === "pending")
+      .map((event) => ctx.db.delete(event._id))
+  )
+}
+
 export async function pendingWaitEventsForThread(
   ctx: QueryCtx | MutationCtx,
   threadId: Id<"threads">,
@@ -177,6 +196,7 @@ export type RecordWaitEventResult =
       reason:
         | "duplicate"
         | "event_filtered"
+        | "expired"
         | "not_armed"
         | "queue_full"
         | "rate_limited"
@@ -195,6 +215,12 @@ export async function recordWaitEvent(
   }
 ): Promise<RecordWaitEventResult> {
   if (wait.status !== "armed") return { queued: false, reason: "not_armed" }
+  // The TTL is the contract, not the sweep schedule: an event landing after
+  // the deadline is refused even when the minute sweep has not flipped the
+  // wait yet, so timeout-vs-answer never depends on sweep timing.
+  if (Date.now() > wait.expiresAt) {
+    return { queued: false, reason: "expired" }
+  }
   if (!wait.events.includes(event.eventName)) {
     return { queued: false, reason: "event_filtered" }
   }

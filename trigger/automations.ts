@@ -219,6 +219,15 @@ export const automationsTick = schedules.task({
         )
         await queueFactoryWakeRuns(delivered.factoryWakeRuns)
       }
+
+      // Wake runs whose factory-dispatch enqueue failed after their events
+      // were already marked reported: re-enqueue under the run's idempotency
+      // key, so wakes that are merely still queued are no-ops.
+      const strandedWakes = await client.query(
+        api.factoryWaits.workerRecoverWakeDispatches,
+        { now, workerSecret }
+      )
+      await queueFactoryWakeRuns(strandedWakes)
     } catch (error) {
       console.warn("Unable to sweep factory waits.", error)
     }

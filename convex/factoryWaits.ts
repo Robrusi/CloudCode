@@ -24,6 +24,7 @@ import {
   activeWaitsForThread,
   clampWaitTtlMs,
   closeWait,
+  deletePendingWaitEvents,
   insertWaitEvent,
   insertWaitKeys,
   isActiveWaitStatus,
@@ -58,6 +59,12 @@ const WAIT_EVENT_RETENTION_MS = 30 * 24 * 60 * 60_000
 /** Pending events older than this on an idle thread mean the worker that
  * recorded them died before dispatching the wake; the tick redelivers. */
 const WAIT_WAKE_RECOVERY_AGE_MS = 5 * 60_000
+
+/** How far back the stranded-dispatch backstop looks at reported events. */
+const WAKE_DISPATCH_RECOVERY_WINDOW_MS = 24 * 60 * 60_000
+
+const WAKE_RECOVERY_SCAN_LIMIT = 500
+const WAKE_RECOVERY_DELIVERY_LIMIT = 20
 
 const EXPIRE_SWEEP_DEFAULT_LIMIT = 50
 const MATCH_SOURCE_KEYS_MAX = 10
@@ -387,15 +394,7 @@ export const cancelWait = mutation({
 
     await closeWait(ctx, wait, "canceled", "Canceled with wait_cancel.")
     // A canceled wait must not wake the thread later: drop what it queued.
-    const events = await ctx.db
-      .query("factoryWaitEvents")
-      .withIndex("by_wait_event", (q) => q.eq("waitId", wait._id))
-      .collect()
-    await Promise.all(
-      events
-        .filter((event) => event.status === "pending")
-        .map((event) => ctx.db.delete(event._id))
-    )
+    await deletePendingWaitEvents(ctx, wait._id)
 
     return { canceled: true, status: "canceled" as const }
   },
@@ -631,6 +630,12 @@ export const workerArmWait = mutation({
     if (!wait || wait.status !== "arming" || !wait.installationId) {
       return { armed: false }
     }
+    // A post delayed past the wait's own deadline must not arm a listener
+    // that would accept post-TTL events; the sweep expires the wait and
+    // wakes the agent with the timeout notice instead.
+    if (Date.now() > wait.expiresAt) {
+      return { armed: false }
+    }
 
     const sourceKeys = slackWaitSourceKeys({
       channelId: args.channelId,
@@ -675,7 +680,7 @@ export const workerFailWaitArm = mutation({
       eventKey: `arm_failed:${wait._id}`,
       eventVars: {
         event: "arm_failed",
-        summary: `the Slack message for ask_human could not be posted (${args.error}). The question was never delivered — retry ask_human or continue without the answer.`,
+        summary: `ask_human failed: ${args.error} The wait is closed — retry ask_human or continue without the answer.`,
       },
     })
     const wake = await maybeCreateFactoryWakeRun(ctx, wait.threadId)
@@ -805,6 +810,9 @@ export const workerRecordWaitEvent = mutation({
           "fired",
           "Answered in the thread's own Slack conversation; delivered by the follow-up run."
         )
+        // The follow-up run supersedes anything this wait queued earlier;
+        // leaving those events pending would wake the thread a second time.
+        await deletePendingWaitEvents(ctx, wait._id)
         return {
           factoryWakeRuns: [],
           queued: false,
@@ -861,6 +869,22 @@ export const workerExpireWaits = mutation({
 
     const threadIds = new Set<Id<"threads">>()
     for (const wait of due) {
+      // A wait that already recorded an event before its deadline was
+      // answered, not timed out — its pending event is still waiting behind
+      // a busy thread. Close it as fired and deliver only the answer;
+      // adding a timeout notice too would contradict it.
+      const answered = (await pendingEventCountForWait(ctx, wait._id)) > 0
+      if (answered) {
+        await closeWait(
+          ctx,
+          wait,
+          "fired",
+          "Received an event before expiry; delivered after the deadline."
+        )
+        threadIds.add(wait.threadId)
+        continue
+      }
+
       await closeWait(ctx, wait, "expired", "Timed out with no response.")
       const thread = await ctx.db.get(wait.threadId)
       if (!thread) continue
@@ -901,10 +925,11 @@ export const workerExpireWaits = mutation({
   },
 })
 
-/** Backstop for wakes lost between recording an event and dispatching the
+/** Backstop for wakes lost between recording an event and creating the wake
  * run (a worker crash in that window leaves pending events on an idle
- * thread). The tick redelivers them through
- * workerDeliverPendingWaitWakes. */
+ * thread). The tick redelivers them through workerDeliverPendingWaitWakes.
+ * The scan is wide (500 rows) so a page of events parked behind
+ * long-running active threads cannot starve idle threads further down. */
 export const workerRecoverWaitWakes = query({
   args: {
     now: v.optional(v.number()),
@@ -921,15 +946,64 @@ export const workerRecoverWaitWakes = query({
           .eq("status", "pending")
           .lt("updatedAt", now - WAIT_WAKE_RECOVERY_AGE_MS)
       )
-      .take(100)
+      .take(WAKE_RECOVERY_SCAN_LIMIT)
 
     const threadIds = [...new Set(stalled.map((event) => event.threadId))]
     const deliverable: Id<"threads">[] = []
     for (const threadId of threadIds) {
+      if (deliverable.length >= WAKE_RECOVERY_DELIVERY_LIMIT) break
       const active = await activeRunForThread(ctx, threadId)
       if (!active) deliverable.push(threadId)
     }
     return deliverable
+  },
+})
+
+/** Backstop for the other half of the wake handoff: the wake run exists and
+ * its events are already reported, but the factory-dispatch enqueue failed
+ * (queueFactoryWakeRuns is fire-and-forget). Reported events whose wake run
+ * is still queued with no Trigger run attached identify exactly those
+ * stranded wakes; the tick re-enqueues them under the run's idempotency key,
+ * so a wake that merely has not been picked up yet is a no-op. */
+export const workerRecoverWakeDispatches = query({
+  args: {
+    now: v.optional(v.number()),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args): Promise<FactoryRunCreated[]> => {
+    requireWorkerSecret(args.workerSecret)
+    const now = args.now ?? Date.now()
+
+    // Healthy reported events stay in this window for a day and are
+    // re-checked each tick; that steady cost buys not needing a dispatch
+    // ledger. A wake stranded longer than the window means the tick itself
+    // was down that long.
+    const reported = await ctx.db
+      .query("factoryWaitEvents")
+      .withIndex("by_status_updated", (q) =>
+        q
+          .eq("status", "reported")
+          .gt("updatedAt", now - WAKE_DISPATCH_RECOVERY_WINDOW_MS)
+          .lt("updatedAt", now - WAIT_WAKE_RECOVERY_AGE_MS)
+      )
+      .take(WAKE_RECOVERY_SCAN_LIMIT)
+
+    const runIds = [
+      ...new Set(
+        reported
+          .map((event) => event.wakeRunId)
+          .filter((runId): runId is Id<"codexRuns"> => Boolean(runId))
+      ),
+    ]
+
+    const stranded: FactoryRunCreated[] = []
+    for (const runId of runIds) {
+      const run = await ctx.db.get(runId)
+      if (run && run.status === "queued" && !run.triggerRunId) {
+        stranded.push({ runId, threadId: run.threadId, userId: run.userId })
+      }
+    }
+    return stranded
   },
 })
 

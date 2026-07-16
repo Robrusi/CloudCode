@@ -135,7 +135,9 @@ type FactoryWaitArmPayload = {
   waitId?: Id<"factoryWaits">
 }
 
-const WAIT_ARM_MAX_ATTEMPTS = 3
+const WAIT_ARM_POST_ATTEMPTS = 3
+const WAIT_ARM_MUTATION_ATTEMPTS = 4
+const WAIT_ARM_RETRY_BASE_DELAY_MS = 1_000
 
 function resolveWaitArmPayload(
   payload: FactoryWaitArmPayload | string
@@ -156,62 +158,104 @@ function resolveWaitArmPayload(
   return resolved
 }
 
+async function withArmRetries<T>(
+  attempts: number,
+  operation: () => Promise<T>
+): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation()
+    } catch (error) {
+      lastError = error
+      if (attempt < attempts) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, WAIT_ARM_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1))
+        )
+      }
+    }
+  }
+  throw lastError
+}
+
 // Posts an agent-authored Slack message on behalf of the ask_human and
 // slack_post_message tools. Provider SDKs (and the OAuth bot tokens in the
 // Chat SDK state store) live in Trigger workers, not Convex, so the Convex
 // action creates the wait in "arming" and this task confirms the post and
-// arms it with the message timestamp. A post that exhausts its retries fails
-// the wait and wakes the agent so a question is never silently lost.
+// arms it with the message timestamp.
+//
+// The task runs a single Trigger attempt and manages retries itself: the
+// post is retried only until it first succeeds, and the arm mutation is
+// retried separately afterwards. A task-level retry would re-run the whole
+// body and post the question a second time whenever the arm step failed —
+// duplicate messages a human might answer while the wait watches only the
+// last copy. Either stage exhausting its retries fails the wait and wakes
+// the agent, so a question is never silently lost.
 export const factoryWaitArm = task({
   id: "factory-wait-arm",
   retry: {
-    maxAttempts: WAIT_ARM_MAX_ATTEMPTS,
+    maxAttempts: 1,
   },
-  run: async (rawPayload: FactoryWaitArmPayload | string, { ctx }) => {
+  run: async (rawPayload: FactoryWaitArmPayload | string) => {
     const payload = resolveWaitArmPayload(rawPayload)
     const client = workerConvexClient()
     const workerSecret = getWorkerSecret()
 
-    try {
-      const posted = await postSlackMessage(
-        { slackTeamId: payload.slackTeamId },
-        {
-          channel: payload.channelId,
-          markdown: payload.markdown,
-          threadTs: payload.threadTs,
-        }
-      )
-
-      if (payload.waitId) {
-        await client.mutation(api.factoryWaits.workerArmWait, {
-          channelId: payload.channelId,
-          messageTs: posted.ts,
-          threadTs: payload.threadTs,
+    const failWait = async (error: string) => {
+      if (!payload.waitId) return
+      const failed = await client
+        .mutation(api.factoryWaits.workerFailWaitArm, {
+          error,
+          notify: true,
           waitId: payload.waitId,
           workerSecret,
         })
-      }
-      return { posted: true, ts: posted.ts }
-    } catch (error) {
-      if (ctx.attempt.number < WAIT_ARM_MAX_ATTEMPTS) throw error
+        .catch((failError) => {
+          console.warn("Unable to mark wait arm failed.", failError)
+          return undefined
+        })
+      await queueFactoryWakeRuns(failed?.factoryWakeRuns)
+    }
 
-      if (payload.waitId) {
-        const failed = await client
-          .mutation(api.factoryWaits.workerFailWaitArm, {
-            error:
-              error instanceof Error ? error.message : "The Slack post failed.",
-            notify: true,
-            waitId: payload.waitId,
-            workerSecret,
-          })
-          .catch((failError) => {
-            console.warn("Unable to mark wait arm failed.", failError)
-            return undefined
-          })
-        await queueFactoryWakeRuns(failed?.factoryWakeRuns)
-      }
+    let posted: { ts: string }
+    try {
+      posted = await withArmRetries(WAIT_ARM_POST_ATTEMPTS, () =>
+        postSlackMessage(
+          { slackTeamId: payload.slackTeamId },
+          {
+            channel: payload.channelId,
+            markdown: payload.markdown,
+            threadTs: payload.threadTs,
+          }
+        )
+      )
+    } catch (error) {
+      await failWait(
+        `The Slack message could not be posted: ${errorMessage(error)}.`
+      )
       throw error
     }
+
+    if (payload.waitId) {
+      try {
+        await withArmRetries(WAIT_ARM_MUTATION_ATTEMPTS, () =>
+          client.mutation(api.factoryWaits.workerArmWait, {
+            channelId: payload.channelId,
+            messageTs: posted.ts,
+            threadTs: payload.threadTs,
+            waitId: payload.waitId!,
+            workerSecret,
+          })
+        )
+      } catch (error) {
+        await failWait(
+          `The question was posted to Slack, but the wait could not be armed: ${errorMessage(error)}. Replies to it will not wake this thread.`
+        )
+        throw error
+      }
+    }
+
+    return { posted: true, ts: posted.ts }
   },
 })
 
