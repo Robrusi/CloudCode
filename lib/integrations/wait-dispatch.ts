@@ -8,7 +8,10 @@ import {
 } from "@/convex/lib/factoryWaitTriggers"
 import { requireConvexUrl } from "@/lib/convex/env"
 import type { GitHubAutomationEvent } from "@/lib/github/automation-events"
-import { isCloudcodeActor } from "@/lib/github/webhook"
+import {
+  isCloudcodeActor,
+  isTrustedGitHubAssociation,
+} from "@/lib/github/webhook"
 import {
   githubWaitEventVars,
   githubWaitPullRequestNumbers,
@@ -99,14 +102,17 @@ export async function dispatchGitHubWaitEvent(
   try {
     const eventName = githubWaitEventName(event.event)
     if (!eventName) return false
-    // The agent's own PR comments and reviews (posted as the app's bot) must
-    // not wake the wait watching for human feedback. State changes (merged,
-    // closed, checks) count regardless of the actor.
-    if (
-      (eventName === "comment" || eventName === "review") &&
-      isCloudcodeActor(event.actorLogin)
-    ) {
-      return false
+    // Comments and reviews carry actor-authored text straight into a
+    // privileged continuation run's prompt, so they wake a wait only from
+    // trusted authors (owner/member/collaborator — the same rule as app
+    // mentions): on a public repository any GitHub account can comment, and
+    // an untrusted account must not be able to place instructions in front
+    // of the agent. The agent's own posts (the app's bot) never wake it.
+    // State changes (merged, closed, reopened, checks) carry no authored
+    // text and count regardless of the actor.
+    if (eventName === "comment" || eventName === "review") {
+      if (isCloudcodeActor(event.actorLogin)) return false
+      if (!isTrustedGitHubAssociation(event.actorAssociation)) return false
     }
     const prNumbers = githubWaitPullRequestNumbers(event)
     if (prNumbers.length === 0) return false

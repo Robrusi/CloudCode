@@ -115,23 +115,52 @@ export async function postSlackMessage(
   )
 }
 
-/** True when Slack definitively responded with a rejection — the message was
- * not posted, so a retry cannot duplicate it. Transport failures (timeouts,
- * lost responses) are ambiguous: the post may have been accepted. */
-export function isDefiniteSlackRejection(error: unknown) {
+/** Slack error codes that can be returned after part of the operation
+ * already succeeded (per Slack's chat.postMessage documentation) — the
+ * message may exist despite the error, so a blind retry could duplicate
+ * it. */
+const AMBIGUOUS_SLACK_ERROR_CODES = new Set([
+  "fatal_error",
+  "internal_error",
+  "request_timeout",
+  "service_unavailable",
+])
+
+function slackRejectionCode(error: unknown): string | undefined {
+  const data = (error as { data?: { error?: unknown; ok?: unknown } } | null)
+    ?.data
+  if (data?.ok === false && typeof data.error === "string") return data.error
   if (
     error instanceof Error &&
     error.message.startsWith(SLACK_MESSAGE_ERROR_PREFIX)
   ) {
-    return true
+    const code = error.message
+      .slice(SLACK_MESSAGE_ERROR_PREFIX.length)
+      .replace(/^[:.\s]+/, "")
+      .trim()
+    return code || undefined
   }
-  const data = (error as { data?: { error?: unknown; ok?: unknown } } | null)
-    ?.data
-  return data?.ok === false && typeof data.error === "string"
+  return undefined
 }
 
+/** True when Slack definitively rejected the post — the message was not
+ * created, so a retry cannot duplicate it. Transport failures (no response)
+ * and the error codes Slack documents as possibly-partial are ambiguous:
+ * the message may already exist. */
+export function isDefiniteSlackRejection(error: unknown) {
+  const code = slackRejectionCode(error)
+  return Boolean(code && !AMBIGUOUS_SLACK_ERROR_CODES.has(code))
+}
+
+const RECONCILE_PAGE_LIMIT = 100
+const RECONCILE_MAX_PAGES = 5
+
 /** Looks for a recently posted factory message carrying the dedupe key, to
- * reconcile an ambiguous post failure with what Slack actually accepted. */
+ * reconcile an ambiguous post failure with what Slack actually accepted.
+ * Pages through the range (thread replies arrive oldest-first, so a busy
+ * thread can push a fresh message past any single page); `exhausted` tells
+ * the caller whether "not found" is a proven absence or just an unfinished
+ * search — only a proven absence may justify posting again. */
 export async function findSlackMessageByDedupeKey(
   ref: Pick<IntegrationThreadRef, "slackTeamId">,
   query: {
@@ -140,35 +169,45 @@ export async function findSlackMessageByDedupeKey(
     oldestTs?: string
     threadTs?: string
   }
-): Promise<{ ts: string } | null> {
+): Promise<{ exhausted: boolean; found: { ts: string } | null }> {
   const { slack } = await getInitializedIntegrationsBot()
   if (!slack) throw new Error("The Slack integration is not configured.")
 
   return await withSlackToken(
     { externalThreadId: "", provider: "slack", slackTeamId: ref.slackTeamId },
     async () => {
-      const request = {
-        channel: query.channel,
-        include_all_metadata: true,
-        limit: 30,
-        ...(query.oldestTs ? { oldest: query.oldestTs } : {}),
+      let cursor: string | undefined
+      for (let page = 1; page <= RECONCILE_MAX_PAGES; page += 1) {
+        const request = {
+          channel: query.channel,
+          ...(cursor ? { cursor } : {}),
+          include_all_metadata: true,
+          limit: RECONCILE_PAGE_LIMIT,
+          ...(query.oldestTs ? { oldest: query.oldestTs } : {}),
+        }
+        const response = query.threadTs
+          ? await slack.webClient.conversations.replies({
+              ...request,
+              ts: query.threadTs,
+            })
+          : await slack.webClient.conversations.history(request)
+        const match = (response.messages ?? []).find((candidate) => {
+          const metadata = candidate.metadata as
+            | { event_payload?: { dedupeKey?: unknown }; event_type?: string }
+            | undefined
+          return (
+            metadata?.event_type === FACTORY_POST_METADATA_EVENT &&
+            metadata.event_payload?.dedupeKey === query.dedupeKey
+          )
+        })
+        if (match?.ts) return { exhausted: true, found: { ts: match.ts } }
+
+        cursor = response.response_metadata?.next_cursor || undefined
+        if (!response.has_more || !cursor) {
+          return { exhausted: true, found: null }
+        }
       }
-      const response = query.threadTs
-        ? await slack.webClient.conversations.replies({
-            ...request,
-            ts: query.threadTs,
-          })
-        : await slack.webClient.conversations.history(request)
-      const match = (response.messages ?? []).find((candidate) => {
-        const metadata = candidate.metadata as
-          | { event_payload?: { dedupeKey?: unknown }; event_type?: string }
-          | undefined
-        return (
-          metadata?.event_type === FACTORY_POST_METADATA_EVENT &&
-          metadata.event_payload?.dedupeKey === query.dedupeKey
-        )
-      })
-      return match?.ts ? { ts: match.ts } : null
+      return { exhausted: false, found: null }
     }
   )
 }

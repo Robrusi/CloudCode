@@ -187,8 +187,8 @@ async function withArmRetries<T>(
 /** Resolves an ambiguous post outcome against channel history using the
  * wait-scoped dedupe key stamped in the message metadata. Distinguishes
  * three results: the accepted message was found, its absence was positively
- * confirmed by a successful lookup, or the lookup itself failed and nothing
- * about delivery is known. */
+ * confirmed by an exhausted lookup, or nothing about delivery is known
+ * (lookup failed, or the range was too busy to search completely). */
 async function reconcilePostedQuestion(
   ref: { slackTeamId: string },
   payload: FactoryWaitArmPayload,
@@ -197,13 +197,13 @@ async function reconcilePostedQuestion(
   let lastError: unknown
   for (let attempt = 1; attempt <= WAIT_ARM_RECONCILE_ATTEMPTS; attempt += 1) {
     try {
-      const accepted = await findSlackMessageByDedupeKey(ref, {
+      const { exhausted, found } = await findSlackMessageByDedupeKey(ref, {
         channel: payload.channelId,
         dedupeKey: payload.waitId!,
         oldestTs,
         threadTs: payload.threadTs,
       })
-      return { accepted, confirmedAbsent: !accepted }
+      return { accepted: found, confirmedAbsent: !found && exhausted }
     } catch (error) {
       lastError = error
       if (attempt < WAIT_ARM_RECONCILE_ATTEMPTS) {

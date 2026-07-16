@@ -45,6 +45,11 @@ export function isGitHubAutomationTriggerEvent(
 
 export type GitHubAutomationEvent = {
   action: string
+  // GitHub's author_association of the comment or review author (OWNER,
+  // MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, …). Factory waits gate
+  // instruction-bearing events on it so an arbitrary account commenting on
+  // a public PR cannot place text in front of a privileged run.
+  actorAssociation?: string
   actorLogin?: string
   branch?: string
   checkSuite?: {
@@ -100,6 +105,7 @@ type GitHubWebhookPayload = {
     pull_requests?: Array<{ number?: unknown }> | null
   } | null
   comment?: {
+    author_association?: unknown
     body?: unknown
     html_url?: unknown
     id?: unknown
@@ -129,6 +135,7 @@ type GitHubWebhookPayload = {
   ref?: unknown
   repository?: { full_name?: unknown } | null
   review?: {
+    author_association?: unknown
     body?: unknown
     html_url?: unknown
     state?: unknown
@@ -213,6 +220,7 @@ export function parseGitHubAutomationEvent(
     if (!issue || !commentId) return null
     return {
       action,
+      actorAssociation: optionalString(payload.comment?.author_association),
       actorLogin: optionalString(payload.comment?.user?.login) ?? senderLogin,
       comment: {
         body: optionalString(payload.comment?.body),
@@ -271,6 +279,7 @@ export function parseGitHubAutomationEvent(
     if (!pullRequest || !commentId) return null
     return {
       action,
+      actorAssociation: optionalString(payload.comment?.author_association),
       actorLogin: optionalString(payload.comment?.user?.login) ?? senderLogin,
       comment: {
         body: optionalString(payload.comment?.body),
@@ -310,6 +319,7 @@ export function parseGitHubAutomationEvent(
     if (!pullRequest || !payload.review) return null
     return {
       action,
+      actorAssociation: optionalString(payload.review.author_association),
       actorLogin: optionalString(payload.review.user?.login) ?? senderLogin,
       event: "pullRequestReviewSubmitted",
       installationId,
