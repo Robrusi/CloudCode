@@ -10,6 +10,7 @@ import {
 } from "@/components/chat/control-styles"
 import {
   buildSidebarChatNodes,
+  filterSidebarChatNodes,
   isSidebarNodeRunning,
   nodeHasLiveSandbox,
   type SidebarChat,
@@ -63,16 +64,20 @@ export function SidebarThreadControls({
   const searchRef = useRef<HTMLInputElement>(null)
   useClickOutside(containerRef, menuOpen, () => setMenuOpen(false))
 
-  // Counts mirror what each filter would list: one per sidebar row, with
-  // factory-dispatched children counted into their root's subtree.
+  // Counts mirror what each filter would list under the active search: one
+  // per sidebar row, with factory-dispatched children counted into their
+  // root's subtree.
   const counts = useMemo<ThreadCounts>(() => {
-    const nodes = buildSidebarChatNodes(chats)
+    const nodes = filterSidebarChatNodes(buildSidebarChatNodes(chats), {
+      filter: "all",
+      query,
+    })
     return {
       all: nodes.length,
       running: nodes.filter(isSidebarNodeRunning).length,
       sandbox: nodes.filter(nodeHasLiveSandbox).length,
     }
-  }, [chats])
+  }, [chats, query])
 
   const customized = sort !== "activity" || filter !== "all"
 

@@ -27,9 +27,11 @@ function isSidebarThreadSort(value: string | null): value is SidebarThreadSort {
 /** Search/sort/filter state for the sidebar thread list. Sort persists across
  * sessions; search and status filter are session-local and reset when the
  * sidebar switches thread contexts, so a chats-context search never silently
- * empties the reviews list. */
+ * empties the reviews list. Pass null while the sidebar shows a non-thread
+ * view (settings); a transient visit then leaves the filters of the
+ * underlying context untouched. */
 export function useSidebarThreadFilters(
-  context: "chats" | "automations" | "reviews"
+  context: "chats" | "automations" | "reviews" | null
 ) {
   const [query, setQuery] = useState("")
   const [filter, setFilter] = useState<SidebarThreadFilter>(
@@ -54,9 +56,11 @@ export function useSidebarThreadFilters(
   }, [])
 
   // Context switches swap the underlying thread list; drop the stale search
-  // and filter during render, before they can filter the new list.
+  // and filter during render, before they can filter the new list. A null
+  // context is skipped entirely so settings visits neither reset nor count
+  // as the context to return to.
   const [lastContext, setLastContext] = useState(context)
-  if (lastContext !== context) {
+  if (context !== null && lastContext !== context) {
     setLastContext(context)
     setQuery("")
     setFilter(DEFAULT_SIDEBAR_THREAD_OPTIONS.filter)

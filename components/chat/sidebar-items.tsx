@@ -43,9 +43,26 @@ export function FolderGroup({
 }) {
   const [open, setOpen] = useState(true)
   const [expanded, setExpanded] = useState(false)
-  const visibleItems = open ? items : items.filter(isSidebarNodeRunning)
+  // While a search/filter is active the group presents as open so its matches
+  // show, via a transient override that leaves the persistent collapse state
+  // untouched — clearing the filter restores exactly what the user had. The
+  // override resets whenever filtering toggles.
+  const [filteredOpen, setFilteredOpen] = useState<boolean | null>(null)
+  const [prevShowAll, setPrevShowAll] = useState(showAll)
+  if (prevShowAll !== showAll) {
+    setPrevShowAll(showAll)
+    setFilteredOpen(null)
+  }
+  const effectiveOpen = showAll ? (filteredOpen ?? true) : open
+  const toggleOpen = () => {
+    if (showAll) setFilteredOpen(!effectiveOpen)
+    else setOpen(!effectiveOpen)
+  }
+  const visibleItems = effectiveOpen
+    ? items
+    : items.filter(isSidebarNodeRunning)
   const canExpand =
-    open && !showAll && visibleItems.length > THREAD_PREVIEW_COUNT
+    effectiveOpen && !showAll && visibleItems.length > THREAD_PREVIEW_COUNT
   const displayedItems =
     canExpand && !expanded
       ? visibleItems.slice(0, THREAD_PREVIEW_COUNT)
@@ -56,14 +73,14 @@ export function FolderGroup({
       <div className="group/folder flex w-full items-center gap-1 px-2.5 py-1.5 text-[0.8125rem] text-muted-foreground">
         <button
           type="button"
-          onClick={() => setOpen(!open)}
-          aria-expanded={open}
+          onClick={toggleOpen}
+          aria-expanded={effectiveOpen}
           className="flex min-w-0 flex-1 items-center gap-1.5 text-left transition-colors hover:text-foreground"
         >
           <ChevronRight
             className={cn(
               "size-3 shrink-0 transition-transform",
-              open && "rotate-90"
+              effectiveOpen && "rotate-90"
             )}
           />
           <span className="flex-1 truncate">{label}</span>

@@ -80,7 +80,12 @@ export function Sidebar({
   })
   const automationContext = sidebarThreadContext === "automations"
   const reviewContext = sidebarThreadContext === "reviews"
-  const threadFilters = useSidebarThreadFilters(sidebarThreadContext)
+  // The settings view maps to the "chats" thread context upstream; passing
+  // null instead keeps a transient settings visit from resetting the filters
+  // of the context the user will return to.
+  const threadFilters = useSidebarThreadFilters(
+    currentView === "settings" ? null : sidebarThreadContext
+  )
   // The automations context renders its own grouped list, so skip the repo
   // grouping there.
   const groups = useMemo(
@@ -222,11 +227,7 @@ export function Sidebar({
               <div className="space-y-1">
                 {groups.map((g) => (
                   <FolderGroup
-                    // Toggling filters remounts the group so it reopens over
-                    // its matches even if it was collapsed beforehand.
-                    key={`${g.repo || "untitled"}${
-                      threadFilters.filtersActive ? ":filtered" : ""
-                    }`}
+                    key={g.repo || "untitled"}
                     label={repoLabel(g.repo)}
                     repoUrl={g.repo}
                     items={g.items}
