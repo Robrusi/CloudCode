@@ -151,6 +151,10 @@ export function buildSidebarChatNodes(chats: SidebarChat[]): SidebarChatNode[] {
   }
 
   const nodes = topLevel.map((chat) => {
+    // Children always order by recent activity, regardless of the selected
+    // sidebar sort: a dispatch tree is one sort unit ranked by its root
+    // (see sortSidebarChatNodes), and recency is the only meaningful order
+    // among auto-dispatched runs under it.
     const children = (childrenByRoot.get(chat.id as string) ?? []).sort(
       (a, b) => b.lastUserMessageAt - a.lastUserMessageAt
     )

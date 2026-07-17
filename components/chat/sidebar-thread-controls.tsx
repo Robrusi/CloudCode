@@ -182,6 +182,11 @@ export function SidebarThreadControls({
                 type="button"
                 role="menuitemradio"
                 aria-checked={selected}
+                // The zero-count disable deliberately exempts the selected
+                // option: the active radio choice stays a live control even
+                // when its count drops to zero (clicking it just closes the
+                // menu), and recovery from an empty filter goes through
+                // "All threads" or the list's Clear filters action.
                 disabled={!selected && count === 0}
                 onClick={() => {
                   onFilterChange(option.value)

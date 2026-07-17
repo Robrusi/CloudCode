@@ -237,12 +237,14 @@ export function Sidebar({
                       expanded={folder.expanded}
                       open={folder.open}
                       showAll={threadFilters.filtersActive}
+                      subtreeOpen={folders.subtreeOpen}
                       onExpandedChange={(expanded) =>
                         folders.updateFolder(g.repo, { expanded })
                       }
                       onOpenChange={(open) =>
                         folders.updateFolder(g.repo, { open })
                       }
+                      onSubtreeOpenChange={folders.setSubtreeOpen}
                       onSelect={onSelect}
                       onDelete={onDelete}
                       onRename={onRename}

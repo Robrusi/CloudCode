@@ -6,16 +6,20 @@ export type SidebarFolderState = { expanded: boolean; open: boolean }
 
 const DEFAULT_FOLDER_STATE: SidebarFolderState = { expanded: false, open: true }
 
-/** Persistent collapse and preview-expansion state for sidebar repo folders,
- * owned above the folder components so it survives a group unmounting while a
- * search/filter temporarily removes its repo from the list. Keyed by thread
- * context and repo, so chats and reviews folders collapse independently. */
+/** Persistent expansion state for the sidebar thread list — repo folder
+ * collapse/preview state and factory-subtree expansion — owned above the row
+ * components so it survives rows unmounting while a search/filter temporarily
+ * removes them. Keyed by thread context, so chats and reviews folders and
+ * subtrees collapse independently. */
 export function useSidebarFolderState(
   context: "chats" | "automations" | "reviews"
 ) {
   const [stateByFolder, setStateByFolder] = useState<
     Record<string, SidebarFolderState>
   >({})
+  const [openBySubtree, setOpenBySubtree] = useState<Record<string, boolean>>(
+    {}
+  )
 
   const folderState = useCallback(
     (repo: string) =>
@@ -36,5 +40,20 @@ export function useSidebarFolderState(
     [context]
   )
 
-  return { folderState, updateFolder }
+  const subtreeOpen = useCallback(
+    (rootId: string) => openBySubtree[`${context}:${rootId}`] ?? true,
+    [context, openBySubtree]
+  )
+
+  const setSubtreeOpen = useCallback(
+    (rootId: string, open: boolean) => {
+      setOpenBySubtree((current) => ({
+        ...current,
+        [`${context}:${rootId}`]: open,
+      }))
+    },
+    [context]
+  )
+
+  return { folderState, setSubtreeOpen, subtreeOpen, updateFolder }
 }

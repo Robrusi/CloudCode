@@ -26,8 +26,10 @@ export function FolderGroup({
   expanded,
   open,
   showAll = false,
+  subtreeOpen,
   onExpandedChange,
   onOpenChange,
+  onSubtreeOpenChange,
   onSelect,
   onDelete,
   onRename,
@@ -45,8 +47,12 @@ export function FolderGroup({
   /** An active search/filter lifts the preview cap so every match stays
    * visible. */
   showAll?: boolean
+  /** Sidebar-owned factory-subtree expansion, keyed by root thread id —
+   * survives filtering unmounting the whole subtree. */
+  subtreeOpen: (rootId: Id<"threads">) => boolean
   onExpandedChange: (expanded: boolean) => void
   onOpenChange: (open: boolean) => void
+  onSubtreeOpenChange: (rootId: Id<"threads">, open: boolean) => void
   onSelect: (id: Id<"threads">) => void
   onDelete: (id: Id<"threads">) => void
   onRename: (id: Id<"threads">, title: string) => void
@@ -112,8 +118,12 @@ export function FolderGroup({
               childChats={node.children}
               active={node.chat.id === activeId}
               activeId={activeId}
+              childrenOpen={subtreeOpen(node.chat.id)}
               pending={node.chat.pending}
               revealChildren={showAll}
+              onChildrenOpenChange={(open) =>
+                onSubtreeOpenChange(node.chat.id, open)
+              }
               onSelect={() => onSelect(node.chat.id)}
               onDelete={() => onDelete(node.chat.id)}
               onRename={(title) => onRename(node.chat.id, title)}
@@ -144,11 +154,13 @@ export function SidebarItem({
   chat,
   active,
   pending,
+  childrenOpen: childrenOpenProp,
   nested = false,
   revealChildren = false,
   showAutomationGlyph = true,
   childChats,
   activeId,
+  onChildrenOpenChange,
   onSelect,
   onDelete,
   onRename,
@@ -159,6 +171,10 @@ export function SidebarItem({
   chat: SidebarChat
   active: boolean
   pending: boolean
+  /** Controlled subtree expansion (see useSidebarFolderState) so the state
+   * survives this item unmounting while filtered away. Lists that never
+   * filter rows out (automations) omit it and fall back to local state. */
+  childrenOpen?: boolean
   nested?: boolean
   /** While a search/filter is active a collapsed dispatch subtree presents
    * as open, so the child that caused the subtree to match is visible. */
@@ -167,6 +183,7 @@ export function SidebarItem({
   showAutomationGlyph?: boolean
   childChats?: SidebarChat[]
   activeId?: Id<"threads"> | null
+  onChildrenOpenChange?: (open: boolean) => void
   onSelect: () => void
   onDelete: () => void
   onRename: (title: string) => void
@@ -177,7 +194,9 @@ export function SidebarItem({
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(chat.title || "")
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
-  const [childrenOpen, setChildrenOpen] = useState(true)
+  const [localChildrenOpen, setLocalChildrenOpen] = useState(true)
+  const childrenOpen = childrenOpenProp ?? localChildrenOpen
+  const setChildrenOpen = onChildrenOpenChange ?? setLocalChildrenOpen
   // Same transient pattern as FolderGroup: the override presents the subtree
   // open while filters are active, resets when filtering toggles, and leaves
   // the persistent childrenOpen state to restore afterwards.
