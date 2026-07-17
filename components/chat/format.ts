@@ -40,6 +40,16 @@ export function formatRunTime(ms: number) {
   return RUN_TIME_FORMAT.format(ms)
 }
 
+const TIME_OF_DAY_FORMAT = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric",
+  minute: "2-digit",
+})
+
+/** "14:32" style local time for rows already grouped under a day header. */
+export function formatTimeOfDay(ms: number) {
+  return TIME_OF_DAY_FORMAT.format(ms)
+}
+
 const RELATIVE_FORMAT = new Intl.RelativeTimeFormat(undefined, {
   numeric: "always",
   style: "narrow",

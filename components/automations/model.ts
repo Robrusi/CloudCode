@@ -1,3 +1,4 @@
+import { formatRelative } from "@/components/chat/format"
 import type { Doc } from "@/convex/_generated/dataModel"
 import type { Model, Speed, Thinking } from "@/lib/chat/options"
 import type { BranchMode } from "@/lib/codex/branch-names"
@@ -114,6 +115,49 @@ export const AUTOMATION_STATUS_LABEL: Record<AutomationRunStatus, string> = {
   running: "Running",
   skipped: "Skipped",
   succeeded: "Succeeded",
+}
+
+/** Status dot for an automation row, driven by its last run outcome. Shared
+ * by the automations screen and the sidebar automation list. */
+export function automationStatusDotClass(
+  automation: Pick<AutomationRecord, "enabled" | "lastRunStatus">
+) {
+  if (!automation.enabled) return "bg-muted-foreground/30"
+  switch (automation.lastRunStatus) {
+    case "running":
+      return "animate-pulse bg-foreground"
+    case "succeeded":
+      return "bg-success"
+    case "failed":
+    case "dispatch_failed":
+      return "bg-destructive"
+    default:
+      return "bg-muted-foreground/50"
+  }
+}
+
+/** Compact "ran 5 min ago" / "failed 2 hr ago" summary of the last run for
+ * one-line automation rows. */
+export function automationLastRunPhrase(
+  automation: Pick<AutomationRecord, "lastRunAt" | "lastRunStatus">,
+  now: number
+): { failed: boolean; text: string } {
+  const at = automation.lastRunAt
+  if (!at) return { failed: false, text: "no runs yet" }
+  const when = formatRelative(at, now)
+  switch (automation.lastRunStatus) {
+    case "running":
+      return { failed: false, text: "running" }
+    case "failed":
+    case "dispatch_failed":
+      return { failed: true, text: `failed ${when}` }
+    case "canceled":
+      return { failed: false, text: `canceled ${when}` }
+    case "skipped":
+      return { failed: false, text: `skipped ${when}` }
+    default:
+      return { failed: false, text: `ran ${when}` }
+  }
 }
 
 export type AutomationDraft = {

@@ -33,7 +33,9 @@ export function isSidebarNodeRunning(node: SidebarChatNode) {
   return node.chat.pending || node.children.some((child) => child.pending)
 }
 
-export function groupSidebarChats(chats: SidebarChat[]): SidebarChatGroup[] {
+/** One node per top-level thread with factory-dispatched children nested
+ * under it, sorted by most recent subtree activity. */
+export function buildSidebarChatNodes(chats: SidebarChat[]): SidebarChatNode[] {
   // Factory-dispatched threads nest under their root thread when it is in
   // the same list; a root that was deleted or filtered away leaves the child
   // rendered as a normal top-level chat.
@@ -51,8 +53,7 @@ export function groupSidebarChats(chats: SidebarChat[]): SidebarChatGroup[] {
     }
   }
 
-  const map = new Map<string, SidebarChatGroup>()
-  for (const chat of topLevel) {
+  const nodes = topLevel.map((chat) => {
     const children = (childrenByRoot.get(chat.id as string) ?? []).sort(
       (a, b) => b.lastUserMessageAt - a.lastUserMessageAt
     )
@@ -60,26 +61,29 @@ export function groupSidebarChats(chats: SidebarChat[]): SidebarChatGroup[] {
       (max, child) => Math.max(max, child.lastUserMessageAt),
       chat.lastUserMessageAt
     )
-    const node: SidebarChatNode = { chat, children, latest }
-    const key = chat.repoUrl || ""
+    return { chat, children, latest }
+  })
+  return nodes.sort((a, b) => b.latest - a.latest)
+}
+
+export function groupSidebarChats(chats: SidebarChat[]): SidebarChatGroup[] {
+  // Nodes arrive newest-first, so pushes keep group items sorted and the
+  // first node of a group carries its latest activity.
+  const map = new Map<string, SidebarChatGroup>()
+  for (const node of buildSidebarChatNodes(chats)) {
+    const key = node.chat.repoUrl || ""
     const group = map.get(key)
     if (group) {
       group.items.push(node)
-      if (latest > group.latest) group.latest = latest
     } else {
       map.set(key, {
         items: [node],
-        latest,
+        latest: node.latest,
         repo: key,
       })
     }
   }
-
-  const groups = Array.from(map.values())
-  for (const group of groups) {
-    group.items.sort((a, b) => b.latest - a.latest)
-  }
-  return groups.sort((a, b) => b.latest - a.latest)
+  return Array.from(map.values()).sort((a, b) => b.latest - a.latest)
 }
 
 export function relativeTime(timestamp: number) {

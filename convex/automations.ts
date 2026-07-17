@@ -6,7 +6,10 @@ import {
   disableAutomation,
   recordAutomationFailure,
 } from "./lib/automationRecords"
-import { activeRunForThread } from "./lib/codexRunLifecycle"
+import {
+  ACTIVE_RUN_STATUS_VALUES,
+  activeRunForThread,
+} from "./lib/codexRunLifecycle"
 import { findCodexAuth } from "./lib/codexRunAuth"
 import {
   appendCodexRunLogs,
@@ -562,11 +565,97 @@ export const recentRuns = query({
       hasMore: runs.length > limit,
       runs: runs.slice(0, limit).map((run) => ({
         createdAt: run.createdAt,
+        error: run.error,
         finishedAt: run.finishedAt,
         id: run._id,
+        startedAt: run.startedAt,
         status: run.status,
         threadId: run.threadId,
       })),
+    }
+  },
+})
+
+/** "active" folds the in-flight statuses (queued/running/canceling) into one
+ * user-facing filter. */
+const runsFeedStatusFilter = v.union(
+  v.literal("succeeded"),
+  v.literal("failed"),
+  v.literal("active"),
+  v.literal("canceled")
+)
+
+/** Latest runs across all of the user's automations, newest first, for the
+ * Runs view on the automations screen. Merges per-automation index pages
+ * (by_automation_created, or by_automation_status_created when filtered), so
+ * cost is bounded by the automation count instead of scanning codexRuns. */
+export const runsFeed = query({
+  args: {
+    limit: v.number(),
+    status: v.optional(runsFeedStatusFilter),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx)
+    if (!user) return { hasMore: false, runs: [] }
+
+    const limit = Math.min(
+      Math.max(Math.floor(args.limit), 1),
+      RECENT_RUNS_MAX_LIMIT
+    )
+    const automations = await ctx.db
+      .query("automations")
+      .withIndex("by_user_updated", (q) => q.eq("userId", user._id))
+      .collect()
+
+    const statuses =
+      args.status === "active"
+        ? ACTIVE_RUN_STATUS_VALUES
+        : args.status
+          ? [args.status]
+          : null
+    const pages = await Promise.all(
+      automations.map((automation) => {
+        if (!statuses) {
+          return ctx.db
+            .query("codexRuns")
+            .withIndex("by_automation_created", (q) =>
+              q.eq("automationId", automation._id)
+            )
+            .order("desc")
+            .take(limit + 1)
+        }
+        return Promise.all(
+          statuses.map((status) =>
+            ctx.db
+              .query("codexRuns")
+              .withIndex("by_automation_status_created", (q) =>
+                q.eq("automationId", automation._id).eq("status", status)
+              )
+              .order("desc")
+              .take(limit + 1)
+          )
+        ).then((byStatus) => byStatus.flat())
+      })
+    )
+
+    const merged = automations.flatMap((automation, index) =>
+      pages[index].map((run) => ({
+        automationId: automation._id,
+        automationName: automation.name,
+        createdAt: run.createdAt,
+        error: run.error,
+        finishedAt: run.finishedAt,
+        id: run._id,
+        startedAt: run.startedAt,
+        status: run.status,
+        threadId: run.threadId,
+      }))
+    )
+    merged.sort((a, b) => b.createdAt - a.createdAt)
+
+    return {
+      hasMore: merged.length > limit,
+      runs: merged.slice(0, limit),
     }
   },
 })

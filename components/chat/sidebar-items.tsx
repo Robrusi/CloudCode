@@ -108,11 +108,12 @@ export function FolderGroup({
   )
 }
 
-function SidebarItem({
+export function SidebarItem({
   chat,
   active,
   pending,
   nested = false,
+  showAutomationGlyph = true,
   childChats,
   activeId,
   onSelect,
@@ -126,6 +127,8 @@ function SidebarItem({
   active: boolean
   pending: boolean
   nested?: boolean
+  /** Rows already listed under an automation header skip the Clock glyph. */
+  showAutomationGlyph?: boolean
   childChats?: SidebarChat[]
   activeId?: Id<"threads"> | null
   onSelect: () => void
@@ -189,7 +192,7 @@ function SidebarItem({
           >
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
               <span className="flex min-w-0 items-center gap-1.5">
-                {chat.automationId ? (
+                {showAutomationGlyph && chat.automationId ? (
                   <Clock
                     aria-label="Automation"
                     className="size-3 shrink-0 text-muted-foreground"
@@ -241,7 +244,7 @@ function SidebarItem({
             >
               <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className="flex min-w-0 items-center gap-1.5">
-                  {chat.automationId ? (
+                  {showAutomationGlyph && chat.automationId ? (
                     <Clock
                       aria-label="Automation"
                       className="size-3 shrink-0 text-muted-foreground"

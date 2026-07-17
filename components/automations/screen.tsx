@@ -10,130 +10,26 @@ import {
   Plus,
   Trash2,
 } from "lucide-react"
-import { useRef, useState } from "react"
+import { useState } from "react"
 
 import { AutomationComposer } from "@/components/automations/composer"
 import { RunEventAutomationDialog } from "@/components/automations/run-event-dialog"
 import {
+  automationStatusDotClass,
   automationTriggerLabel,
   type AutomationRecord,
 } from "@/components/automations/model"
-import {
-  formatRelative,
-  formatRunTime,
-  repoLabel,
-} from "@/components/chat/format"
-import {
-  RUN_STATUS_LABEL,
-  runDotClass,
-  type RunStatus,
-} from "@/components/chat/run-status"
+import { AutomationRunsFeed, RecentRuns } from "@/components/automations/runs"
+import { formatRelative, repoLabel } from "@/components/chat/format"
 import { Button } from "@/components/ui/button"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { IconButton } from "@/components/ui/icon-button"
 import { Switch } from "@/components/ui/switch"
+import { UnderlineTabs } from "@/components/ui/underline-tabs"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { postJson } from "@/lib/http/client-json"
 import { cn } from "@/lib/shared/utils"
-
-function statusDotClass(automation: AutomationRecord) {
-  if (!automation.enabled) return "bg-muted-foreground/30"
-  switch (automation.lastRunStatus) {
-    case "running":
-      return "animate-pulse bg-foreground"
-    case "succeeded":
-      return "bg-success"
-    case "failed":
-    case "dispatch_failed":
-      return "bg-destructive"
-    default:
-      return "bg-muted-foreground/50"
-  }
-}
-
-const RECENT_RUNS_FIRST_PAGE = 5
-const RECENT_RUNS_PAGE = 10
-
-/** Lazy-loaded run history shown when a row is expanded. Starts with the
- * last 5 runs; each "Show more" loads 10 further back. */
-function RecentRuns({
-  automationId,
-  onOpenThread,
-}: {
-  automationId: Id<"automations">
-  onOpenThread: (threadId: Id<"threads">) => void
-}) {
-  const [limit, setLimit] = useState(RECENT_RUNS_FIRST_PAGE)
-  const result = useQuery(api.automations.recentRuns, { automationId, limit })
-  // Hold the previous page while a larger one loads so "Show more" appends
-  // instead of collapsing the list to a skeleton.
-  const lastResultRef = useRef(result)
-  if (result !== undefined) lastResultRef.current = result
-  const view = result ?? lastResultRef.current
-  const loading = result === undefined
-  const now = Date.now()
-
-  if (view === undefined) {
-    return (
-      <div className="space-y-2 py-2">
-        {[0, 1].map((index) => (
-          <div
-            key={index}
-            className="h-3 w-44 animate-pulse rounded bg-muted/60"
-          />
-        ))}
-      </div>
-    )
-  }
-  if (view.runs.length === 0) {
-    return <p className="py-2 text-xs text-muted-foreground/70">No runs yet.</p>
-  }
-
-  return (
-    <ol className="py-1">
-      {view.runs.map((run) => (
-        <li key={run.id}>
-          <button
-            type="button"
-            onClick={() => onOpenThread(run.threadId)}
-            title="Open chat"
-            className="group/run -ml-1.5 flex w-fit items-center gap-2 rounded-md py-1 pr-2 pl-1.5 text-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/30"
-          >
-            <span
-              aria-hidden
-              className={cn(
-                "size-1.5 shrink-0 rounded-full",
-                runDotClass(run.status as RunStatus)
-              )}
-            />
-            <span className="text-foreground/80">
-              {RUN_STATUS_LABEL[run.status as RunStatus] ?? run.status}
-            </span>
-            <span className="text-muted-foreground/80 tabular-nums">
-              {formatRunTime(run.createdAt)}
-            </span>
-            <span className="text-muted-foreground/60 tabular-nums">
-              {formatRelative(run.createdAt, now)}
-            </span>
-          </button>
-        </li>
-      ))}
-      {view.hasMore ? (
-        <li>
-          <button
-            type="button"
-            disabled={loading}
-            onClick={() => setLimit((current) => current + RECENT_RUNS_PAGE)}
-            className="-ml-1.5 rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30 disabled:opacity-60"
-          >
-            {loading ? "Loading…" : "Show more"}
-          </button>
-        </li>
-      ) : null}
-    </ol>
-  )
-}
 
 function AutomationRow({
   automation,
@@ -168,7 +64,7 @@ function AutomationRow({
         aria-hidden
         className={cn(
           "mt-[7px] size-1.5 shrink-0 rounded-full",
-          statusDotClass(automation)
+          automationStatusDotClass(automation)
         )}
       />
 
@@ -309,6 +205,7 @@ export function AutomationsScreen({
 }) {
   const automations = useQuery(api.automations.list)
   const [active, setActive] = useState<AutomationRecord | "new" | null>(null)
+  const [tab, setTab] = useState<"automations" | "runs">("automations")
   const [expandedId, setExpandedId] = useState<Id<"automations"> | null>(null)
   const [pendingDelete, setPendingDelete] = useState<AutomationRecord | null>(
     null
@@ -502,26 +399,42 @@ export function AutomationsScreen({
                 <EmptyState onCreate={() => setActive("new")} />
               ) : (
                 <>
-                  {current.length ? (
-                    <Section title="Current">
-                      {current.map((automation) => (
-                        <AutomationRow
-                          key={automation._id}
-                          {...rowProps(automation)}
-                        />
-                      ))}
-                    </Section>
-                  ) : null}
-                  {paused.length ? (
-                    <Section title="Paused">
-                      {paused.map((automation) => (
-                        <AutomationRow
-                          key={automation._id}
-                          {...rowProps(automation)}
-                        />
-                      ))}
-                    </Section>
-                  ) : null}
+                  <UnderlineTabs
+                    className="mt-6"
+                    label="Automations view"
+                    value={tab}
+                    onChange={setTab}
+                    options={[
+                      { label: "Automations", value: "automations" },
+                      { label: "Runs", value: "runs" },
+                    ]}
+                  />
+                  {tab === "runs" ? (
+                    <AutomationRunsFeed onOpenThread={onOpenThread} />
+                  ) : (
+                    <>
+                      {current.length ? (
+                        <Section title="Current">
+                          {current.map((automation) => (
+                            <AutomationRow
+                              key={automation._id}
+                              {...rowProps(automation)}
+                            />
+                          ))}
+                        </Section>
+                      ) : null}
+                      {paused.length ? (
+                        <Section title="Paused">
+                          {paused.map((automation) => (
+                            <AutomationRow
+                              key={automation._id}
+                              {...rowProps(automation)}
+                            />
+                          ))}
+                        </Section>
+                      ) : null}
+                    </>
+                  )}
                 </>
               )}
             </>

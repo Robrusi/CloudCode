@@ -13,6 +13,7 @@ import { type CSSProperties, useMemo } from "react"
 
 import { ResizeHandle } from "@/components/layout/resize-handle"
 import { repoLabel } from "@/components/chat/format"
+import { SidebarAutomationList } from "@/components/chat/sidebar-automations"
 import { FolderGroup } from "@/components/chat/sidebar-items"
 import {
   groupSidebarChats,
@@ -74,14 +75,17 @@ export function Sidebar({
     edge: "right",
     enabled: !isMobile,
   })
-  const groups = useMemo(() => groupSidebarChats(chats), [chats])
   const automationContext = sidebarThreadContext === "automations"
   const reviewContext = sidebarThreadContext === "reviews"
-  const emptyThreadsLabel = automationContext
-    ? "No automation threads yet"
-    : reviewContext
-      ? "No review threads yet"
-      : "No chats yet"
+  // The automations context renders its own grouped list, so skip the repo
+  // grouping there.
+  const groups = useMemo(
+    () => (automationContext ? [] : groupSidebarChats(chats)),
+    [automationContext, chats]
+  )
+  const emptyThreadsLabel = reviewContext
+    ? "No review threads yet"
+    : "No chats yet"
 
   return (
     <aside
@@ -161,7 +165,16 @@ export function Sidebar({
           </div>
 
           <div className="mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-4">
-            {groups.length === 0 ? (
+            {automationContext ? (
+              <SidebarAutomationList
+                chats={chats}
+                activeId={currentView === "chat" ? activeId : null}
+                onSelect={onSelect}
+                onDelete={onDelete}
+                onRename={onRename}
+                onShowAutomations={onShowAutomations}
+              />
+            ) : groups.length === 0 ? (
               <div className="px-3 pt-4 text-[0.6875rem] text-muted-foreground/80">
                 {emptyThreadsLabel}
               </div>

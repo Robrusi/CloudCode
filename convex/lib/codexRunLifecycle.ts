@@ -15,7 +15,11 @@ export const TERMINAL_RUN_STATUSES = new Set([
   "canceled",
 ])
 
-const ACTIVE_RUN_STATUS_VALUES = ["queued", "running", "canceling"] as const
+export const ACTIVE_RUN_STATUS_VALUES = [
+  "queued",
+  "running",
+  "canceling",
+] as const
 const ACTIVE_RUN_STATUSES = new Set<string>(ACTIVE_RUN_STATUS_VALUES)
 
 export function isActiveCodexRunStatus(status: Doc<"codexRuns">["status"]) {

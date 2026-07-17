@@ -296,6 +296,11 @@ export default defineSchema({
     wakeReportedAt: v.optional(v.number()),
   })
     .index("by_automation_created", ["automationId", "createdAt"])
+    .index("by_automation_status_created", [
+      "automationId",
+      "status",
+      "createdAt",
+    ])
     .index("by_parent_thread_status", ["parentThreadId", "status"])
     .index("by_review_created", ["reviewId", "createdAt"])
     .index("by_review_pr", ["reviewId", "prNumber", "createdAt"])
