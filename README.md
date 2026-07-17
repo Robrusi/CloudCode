@@ -13,7 +13,7 @@ Cloudcode is a platform for running Codex in sandboxes.
 
 - It has every tool it needs (desktop, terminal, etc)
 - Outputs videos of UI changes it tested in the desktop
-- Full enviroment setup
+- Full environment setup
 - Configure MCP servers for external integrations
 - Share project notes so agents and humans can share context
 - Connect over SSH.
