@@ -346,11 +346,23 @@ export async function requestCodexAppServerDaemon({
         )
       : undefined
     if (isRunRequest && !events.some((event) => event.type === "result")) {
-      const serializedResult = await readDaytonaTextFile(
-        sandbox,
-        resultOutputPath
-      ).catch(() => undefined)
-      if (serializedResult) emitLine(serializedResult)
+      // The daemon persists the turn result to a private file before writing
+      // it to the socket. When the streamed stdout lost the result line, this
+      // read is the last line of defense for an otherwise completed turn, so
+      // on a clean client exit retry transient failures instead of failing
+      // the whole turn.
+      const attempts = result.exitCode === 0 ? 3 : 1
+      for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        const serializedResult = await readDaytonaTextFile(
+          sandbox,
+          resultOutputPath
+        ).catch(() => undefined)
+        if (serializedResult) {
+          emitLine(serializedResult)
+          break
+        }
+        if (attempt < attempts) await wait(500)
+      }
     }
     return { events, result, turnActivitySeen, updatedAuthJson }
   } finally {
