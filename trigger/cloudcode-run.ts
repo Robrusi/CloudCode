@@ -49,6 +49,7 @@ import {
   pauseSandboxForBilling,
   type ActiveBillingSandboxSegment,
 } from "@/trigger/cloudcode-run-billing"
+import { BillingExhaustedError } from "@/lib/billing/model"
 import type { automationEventDispatch } from "@/trigger/automations"
 
 function errorMessage(error: unknown) {
@@ -221,10 +222,12 @@ export const cloudcodeRun = task({
       return billingPausePromise
     }
     const handleBillingExhausted = async (sandboxId = latestSandboxId) => {
-      await pauseLatestSandboxForBilling(sandboxId)
-      throw new Error(
-        "Infrastructure usage is exhausted. The Daytona sandbox was paused."
-      )
+      // Pausing can fail transiently; the reconcile cron also pauses exhausted
+      // sandboxes, so exhaustion still stops the run either way.
+      await pauseLatestSandboxForBilling(sandboxId).catch((error) => {
+        console.warn("Unable to pause exhausted billing sandbox.", error)
+      })
+      throw new BillingExhaustedError()
     }
     const observeSandbox = (sandboxId: string) => {
       if (!loadedUserId || sandboxObservations.has(sandboxId)) return
@@ -238,8 +241,14 @@ export const cloudcodeRun = task({
           if (result.exhausted) await handleBillingExhausted(sandboxId)
         })
         .catch((error) => {
-          failBilling(error)
-          throw error
+          // Exhaustion must stop the run; a transient observation failure must
+          // not — the minute-level billing reconcile cron re-observes this
+          // sandbox and records the missed segment.
+          if (error instanceof BillingExhaustedError) {
+            failBilling(error)
+            return
+          }
+          console.warn("Unable to observe sandbox billing.", error)
         })
       sandboxObservations.set(sandboxId, observation)
     }
@@ -466,7 +475,16 @@ export const cloudcodeRun = task({
         })
       }
 
-      const failureMessage = errorMessage(error)
+      // A billing abort unwinds the in-flight run as a generic "Run was
+      // canceled." error. Report the billing cause instead of the abort
+      // artifact so the user sees why the run actually stopped.
+      const failureError =
+        billingError === undefined
+          ? error
+          : billingError instanceof Error
+            ? billingError
+            : new Error("Billing failed.")
+      const failureMessage = errorMessage(failureError)
       const failResponse = await failWorkerRun(
         client,
         payload.runId,
@@ -481,7 +499,7 @@ export const cloudcodeRun = task({
       await notifyIntegrationRunFinished(client, payload.runId)
       streamPublisher?.publishError(failureMessage)
       await streamPublisher?.flush()
-      throw error
+      throw failureError
     } finally {
       usageMeter?.stop()
       billingAbort.cleanup()

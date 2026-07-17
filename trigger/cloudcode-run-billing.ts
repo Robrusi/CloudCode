@@ -2,6 +2,7 @@ import { usage } from "@trigger.dev/sdk"
 
 import type { Id } from "@/convex/_generated/dataModel"
 import {
+  BillingExhaustedError,
   daytonaBillingState,
   microUsdFromTriggerCents,
   type DaytonaBillingState,
@@ -18,6 +19,7 @@ import {
 } from "@/lib/codex/run-worker"
 
 const BILLING_TRIGGER_CHECKPOINT_MS = 30_000
+const BILLING_MAX_CONSECUTIVE_FLUSH_FAILURES = 3
 
 export type ActiveBillingSandboxSegment = {
   cpu: number
@@ -53,6 +55,7 @@ export function createTriggerUsageMeter({
   userId: Id<"users">
 }) {
   let checkpoint = 0
+  let consecutiveFailures = 0
   let stopped = false
   let trackedMicroUsd = 0
   let flushPromise: Promise<void> | undefined
@@ -86,11 +89,27 @@ export function createTriggerUsageMeter({
         checkpoint = nextCheckpoint
         trackedMicroUsd = totalMicroUsd
       }
+      consecutiveFailures = 0
       if (result.exhausted) await onExhausted()
     })()
       .catch((error) => {
-        failBilling(error)
-        throw error
+        // Exhaustion must stop the run. A transient usage-record failure must
+        // not: the untracked increment is retried on the next periodic flush
+        // (checkpoint and trackedMicroUsd advance only on success), so only a
+        // sustained billing outage aborts the run.
+        if (error instanceof BillingExhaustedError) {
+          failBilling(error)
+          throw error
+        }
+        consecutiveFailures += 1
+        if (consecutiveFailures >= BILLING_MAX_CONSECUTIVE_FLUSH_FAILURES) {
+          failBilling(error)
+          throw error
+        }
+        console.warn(
+          `Unable to record Trigger usage (attempt ${consecutiveFailures}); retrying on the next flush.`,
+          error
+        )
       })
       .finally(() => {
         flushPromise = undefined

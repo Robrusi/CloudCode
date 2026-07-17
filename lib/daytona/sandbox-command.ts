@@ -337,9 +337,12 @@ export async function runDaytonaCommand(
       )
 
       await Promise.race([logsPromise, wait(1_000)])
+      // This fetch backfills output the live stream dropped (including the
+      // final line a command emits right before exiting). Long commands can
+      // accumulate large logs, so give it enough room to complete.
       const logs = await withTimeout(
         sandbox.process.getSessionCommandLogs(sessionId, commandId),
-        5_000
+        15_000
       ).catch(() => undefined)
 
       if (logs) {

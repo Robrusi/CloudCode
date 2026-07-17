@@ -1,4 +1,17 @@
 export const BILLING_INFRA_USAGE_FEATURE_ID = "infra_usage"
+
+/**
+ * Thrown when a run must stop because the user's infrastructure usage is
+ * exhausted. Distinguishes exhaustion (which must abort the run) from
+ * transient billing errors (which must not) wherever billing results are
+ * observed asynchronously.
+ */
+export class BillingExhaustedError extends Error {
+  constructor() {
+    super("Infrastructure usage is exhausted. The Daytona sandbox was paused.")
+    this.name = "BillingExhaustedError"
+  }
+}
 const BILLING_MICRO_USD_PER_USD = 1_000_000
 const BILLING_MICRO_USD_PER_CENT = BILLING_MICRO_USD_PER_USD / 100
 

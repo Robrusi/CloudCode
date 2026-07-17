@@ -1134,6 +1134,9 @@ socket.on("error", (error) => {
   process.exitCode = 1
 })
 socket.on("close", () => {
-  process.exit(process.exitCode || 0)
+  // process.exit() here can truncate buffered stdout and lose the final
+  // result line. Setting exitCode instead lets the process exit naturally
+  // once stdout has drained.
+  process.exitCode = process.exitCode || 0
 })
 `
