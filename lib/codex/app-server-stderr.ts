@@ -26,6 +26,14 @@ function isBundledBubblewrapWarning(value: string) {
   )
 }
 
+// Codex CLI logs this when its models cache file is empty or stale. The CLI
+// refetches models and the turn is unaffected, but the ERROR-level line reads
+// like a run failure, so keep it out of the user-facing log stream. It stays
+// in the raw stderr diagnostics attached to real failures.
+function isModelsCacheTtlNoise(value: string) {
+  return value.toLowerCase().includes("failed to renew cache ttl")
+}
+
 export function codexAppServerStderrLogForLine(
   line: string,
   options: { bundledBubblewrapWarningAlreadyLogged?: boolean } = {}
@@ -33,6 +41,8 @@ export function codexAppServerStderrLogForLine(
   const clean = stripAnsi(line)
   const trimmed = compactLine(clean)
   if (!trimmed) return undefined
+
+  if (isModelsCacheTtlNoise(clean)) return undefined
 
   if (isBundledBubblewrapWarning(clean)) {
     if (options.bundledBubblewrapWarningAlreadyLogged) return undefined

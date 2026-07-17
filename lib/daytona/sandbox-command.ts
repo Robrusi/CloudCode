@@ -3,9 +3,11 @@ import { randomUUID } from "node:crypto"
 import type { Sandbox } from "@daytona/sdk"
 
 import { envNumber } from "@/lib/daytona/env"
+import { isTransientDaytonaApiError } from "@/lib/daytona/transient-errors"
 
 const DEFAULT_COMMAND_STATUS_POLL_MS = 250
 const DEFAULT_COMMAND_STATUS_MAX_POLL_MS = 5_000
+const MAX_CONSECUTIVE_TRANSIENT_POLL_FAILURES = 6
 
 export type DaytonaCommandResult = {
   exitCode: number
@@ -194,10 +196,33 @@ async function waitForCommandExit(
     streamJustEnded = true
   }
   let streamEndSignal = streamEnded?.then(markStreamEnded, markStreamEnded)
-  let command = await sandbox.process.getSessionCommand(sessionId, commandId)
+  // The status poll is a read-only request that runs thousands of times over
+  // a long command, so a transient Daytona API failure (gateway 502s, network
+  // blips) must not kill the run. Only a sustained outage surfaces.
+  let consecutivePollFailures = 0
+  const pollCommandStatus = async () => {
+    try {
+      const polled = await sandbox.process.getSessionCommand(
+        sessionId,
+        commandId
+      )
+      consecutivePollFailures = 0
+      return polled
+    } catch (error) {
+      consecutivePollFailures += 1
+      if (
+        !isTransientDaytonaApiError(error) ||
+        consecutivePollFailures >= MAX_CONSECUTIVE_TRANSIENT_POLL_FAILURES
+      ) {
+        throw error
+      }
+      return undefined
+    }
+  }
+  let command = await pollCommandStatus()
 
   while (
-    command.exitCode === undefined &&
+    command?.exitCode === undefined &&
     (deadline === undefined || Date.now() < deadline)
   ) {
     if (signal?.aborted) {
@@ -218,10 +243,10 @@ async function waitForCommandExit(
       throw new Error("Run was canceled.")
     }
     pollMs = Math.min(maxPollMs, Math.round(pollMs * 1.5))
-    command = await sandbox.process.getSessionCommand(sessionId, commandId)
+    command = (await pollCommandStatus()) ?? command
   }
 
-  return command.exitCode ?? 124
+  return command?.exitCode ?? 124
 }
 
 function wait(ms: number) {
