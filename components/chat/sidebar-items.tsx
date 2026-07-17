@@ -24,8 +24,8 @@ export function FolderGroup({
   items,
   activeId,
   expanded,
+  filterKey = "",
   open,
-  showAll = false,
   subtreeOpen,
   onExpandedChange,
   onOpenChange,
@@ -43,10 +43,11 @@ export function FolderGroup({
    * useSidebarFolderState) so it survives this group unmounting while a
    * filter temporarily removes its repo. */
   expanded: boolean
+  /** Identity of the active search/filter pass, "" while inactive (see
+   * sidebarThreadFilterKey). While non-empty the preview cap lifts so every
+   * match stays visible. */
+  filterKey?: string
   open: boolean
-  /** An active search/filter lifts the preview cap so every match stays
-   * visible. */
-  showAll?: boolean
   /** Sidebar-owned factory-subtree expansion, keyed by root thread id —
    * survives filtering unmounting the whole subtree. */
   subtreeOpen: (rootId: Id<"threads">) => boolean
@@ -58,14 +59,17 @@ export function FolderGroup({
   onRename: (id: Id<"threads">, title: string) => void
   onNewChatInRepo: (repoUrl: string) => void
 }) {
+  const showAll = filterKey !== ""
   // While a search/filter is active the group presents as open so its matches
   // show, via a transient override that leaves the persistent collapse state
   // untouched — clearing the filter restores exactly what the user had. The
-  // override resets whenever filtering toggles.
+  // override resets whenever the filter identity changes, so a new query
+  // presents its matches even if the group was collapsed against the
+  // previous one.
   const [filteredOpen, setFilteredOpen] = useState<boolean | null>(null)
-  const [prevShowAll, setPrevShowAll] = useState(showAll)
-  if (prevShowAll !== showAll) {
-    setPrevShowAll(showAll)
+  const [prevFilterKey, setPrevFilterKey] = useState(filterKey)
+  if (prevFilterKey !== filterKey) {
+    setPrevFilterKey(filterKey)
     setFilteredOpen(null)
   }
   const effectiveOpen = showAll ? (filteredOpen ?? true) : open
@@ -119,8 +123,8 @@ export function FolderGroup({
               active={node.chat.id === activeId}
               activeId={activeId}
               childrenOpen={subtreeOpen(node.chat.id)}
+              filterKey={filterKey}
               pending={node.chat.pending}
-              revealChildren={showAll}
               onChildrenOpenChange={(open) =>
                 onSubtreeOpenChange(node.chat.id, open)
               }
@@ -155,8 +159,8 @@ export function SidebarItem({
   active,
   pending,
   childrenOpen: childrenOpenProp,
+  filterKey = "",
   nested = false,
-  revealChildren = false,
   showAutomationGlyph = true,
   childChats,
   activeId,
@@ -175,10 +179,11 @@ export function SidebarItem({
    * survives this item unmounting while filtered away. Lists that never
    * filter rows out (automations) omit it and fall back to local state. */
   childrenOpen?: boolean
+  /** Identity of the active search/filter pass, "" while inactive. While
+   * non-empty a collapsed dispatch subtree presents as open, so the child
+   * that caused the subtree to match is visible. */
+  filterKey?: string
   nested?: boolean
-  /** While a search/filter is active a collapsed dispatch subtree presents
-   * as open, so the child that caused the subtree to match is visible. */
-  revealChildren?: boolean
   /** Rows already listed under an automation header skip the Clock glyph. */
   showAutomationGlyph?: boolean
   childChats?: SidebarChat[]
@@ -197,15 +202,17 @@ export function SidebarItem({
   const [localChildrenOpen, setLocalChildrenOpen] = useState(true)
   const childrenOpen = childrenOpenProp ?? localChildrenOpen
   const setChildrenOpen = onChildrenOpenChange ?? setLocalChildrenOpen
+  const revealChildren = filterKey !== ""
   // Same transient pattern as FolderGroup: the override presents the subtree
-  // open while filters are active, resets when filtering toggles, and leaves
-  // the persistent childrenOpen state to restore afterwards.
+  // open while filters are active, resets whenever the filter identity
+  // changes, and leaves the persistent childrenOpen state to restore
+  // afterwards.
   const [filteredChildrenOpen, setFilteredChildrenOpen] = useState<
     boolean | null
   >(null)
-  const [prevReveal, setPrevReveal] = useState(revealChildren)
-  if (prevReveal !== revealChildren) {
-    setPrevReveal(revealChildren)
+  const [prevFilterKey, setPrevFilterKey] = useState(filterKey)
+  if (prevFilterKey !== filterKey) {
+    setPrevFilterKey(filterKey)
     setFilteredChildrenOpen(null)
   }
   const effectiveChildrenOpen = revealChildren

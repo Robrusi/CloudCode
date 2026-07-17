@@ -17,6 +17,7 @@ import { SidebarAutomationList } from "@/components/chat/sidebar-automations"
 import { FolderGroup } from "@/components/chat/sidebar-items"
 import {
   groupSidebarChats,
+  sidebarThreadFilterKey,
   type SidebarChat,
 } from "@/components/chat/sidebar-model"
 import { SidebarSettingsNav } from "@/components/chat/sidebar-settings-nav"
@@ -235,8 +236,8 @@ export function Sidebar({
                       items={g.items}
                       activeId={currentView === "chat" ? activeId : null}
                       expanded={folder.expanded}
+                      filterKey={sidebarThreadFilterKey(threadFilters.options)}
                       open={folder.open}
-                      showAll={threadFilters.filtersActive}
                       subtreeOpen={folders.subtreeOpen}
                       onExpandedChange={(expanded) =>
                         folders.updateFolder(g.repo, { expanded })

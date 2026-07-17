@@ -38,6 +38,17 @@ export function hasActiveSidebarThreadFilters(
   return options.filter !== "all" || options.query.trim().length > 0
 }
 
+/** Identity of the active filter pass, "" while filters are inactive. Rows
+ * reset their transient presentation overrides when this changes, so a new
+ * query or status filter presents its matches afresh instead of inheriting
+ * collapse choices made against the previous one. */
+export function sidebarThreadFilterKey(
+  options: Pick<SidebarThreadListOptions, "filter" | "query">
+) {
+  if (!hasActiveSidebarThreadFilters(options)) return ""
+  return `${options.filter}|${sidebarQueryTokens(options.query).join(" ")}`
+}
+
 /** One sidebar row: a thread plus the factory-dispatched threads nested
  * under it. `latest` is the subtree's most recent activity, so a working
  * child keeps its root sorted to the top. */
