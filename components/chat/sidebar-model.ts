@@ -1,9 +1,11 @@
 import type { Id } from "@/convex/_generated/dataModel"
+import { repoLabel } from "@/components/chat/format"
 import type { SandboxState } from "@/components/chat/sandbox-types"
 
 export type SidebarChat = {
   automationId?: Id<"automations">
   reviewId?: Id<"reviews">
+  createdAt: number
   factoryRootThreadId?: Id<"threads">
   id: Id<"threads">
   lastUserMessageAt: number
@@ -12,6 +14,39 @@ export type SidebarChat = {
   sandboxState?: SandboxState
   title: string
   updatedAt: number
+}
+
+export type SidebarThreadSort = "activity" | "created" | "oldest" | "title"
+
+export type SidebarThreadFilter = "all" | "running" | "sandbox"
+
+export type SidebarThreadListOptions = {
+  filter: SidebarThreadFilter
+  query: string
+  sort: SidebarThreadSort
+}
+
+export const DEFAULT_SIDEBAR_THREAD_OPTIONS: SidebarThreadListOptions = {
+  filter: "all",
+  query: "",
+  sort: "activity",
+}
+
+export function hasActiveSidebarThreadFilters(
+  options: Pick<SidebarThreadListOptions, "filter" | "query">
+) {
+  return options.filter !== "all" || options.query.trim().length > 0
+}
+
+/** Identity of the active filter pass, "" while filters are inactive. Rows
+ * reset their transient presentation overrides when this changes, so a new
+ * query or status filter presents its matches afresh instead of inheriting
+ * collapse choices made against the previous one. */
+export function sidebarThreadFilterKey(
+  options: Pick<SidebarThreadListOptions, "filter" | "query">
+) {
+  if (!hasActiveSidebarThreadFilters(options)) return ""
+  return `${options.filter}|${sidebarQueryTokens(options.query).join(" ")}`
 }
 
 /** One sidebar row: a thread plus the factory-dispatched threads nested
@@ -31,6 +66,79 @@ export type SidebarChatGroup = {
 
 export function isSidebarNodeRunning(node: SidebarChatNode) {
   return node.chat.pending || node.children.some((child) => child.pending)
+}
+
+export function nodeHasLiveSandbox(node: SidebarChatNode) {
+  return (
+    node.chat.sandboxState === "running" ||
+    node.children.some((child) => child.sandboxState === "running")
+  )
+}
+
+function sidebarQueryTokens(query: string) {
+  return query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+}
+
+function chatMatchesTokens(chat: SidebarChat, tokens: string[]) {
+  const haystack =
+    `${chat.title || "Untitled"} ${repoLabel(chat.repoUrl)}`.toLowerCase()
+  return tokens.every((token) => haystack.includes(token))
+}
+
+/** Nodes pass a filter as whole subtrees: a match on the root or on any
+ * dispatched child keeps the node, so a hit never loses its dispatch
+ * context.
+ *
+ * Search deliberately covers only the loaded sidebar feed — the newest
+ * THREAD_LIST_LIMIT threads served by convex/chats.ts. It narrows the
+ * visible list; querying full thread history would be a server-side search
+ * feature with its own index and UX. */
+export function filterSidebarChatNodes(
+  nodes: SidebarChatNode[],
+  options: Pick<SidebarThreadListOptions, "filter" | "query">
+): SidebarChatNode[] {
+  const tokens = sidebarQueryTokens(options.query)
+  return nodes.filter((node) => {
+    if (options.filter === "running" && !isSidebarNodeRunning(node)) {
+      return false
+    }
+    if (options.filter === "sandbox" && !nodeHasLiveSandbox(node)) return false
+    if (tokens.length === 0) return true
+    return (
+      chatMatchesTokens(node.chat, tokens) ||
+      node.children.some((child) => chatMatchesTokens(child, tokens))
+    )
+  })
+}
+
+function nodeTitle(node: SidebarChatNode) {
+  return node.chat.title || "Untitled"
+}
+
+export function sortSidebarChatNodes(
+  nodes: SidebarChatNode[],
+  sort: SidebarThreadSort
+): SidebarChatNode[] {
+  const sorted = [...nodes]
+  switch (sort) {
+    case "created":
+      sorted.sort((a, b) => b.chat.createdAt - a.chat.createdAt)
+      break
+    case "oldest":
+      sorted.sort((a, b) => a.latest - b.latest)
+      break
+    case "title":
+      sorted.sort(
+        (a, b) =>
+          nodeTitle(a).localeCompare(nodeTitle(b), undefined, {
+            sensitivity: "base",
+          }) || b.latest - a.latest
+      )
+      break
+    default:
+      sorted.sort((a, b) => b.latest - a.latest)
+  }
+  return sorted
 }
 
 /** One node per top-level thread with factory-dispatched children nested
@@ -54,6 +162,10 @@ export function buildSidebarChatNodes(chats: SidebarChat[]): SidebarChatNode[] {
   }
 
   const nodes = topLevel.map((chat) => {
+    // Children always order by recent activity, regardless of the selected
+    // sidebar sort: a dispatch tree is one sort unit ranked by its root
+    // (see sortSidebarChatNodes), and recency is the only meaningful order
+    // among auto-dispatched runs under it.
     const children = (childrenByRoot.get(chat.id as string) ?? []).sort(
       (a, b) => b.lastUserMessageAt - a.lastUserMessageAt
     )
@@ -66,15 +178,23 @@ export function buildSidebarChatNodes(chats: SidebarChat[]): SidebarChatNode[] {
   return nodes.sort((a, b) => b.latest - a.latest)
 }
 
-export function groupSidebarChats(chats: SidebarChat[]): SidebarChatGroup[] {
-  // Nodes arrive newest-first, so pushes keep group items sorted and the
-  // first node of a group carries its latest activity.
+export function groupSidebarChats(
+  chats: SidebarChat[],
+  options: SidebarThreadListOptions = DEFAULT_SIDEBAR_THREAD_OPTIONS
+): SidebarChatGroup[] {
+  const nodes = sortSidebarChatNodes(
+    filterSidebarChatNodes(buildSidebarChatNodes(chats), options),
+    options.sort
+  )
+  // Nodes arrive pre-sorted, so pushes keep group items ordered and map
+  // insertion order ranks groups by their best-ranked node.
   const map = new Map<string, SidebarChatGroup>()
-  for (const node of buildSidebarChatNodes(chats)) {
+  for (const node of nodes) {
     const key = node.chat.repoUrl || ""
     const group = map.get(key)
     if (group) {
       group.items.push(node)
+      group.latest = Math.max(group.latest, node.latest)
     } else {
       map.set(key, {
         items: [node],
@@ -83,7 +203,17 @@ export function groupSidebarChats(chats: SidebarChat[]): SidebarChatGroup[] {
       })
     }
   }
-  return Array.from(map.values()).sort((a, b) => b.latest - a.latest)
+  const groups = Array.from(map.values())
+  // Title sort lists folders alphabetically; every other sort keeps folders
+  // ranked by their best node via insertion order.
+  if (options.sort === "title") {
+    groups.sort((a, b) =>
+      repoLabel(a.repo).localeCompare(repoLabel(b.repo), undefined, {
+        sensitivity: "base",
+      })
+    )
+  }
+  return groups
 }
 
 export function relativeTime(timestamp: number) {

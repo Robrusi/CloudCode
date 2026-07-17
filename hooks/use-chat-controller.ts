@@ -31,6 +31,7 @@ import { useChatThreadActions } from "@/hooks/use-chat-thread-actions"
 import { useChatThreadNotes } from "@/hooks/use-chat-thread-notes"
 import { useChatWorkspacePanels } from "@/hooks/use-chat-workspace-panels"
 import { MOBILE_MEDIA_QUERY, useIsMobile } from "@/hooks/use-is-mobile"
+import { useSidebarThreadFilters } from "@/hooks/use-sidebar-thread-filters"
 import { useStoreUserEffect } from "@/hooks/use-store-user-effect"
 import type { BranchMode, Speed, Thinking } from "@/lib/chat/options"
 
@@ -679,6 +680,13 @@ export function useChatController(): ChatShellProps {
           (view === "chat" && Boolean(activeAnchor?.reviewId))
         ? "reviews"
         : "chats"
+  // Owned here — not in the sidebar — because mobile navigation unmounts the
+  // sidebar and this state must survive it. The settings view maps to the
+  // "chats" context above; passing null instead keeps a transient settings
+  // visit from resetting the filters of the context the user returns to.
+  const sidebarThreadFilters = useSidebarThreadFilters(
+    view === "settings" ? null : sidebarThreadContext
+  )
   const visibleSidebarChats = useMemo(() => {
     return sidebarChats.filter((chat) => {
       const anchor = contextAnchorFor(chat)
@@ -811,6 +819,7 @@ export function useChatController(): ChatShellProps {
         onShowSettings: () => showSettings(),
         sidebarThreadContext,
         settingsSection,
+        threadFilters: sidebarThreadFilters,
       },
     },
     sidePanels: {
