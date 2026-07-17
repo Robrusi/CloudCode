@@ -14,11 +14,16 @@ import {
   addIssueCommentReaction,
   addPullRequestReaction,
   createIssueComment,
+  createPullRequestReview,
   getPullRequest,
+  GitHubApiError,
   getPullRequestCommits,
   getPullRequestConversation,
+  removePullRequestReviewers,
+  requestPullRequestReviewers,
 } from "@/lib/github/pull-requests"
 import { parseGitHubRepoUrl, type GitHubRepo } from "@/lib/github/repo"
+import { cloudcodeBotLogin } from "@/lib/github/webhook"
 import { reviewAllowsAuthor } from "@/lib/reviews/config"
 import { buildReviewRerunContext } from "@/lib/reviews/prompt"
 import {
@@ -132,6 +137,60 @@ async function rerunContextForReview({
   }
 }
 
+/** A pending "review requested" entry must not outlive a run that will never
+ * submit a review. The badge is shared, per-login PR state though: when a
+ * sibling run (a newer head SHA, or another review config on the repository)
+ * is still underway, it stays — that run resolves it with its own submission.
+ * Reuses the caller's token when one is in scope and mints otherwise, because
+ * the run can outlive the ~1h token it started with. Best-effort — the stale
+ * badge is cosmetic and never worth failing the task over. */
+async function withdrawReviewRequest({
+  client,
+  excludeRunId,
+  prNumber,
+  repo,
+  repoUrl,
+  token,
+  userId,
+}: {
+  client: ReturnType<typeof workerConvexClient>
+  excludeRunId: Id<"codexRuns">
+  prNumber: number
+  repo: GitHubRepo
+  repoUrl: string
+  token?: string
+  userId: Id<"users">
+}) {
+  const botLogin = cloudcodeBotLogin()
+  if (!botLogin) return
+  try {
+    const hasActiveSibling = await client.query(
+      api.reviews.workerHasActiveRunForPr,
+      {
+        excludeRunId,
+        prNumber,
+        repoUrl,
+        workerSecret: getWorkerSecret(),
+      }
+    )
+    if (hasActiveSibling) return
+
+    const withdrawToken =
+      token ??
+      (await createWorkerGitHubRepoCredential(client, { repoUrl, userId }))
+        ?.token
+    if (!withdrawToken) return
+    await removePullRequestReviewers({
+      number: prNumber,
+      repo,
+      reviewers: [botLogin],
+      token: withdrawToken,
+    })
+  } catch (error) {
+    console.warn("Unable to withdraw the review request.", error)
+  }
+}
+
 /** The assistant message interleaves progress narration with encoded
  * <codex-tool> markers the chat UI renders as command chips; GitHub strips
  * the tags and shows the raw payloads. The PR comment wants only the final
@@ -227,7 +286,8 @@ export const reviewDispatch = task({
 
 // Runs one review: guards (enabled, billing), headless GitHub token mint, run
 // + thread creation in Convex, the regular cloudcode-run pipeline, and then
-// posts the report as a comment on the pull request.
+// submits the report as a formal pull request review. While the run is
+// underway the app is listed as a requested reviewer.
 export const reviewRun = task({
   catchError: ({ error }: { error: unknown }) =>
     error instanceof ReviewExecutionError ? { skipRetrying: true } : undefined,
@@ -287,6 +347,7 @@ export const reviewRun = task({
       threadId: Id<"threads">
       userId: Id<"users">
     }
+    let pr: ReviewPullRequestContext
     try {
       const billing = await client.action(
         api.billing.checkInfraAccessForWorker,
@@ -313,8 +374,8 @@ export const reviewRun = task({
       }
 
       // Manual runs arrive with just a PR number; load the rest from GitHub.
-      let pr = payload.pr
-      if (!pr) {
+      let prContext = payload.pr
+      if (!prContext) {
         if (!payload.prNumber) {
           await recordDispatchFailure("prNumber is required for manual runs.")
           return { dispatched: false, reason: "missing_pr" as const }
@@ -330,7 +391,7 @@ export const reviewRun = task({
           )
           return { dispatched: false, reason: "pr_not_found" as const }
         }
-        pr = {
+        prContext = {
           authorLogin: summary.authorLogin,
           baseRef: summary.baseRef,
           body: summary.body,
@@ -346,7 +407,7 @@ export const reviewRun = task({
       // The webhook parser needs dispatch-only fields such as `draft`, while
       // Convex validates an exact object shape. Normalize here as a second
       // boundary guard so rolling or out-of-order deployments remain safe.
-      pr = normalizeReviewPullRequestContext(pr)
+      pr = normalizeReviewPullRequestContext(prContext)
 
       // Re-reviews (new commits) and mentions carry the PR's history so the
       // agent can confirm resolved findings and honor the request.
@@ -399,11 +460,16 @@ export const reviewRun = task({
       created = result
 
       if (!created.resumed) {
-        // 👀 on GitHub the moment the review is actually underway: on the
-        // triggering comment for mentions, on the PR itself otherwise.
-        // Best-effort — a failed reaction never blocks the review.
-        await (
-          payload.comment
+        // Two independent best-effort signals, in parallel: 👀 on GitHub the
+        // moment the review is actually underway (on the triggering comment
+        // for mentions, on the PR itself otherwise), and the app requested as
+        // a reviewer so the PR shows a pending "review requested" entry that
+        // the submitted review later resolves. GitHub refuses the reviewer
+        // request on PRs the app itself authored; the rejection leaves a
+        // breadcrumb, or a persistently refusing repo would be undiagnosable.
+        const botLogin = cloudcodeBotLogin()
+        await Promise.all([
+          (payload.comment
             ? addIssueCommentReaction({
                 commentId: payload.comment.id,
                 content: "eyes",
@@ -416,9 +482,28 @@ export const reviewRun = task({
                 repo,
                 token: credential.token,
               })
-        ).catch((reactionError) => {
-          console.warn("Unable to add the eyes reaction.", reactionError)
-        })
+          ).catch((reactionError) => {
+            console.warn("Unable to add the eyes reaction.", reactionError)
+          }),
+          botLogin
+            ? requestPullRequestReviewers({
+                number: pr.number,
+                repo,
+                reviewers: [botLogin],
+                token: credential.token,
+              })
+                .then((requested) => {
+                  if (!requested.ok) {
+                    console.warn(
+                      `GitHub declined the reviewer request on PR #${pr.number}: ${requested.message}`
+                    )
+                  }
+                })
+                .catch((requestError) => {
+                  console.warn("Unable to request the review.", requestError)
+                })
+            : null,
+        ])
       }
     } catch (error) {
       // Setup and control-plane errors are safe to retry. Only count the
@@ -429,128 +514,220 @@ export const reviewRun = task({
       throw error
     }
 
-    let outcome = created.resumed
-      ? await client.query(api.reviews.workerGetRunOutcome, {
+    // Everything below runs under one reconciliation boundary for the
+    // requested-reviewer badge: a submitted review resolves it on GitHub's
+    // side; every other terminal exit — failed run, empty report, posting
+    // exhausted, fallback comment — withdraws it exactly once in the finally.
+    // A retryable throw keeps it, because the next attempt still reviews.
+    let postToken: string | undefined
+    let retrying = false
+    let reviewSubmitted = false
+    try {
+      let outcome = created.resumed
+        ? await client.query(api.reviews.workerGetRunOutcome, {
+            runId: created.runId,
+            workerSecret,
+          })
+        : null
+      if (outcome?.reviewCommentUrl) {
+        // A previous attempt already posted. A formal review resolved the
+        // pending request; a fallback comment did not, so let the finally
+        // reconcile based on which kind of URL was recorded.
+        reviewSubmitted = outcome.reviewCommentUrl.includes(
+          "#pullrequestreview-"
+        )
+        return {
+          dispatched: true,
+          commented: true,
+          commentUrl: outcome.reviewCommentUrl,
           runId: created.runId,
-          workerSecret,
-        })
-      : null
-    if (outcome?.reviewCommentUrl) {
-      return {
-        dispatched: true,
-        commented: true,
-        commentUrl: outcome.reviewCommentUrl,
+        }
+      }
+
+      // From here the run and its pending assistant message exist; failures
+      // must unwind through failWorkerRun so the thread is not left pending.
+      if (outcome?.status !== "succeeded") {
+        try {
+          await tasks.triggerAndWait<typeof cloudcodeRun>(
+            "cloudcode-run",
+            { runId: created.runId },
+            {
+              idempotencyKey: created.runId,
+              tags: [`user:${created.userId}`, `review:${payload.reviewId}`],
+            }
+          )
+        } catch (error) {
+          await failWorkerRun(client, created.runId, errorMessage(error)).catch(
+            (failError) => {
+              console.warn("Unable to mark review run failed.", failError)
+            }
+          )
+          // Retrying an agent execution can spend another sandbox run and
+          // make side effects unpredictable. The child task owns its own
+          // retries.
+          throw new ReviewExecutionError(error)
+        }
+      }
+
+      // Convex is the source of truth for the outcome: cloudcode-run records
+      // success/failure/cancellation there through the shared worker
+      // mutations.
+      outcome = await client.query(api.reviews.workerGetRunOutcome, {
         runId: created.runId,
+        workerSecret,
+      })
+      if (!outcome || outcome.status !== "succeeded") {
+        return {
+          dispatched: true,
+          commented: false,
+          runId: created.runId,
+          runStatus: outcome?.status,
+        }
       }
-    }
-
-    // From here the run and its pending assistant message exist; failures
-    // must unwind through failWorkerRun so the thread is not left pending.
-    if (outcome?.status !== "succeeded") {
-      try {
-        await tasks.triggerAndWait<typeof cloudcodeRun>(
-          "cloudcode-run",
-          { runId: created.runId },
-          {
-            idempotencyKey: created.runId,
-            tags: [`user:${created.userId}`, `review:${payload.reviewId}`],
-          }
-        )
-      } catch (error) {
-        await failWorkerRun(client, created.runId, errorMessage(error)).catch(
-          (failError) => {
-            console.warn("Unable to mark review run failed.", failError)
-          }
-        )
-        // Retrying an agent execution can spend another sandbox run and make
-        // side effects unpredictable. The child task owns its own retries.
-        throw new ReviewExecutionError(error)
+      const report = reviewReportFromContent(outcome.content)
+      if (!report || !outcome.prNumber) {
+        await client
+          .mutation(api.reviews.workerRecordCommentFailure, {
+            error: "Review finished without a report to post.",
+            reviewId: payload.reviewId,
+            workerSecret,
+          })
+          .catch((recordError) => {
+            console.warn("Unable to record comment failure.", recordError)
+          })
+        return { dispatched: true, commented: false, runId: created.runId }
       }
-    }
 
-    // Convex is the source of truth for the outcome: cloudcode-run records
-    // success/failure/cancellation there through the shared worker mutations.
-    outcome = await client.query(api.reviews.workerGetRunOutcome, {
-      runId: created.runId,
-      workerSecret,
-    })
-    if (!outcome || outcome.status !== "succeeded") {
-      return {
-        dispatched: true,
-        commented: false,
-        runId: created.runId,
-        runStatus: outcome?.status,
-      }
-    }
-    const report = reviewReportFromContent(outcome.content)
-    if (!report || !outcome.prNumber) {
-      await client
-        .mutation(api.reviews.workerRecordCommentFailure, {
-          error: "Review finished without a report to post.",
-          reviewId: payload.reviewId,
-          workerSecret,
-        })
-        .catch((recordError) => {
-          console.warn("Unable to record comment failure.", recordError)
-        })
-      return { dispatched: true, commented: false, runId: created.runId }
-    }
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "")
+      const footerLink = appUrl
+        ? `[Open the review thread](${appUrl}/?thread=${created.threadId})`
+        : "Review thread available in Cloudcode."
+      const commentBody = `${report}\n\n---\n_Reviewed by Cloudcode · ${footerLink}_`
+      const prNumber = outcome.prNumber
 
-    // The run can outlive the ~1h installation token, so mint a fresh one
-    // for the comment.
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "")
-    const footerLink = appUrl
-      ? `[Open the review thread](${appUrl}/?thread=${created.threadId})`
-      : "Review thread available in Cloudcode."
-    const commentBody = `${report}\n\n---\n_Reviewed by Cloudcode · ${footerLink}_`
-
-    let lastError: unknown
-    for (let attempt = 1; attempt <= COMMENT_POST_ATTEMPTS; attempt += 1) {
-      try {
+      // The run can outlive the ~1h installation token it started with, so
+      // posting mints fresh ones.
+      const mintPostToken = async () => {
         const credential = await createWorkerGitHubRepoCredential(client, {
           repoUrl: review.repoUrl,
           userId: review.userId,
         })
         if (!credential?.token) throw new Error(GITHUB_ACCESS_ERROR)
+        postToken = credential.token
+        return postToken
+      }
 
-        const comment = await createIssueComment({
-          body: commentBody,
-          number: outcome.prNumber,
-          repo,
-          token: credential.token,
-        })
-        await client.mutation(api.reviews.workerRecordCommentPosted, {
-          commentUrl: comment.htmlUrl ?? "",
-          runId: created.runId,
-          workerSecret,
-        })
-
-        return {
-          dispatched: true,
-          commented: true,
-          commentUrl: comment.htmlUrl,
-          runId: created.runId,
+      // Posting is not idempotent, so each attempt posts at most once, and
+      // deterministic GitHub rejections (4xx) fail fast — retrying cannot
+      // change them.
+      const postWithRetries = async (
+        post: (token: string) => Promise<{ htmlUrl?: string }>
+      ): Promise<{ htmlUrl?: string } | { postError: unknown }> => {
+        let lastError: unknown
+        for (let attempt = 1; attempt <= COMMENT_POST_ATTEMPTS; attempt += 1) {
+          try {
+            return await post(await mintPostToken())
+          } catch (error) {
+            lastError = error
+            if (error instanceof GitHubApiError && error.status < 500) break
+            if (attempt < COMMENT_POST_ATTEMPTS) {
+              await new Promise((resolve) =>
+                setTimeout(resolve, attempt * 5_000)
+              )
+            }
+          }
         }
-      } catch (error) {
-        lastError = error
-        if (attempt < COMMENT_POST_ATTEMPTS) {
-          await new Promise((resolve) => setTimeout(resolve, attempt * 5_000))
+        return { postError: lastError }
+      }
+
+      // A formal review submission (not an issue comment) so the app lands
+      // in the PR's Reviewers list and resolves its pending review request.
+      let posted = await postWithRetries((token) =>
+        createPullRequestReview({
+          body: commentBody,
+          number: prNumber,
+          repo,
+          token,
+        })
+      )
+      let reviewError: unknown
+      if ("postError" in posted) {
+        reviewError = posted.postError
+        // GitHub can refuse review submissions in cases where a plain
+        // comment is still accepted (e.g. the app authored the PR). The
+        // report must not be lost, so degrade to the conversation thread.
+        posted = await postWithRetries((token) =>
+          createIssueComment({
+            body: commentBody,
+            number: prNumber,
+            repo,
+            token,
+          })
+        )
+      } else {
+        reviewSubmitted = true
+      }
+
+      if ("postError" in posted) {
+        // The report still lives in the thread, but a review that never
+        // posts is a broken setup — count it toward the auto-disable failure
+        // streak, naming both blockers so neither hides the other.
+        await client
+          .mutation(api.reviews.workerRecordCommentFailure, {
+            error: `Unable to post the PR review: ${errorMessage(reviewError)} The fallback comment also failed: ${errorMessage(posted.postError)}`,
+            reviewId: payload.reviewId,
+            workerSecret,
+          })
+          .catch((recordError) => {
+            console.warn("Unable to record comment failure.", recordError)
+          })
+        return { dispatched: true, commented: false, runId: created.runId }
+      }
+
+      // The report is live on GitHub from here: recording its URL retries on
+      // its own, and a record failure must never re-post the review or count
+      // toward the failure streak.
+      const commentUrl = posted.htmlUrl
+      for (let attempt = 1; attempt <= COMMENT_POST_ATTEMPTS; attempt += 1) {
+        try {
+          await client.mutation(api.reviews.workerRecordCommentPosted, {
+            commentUrl: commentUrl ?? "",
+            runId: created.runId,
+            workerSecret,
+          })
+          break
+        } catch (recordError) {
+          if (attempt < COMMENT_POST_ATTEMPTS) {
+            await new Promise((resolve) => setTimeout(resolve, attempt * 1_000))
+          } else {
+            console.warn("Unable to record the posted review URL.", recordError)
+          }
         }
       }
+
+      return {
+        dispatched: true,
+        commented: true,
+        commentUrl,
+        runId: created.runId,
+      }
+    } catch (error) {
+      retrying =
+        !(error instanceof ReviewExecutionError) &&
+        ctx.attempt.number < REVIEW_RUN_MAX_ATTEMPTS
+      throw error
+    } finally {
+      if (!reviewSubmitted && !retrying) {
+        await withdrawReviewRequest({
+          client,
+          excludeRunId: created.runId,
+          prNumber: pr.number,
+          repo,
+          repoUrl: review.repoUrl,
+          token: postToken,
+          userId: review.userId,
+        })
+      }
     }
-
-    // The report still lives in the thread, but a review that never posts is
-    // a broken setup — count it toward the auto-disable failure streak.
-    await client
-      .mutation(api.reviews.workerRecordCommentFailure, {
-        error: `Unable to post the PR comment: ${errorMessage(lastError)}`,
-        reviewId: payload.reviewId,
-        workerSecret,
-      })
-      .catch((recordError) => {
-        console.warn("Unable to record comment failure.", recordError)
-      })
-
-    return { dispatched: true, commented: false, runId: created.runId }
   },
 })

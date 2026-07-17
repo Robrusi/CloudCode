@@ -180,6 +180,20 @@ function optionalString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
 }
 
+/** Thrown by write helpers when GitHub rejects a request. `status` lets
+ * callers separate deterministic rejections (4xx — retrying cannot help)
+ * from transient failures worth retrying. */
+export class GitHubApiError extends Error {
+  override name = "GitHubApiError"
+
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message)
+  }
+}
+
 async function githubFetch<T>(
   url: string,
   token: string | undefined,
@@ -802,6 +816,84 @@ export async function addIssueCommentReaction({
   return result.ok
 }
 
+// Submits a formal pull request review (a COMMENT verdict) so the author
+// shows up in the PR's Reviewers list, instead of a plain issue comment that
+// only lands in the conversation thread.
+export async function createPullRequestReview({
+  body,
+  number,
+  repo,
+  token,
+}: {
+  body: string
+  number: number
+  repo: GitHubRepo
+  token?: string
+}): Promise<{ htmlUrl?: string }> {
+  const result = await githubFetch<{ html_url?: unknown }>(
+    `${githubRepoApiUrl(repo)}/pulls/${number}/reviews`,
+    token,
+    {
+      body: JSON.stringify({ body, event: "COMMENT" }),
+      method: "POST",
+    }
+  )
+
+  if (!result.ok) throw new GitHubApiError(result.message, result.status)
+
+  return { htmlUrl: optionalString(result.data.html_url) }
+}
+
+/** Marks the pull request as awaiting review from the given logins. GitHub
+ * rejects logins without repository access and the PR author, so treat a
+ * non-ok result as "the pending-reviewer badge is unavailable" (log the
+ * message as the breadcrumb), not as a failure of the review itself. */
+export async function requestPullRequestReviewers({
+  number,
+  repo,
+  reviewers,
+  token,
+}: {
+  number: number
+  repo: GitHubRepo
+  reviewers: string[]
+  token?: string
+}): Promise<{ message: string; ok: boolean }> {
+  const result = await githubFetch<unknown>(
+    `${githubRepoApiUrl(repo)}/pulls/${number}/requested_reviewers`,
+    token,
+    {
+      body: JSON.stringify({ reviewers }),
+      method: "POST",
+    }
+  )
+  return { message: result.message, ok: result.ok }
+}
+
+/** Withdraws a pending review request. Removing a login that is not currently
+ * requested is not an error worth surfacing, so this never throws. */
+export async function removePullRequestReviewers({
+  number,
+  repo,
+  reviewers,
+  token,
+}: {
+  number: number
+  repo: GitHubRepo
+  reviewers: string[]
+  token?: string
+}): Promise<{ message: string; ok: boolean }> {
+  const result = await githubFetch<unknown>(
+    `${githubRepoApiUrl(repo)}/pulls/${number}/requested_reviewers`,
+    token,
+    {
+      body: JSON.stringify({ reviewers }),
+      method: "DELETE",
+    }
+  )
+  return { message: result.message, ok: result.ok }
+}
+
 // Pull requests are issues to the comments API, so this posts a regular
 // top-of-thread PR comment (not a line-anchored review comment).
 export async function createIssueComment({
@@ -824,7 +916,7 @@ export async function createIssueComment({
     }
   )
 
-  if (!result.ok) throw new Error(result.message)
+  if (!result.ok) throw new GitHubApiError(result.message, result.status)
 
   return { htmlUrl: optionalString(result.data.html_url) }
 }

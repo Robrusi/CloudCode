@@ -375,6 +375,55 @@ export const workerGetLatestRunForPr = query({
   },
 })
 
+/** Whether another review run — any config on the repository — is still
+ * actively reviewing this PR. The requested-reviewer badge on GitHub is
+ * shared, per-login PR state: a failed run must not withdraw it while a
+ * sibling run is underway, because that sibling resolves the badge with its
+ * own review submission. Canceling runs never post, so they do not count. */
+export const workerHasActiveRunForPr = query({
+  args: {
+    excludeRunId: v.id("codexRuns"),
+    prNumber: v.number(),
+    repoUrl: v.string(),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+
+    // Both enabled states: a config disabled mid-run can still have an
+    // in-flight review that will post.
+    const reviews = (
+      await Promise.all(
+        [true, false].map((enabled) =>
+          ctx.db
+            .query("reviews")
+            .withIndex("by_repo_enabled", (q) =>
+              q.eq("repoUrl", args.repoUrl).eq("enabled", enabled)
+            )
+            .collect()
+        )
+      )
+    ).flat()
+
+    for (const review of reviews) {
+      const runs = await ctx.db
+        .query("codexRuns")
+        .withIndex("by_review_pr", (q) =>
+          q.eq("reviewId", review._id).eq("prNumber", args.prNumber)
+        )
+        .collect()
+      const active = runs.some(
+        (run) =>
+          run._id !== args.excludeRunId &&
+          isActiveCodexRunStatus(run.status) &&
+          run.status !== "canceling"
+      )
+      if (active) return true
+    }
+    return false
+  },
+})
+
 export const workerCreateRun = mutation({
   args: {
     additionalContext: v.optional(v.string()),
