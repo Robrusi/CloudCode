@@ -20,10 +20,13 @@ import {
   type SidebarChat,
 } from "@/components/chat/sidebar-model"
 import { SidebarSettingsNav } from "@/components/chat/sidebar-settings-nav"
+import { SidebarThreadControls } from "@/components/chat/sidebar-thread-controls"
 import type { SettingsSectionId } from "@/components/settings/sections"
+import { Button } from "@/components/ui/button"
 import type { Id } from "@/convex/_generated/dataModel"
 import { useIsMobile } from "@/hooks/use-is-mobile"
 import { useResizablePanel } from "@/hooks/use-resizable-panel"
+import { useSidebarThreadFilters } from "@/hooks/use-sidebar-thread-filters"
 import { cn } from "@/lib/shared/utils"
 
 export function Sidebar({
@@ -77,12 +80,18 @@ export function Sidebar({
   })
   const automationContext = sidebarThreadContext === "automations"
   const reviewContext = sidebarThreadContext === "reviews"
+  const threadFilters = useSidebarThreadFilters(sidebarThreadContext)
   // The automations context renders its own grouped list, so skip the repo
   // grouping there.
   const groups = useMemo(
-    () => (automationContext ? [] : groupSidebarChats(chats)),
-    [automationContext, chats]
+    () =>
+      automationContext ? [] : groupSidebarChats(chats, threadFilters.options),
+    [automationContext, chats, threadFilters.options]
   )
+  // Hide the controls with an empty thread list — unless filters caused the
+  // emptiness, in which case they must stay reachable to be cleared.
+  const showThreadControls =
+    !automationContext && (chats.length > 0 || threadFilters.filtersActive)
   const emptyThreadsLabel = reviewContext
     ? "No review threads yet"
     : "No chats yet"
@@ -164,6 +173,18 @@ export function Sidebar({
             </button>
           </div>
 
+          {showThreadControls ? (
+            <SidebarThreadControls
+              chats={chats}
+              filter={threadFilters.filter}
+              onFilterChange={threadFilters.setFilter}
+              onQueryChange={threadFilters.setQuery}
+              onSortChange={threadFilters.setSort}
+              query={threadFilters.query}
+              sort={threadFilters.sort}
+            />
+          ) : null}
+
           <div className="mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-4">
             {automationContext ? (
               <SidebarAutomationList
@@ -175,18 +196,42 @@ export function Sidebar({
                 onShowAutomations={onShowAutomations}
               />
             ) : groups.length === 0 ? (
-              <div className="px-3 pt-4 text-[0.6875rem] text-muted-foreground/80">
-                {emptyThreadsLabel}
-              </div>
+              threadFilters.filtersActive ? (
+                <div className="flex flex-col items-start gap-2.5 px-3 pt-4">
+                  <p className="text-[0.6875rem] text-muted-foreground/80">
+                    No threads match
+                    {threadFilters.query.trim()
+                      ? ` “${threadFilters.query.trim()}”`
+                      : " the current filter"}
+                    .
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    onClick={threadFilters.clearFilters}
+                  >
+                    Clear filters
+                  </Button>
+                </div>
+              ) : (
+                <div className="px-3 pt-4 text-[0.6875rem] text-muted-foreground/80">
+                  {emptyThreadsLabel}
+                </div>
+              )
             ) : (
               <div className="space-y-1">
                 {groups.map((g) => (
                   <FolderGroup
-                    key={g.repo || "untitled"}
+                    // Toggling filters remounts the group so it reopens over
+                    // its matches even if it was collapsed beforehand.
+                    key={`${g.repo || "untitled"}${
+                      threadFilters.filtersActive ? ":filtered" : ""
+                    }`}
                     label={repoLabel(g.repo)}
                     repoUrl={g.repo}
                     items={g.items}
                     activeId={currentView === "chat" ? activeId : null}
+                    showAll={threadFilters.filtersActive}
                     onSelect={onSelect}
                     onDelete={onDelete}
                     onRename={onRename}

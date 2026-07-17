@@ -23,6 +23,7 @@ export function FolderGroup({
   repoUrl,
   items,
   activeId,
+  showAll = false,
   onSelect,
   onDelete,
   onRename,
@@ -32,6 +33,9 @@ export function FolderGroup({
   repoUrl: string
   items: SidebarChatNode[]
   activeId: Id<"threads"> | null
+  /** An active search/filter lifts the preview cap so every match stays
+   * visible. */
+  showAll?: boolean
   onSelect: (id: Id<"threads">) => void
   onDelete: (id: Id<"threads">) => void
   onRename: (id: Id<"threads">, title: string) => void
@@ -40,7 +44,8 @@ export function FolderGroup({
   const [open, setOpen] = useState(true)
   const [expanded, setExpanded] = useState(false)
   const visibleItems = open ? items : items.filter(isSidebarNodeRunning)
-  const canExpand = open && visibleItems.length > THREAD_PREVIEW_COUNT
+  const canExpand =
+    open && !showAll && visibleItems.length > THREAD_PREVIEW_COUNT
   const displayedItems =
     canExpand && !expanded
       ? visibleItems.slice(0, THREAD_PREVIEW_COUNT)
