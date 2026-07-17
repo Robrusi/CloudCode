@@ -399,6 +399,48 @@ export async function getCommitChecks({
   return { checks, failing, pending, succeeded, total: checks.length }
 }
 
+export type CommitStatusState = "error" | "failure" | "pending" | "success"
+
+/** Sets a commit status on the SHA (the rows in the PR merge box's checks
+ * list). Statuses are idempotent per `context`: posting again overwrites the
+ * previous state for that context, which lets one context track a run's
+ * pending → success/error lifecycle with no stored id. Requires the app's
+ * "Commit statuses: write" permission; without it GitHub declines and the
+ * message says so. */
+export async function setCommitStatus({
+  context,
+  description,
+  repo,
+  sha,
+  state,
+  targetUrl,
+  token,
+}: {
+  context: string
+  description: string
+  repo: GitHubRepo
+  sha: string
+  state: CommitStatusState
+  targetUrl?: string
+  token?: string
+}): Promise<{ message: string; ok: boolean }> {
+  const result = await githubFetch<unknown>(
+    `${githubRepoApiUrl(repo)}/statuses/${encodeURIComponent(sha)}`,
+    token,
+    {
+      body: JSON.stringify({
+        context,
+        // GitHub rejects descriptions over 140 characters.
+        description: description.slice(0, 140),
+        state,
+        ...(targetUrl ? { target_url: targetUrl } : {}),
+      }),
+      method: "POST",
+    }
+  )
+  return { message: result.message, ok: result.ok }
+}
+
 const REVIEW_STATES: Record<string, PullRequestReviewState> = {
   APPROVED: "approved",
   CHANGES_REQUESTED: "changes_requested",

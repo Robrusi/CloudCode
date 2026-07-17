@@ -21,6 +21,7 @@ import {
   getPullRequestConversation,
   removePullRequestReviewers,
   requestPullRequestReviewers,
+  setCommitStatus,
 } from "@/lib/github/pull-requests"
 import { parseGitHubRepoUrl, type GitHubRepo } from "@/lib/github/repo"
 import { cloudcodeBotLogin } from "@/lib/github/webhook"
@@ -191,6 +192,36 @@ async function withdrawReviewRequest({
   }
 }
 
+function reviewThreadUrl(threadId: Id<"threads">) {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "")
+  return appUrl ? `${appUrl}/?thread=${threadId}` : undefined
+}
+
+/** The commit-status row this review owns in the PR merge box ("Review in
+ * progress" → outcome). Config-named so multiple review configs on one
+ * repository do not overwrite each other's row. */
+function reviewStatusContext(reviewName: string) {
+  return `Cloudcode review — ${reviewName}`
+}
+
+/** Best-effort commit-status update: a declined status (e.g. the app's
+ * "Commit statuses: write" permission is not granted yet) only leaves a
+ * breadcrumb and never affects the run. */
+async function setReviewCommitStatus(
+  input: Parameters<typeof setCommitStatus>[0]
+) {
+  try {
+    const status = await setCommitStatus(input)
+    if (!status.ok) {
+      console.warn(
+        `GitHub declined the "${input.state}" commit status: ${status.message}`
+      )
+    }
+  } catch (error) {
+    console.warn("Unable to set the review commit status.", error)
+  }
+}
+
 /** The assistant message interleaves progress narration with encoded
  * <codex-tool> markers the chat UI renders as command chips; GitHub strips
  * the tags and shows the raw payloads. The PR comment wants only the final
@@ -340,6 +371,7 @@ export const reviewRun = task({
       await recordDispatchFailure("Review repository is not a GitHub URL.")
       return { dispatched: false, reason: "invalid_repo" as const }
     }
+    const statusContext = reviewStatusContext(review.name)
 
     let created: {
       resumed: boolean
@@ -460,15 +492,26 @@ export const reviewRun = task({
       created = result
 
       if (!created.resumed) {
-        // Two independent best-effort signals, in parallel: 👀 on GitHub the
-        // moment the review is actually underway (on the triggering comment
-        // for mentions, on the PR itself otherwise), and the app requested as
-        // a reviewer so the PR shows a pending "review requested" entry that
-        // the submitted review later resolves. GitHub refuses the reviewer
-        // request on PRs the app itself authored; the rejection leaves a
-        // breadcrumb, or a persistently refusing repo would be undiagnosable.
+        // Three independent best-effort signals, in parallel: 👀 on GitHub
+        // the moment the review is actually underway (on the triggering
+        // comment for mentions, on the PR itself otherwise), the app
+        // requested as a reviewer so the PR shows a pending "review
+        // requested" entry that the submitted review later resolves, and a
+        // pending commit status so the merge box's checks list shows
+        // "Review in progress". GitHub refuses the reviewer request on PRs
+        // the app itself authored; rejections leave a breadcrumb, or a
+        // persistently refusing repo would be undiagnosable.
         const botLogin = cloudcodeBotLogin()
         await Promise.all([
+          setReviewCommitStatus({
+            context: statusContext,
+            description: "Review in progress",
+            repo,
+            sha: pr.headSha,
+            state: "pending",
+            targetUrl: reviewThreadUrl(created.threadId),
+            token: credential.token,
+          }),
           (payload.comment
             ? addIssueCommentReaction({
                 commentId: payload.comment.id,
@@ -514,14 +557,18 @@ export const reviewRun = task({
       throw error
     }
 
-    // Everything below runs under one reconciliation boundary for the
-    // requested-reviewer badge: a submitted review resolves it on GitHub's
-    // side; every other terminal exit — failed run, empty report, posting
-    // exhausted, fallback comment — withdraws it exactly once in the finally.
-    // A retryable throw keeps it, because the next attempt still reviews.
+    // Everything below runs under one reconciliation boundary for the two
+    // pieces of shared PR state this run owns: the requested-reviewer badge
+    // (a submitted review resolves it on GitHub's side; every other terminal
+    // exit withdraws it) and the "Review in progress" commit-status row
+    // (flipped to success/error on the terminal exit). A retryable throw
+    // leaves both alone, because the next attempt still reviews.
     let postToken: string | undefined
     let retrying = false
     let reviewSubmitted = false
+    let statusOutcome:
+      | { description: string; state: "error" | "success"; targetUrl?: string }
+      | undefined
     try {
       let outcome = created.resumed
         ? await client.query(api.reviews.workerGetRunOutcome, {
@@ -536,6 +583,11 @@ export const reviewRun = task({
         reviewSubmitted = outcome.reviewCommentUrl.includes(
           "#pullrequestreview-"
         )
+        statusOutcome = {
+          description: "Review posted.",
+          state: "success",
+          targetUrl: outcome.reviewCommentUrl,
+        }
         return {
           dispatched: true,
           commented: true,
@@ -577,6 +629,13 @@ export const reviewRun = task({
         workerSecret,
       })
       if (!outcome || outcome.status !== "succeeded") {
+        statusOutcome = {
+          description:
+            outcome?.status === "canceled"
+              ? "Review canceled."
+              : "Review failed.",
+          state: "error",
+        }
         return {
           dispatched: true,
           commented: false,
@@ -586,6 +645,10 @@ export const reviewRun = task({
       }
       const report = reviewReportFromContent(outcome.content)
       if (!report || !outcome.prNumber) {
+        statusOutcome = {
+          description: "Review finished without a report to post.",
+          state: "error",
+        }
         await client
           .mutation(api.reviews.workerRecordCommentFailure, {
             error: "Review finished without a report to post.",
@@ -598,9 +661,9 @@ export const reviewRun = task({
         return { dispatched: true, commented: false, runId: created.runId }
       }
 
-      const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "")
-      const footerLink = appUrl
-        ? `[Open the review thread](${appUrl}/?thread=${created.threadId})`
+      const threadUrl = reviewThreadUrl(created.threadId)
+      const footerLink = threadUrl
+        ? `[Open the review thread](${threadUrl})`
         : "Review thread available in Cloudcode."
       const commentBody = `${report}\n\n---\n_Reviewed by Cloudcode · ${footerLink}_`
       const prNumber = outcome.prNumber
@@ -672,6 +735,10 @@ export const reviewRun = task({
         // The report still lives in the thread, but a review that never
         // posts is a broken setup — count it toward the auto-disable failure
         // streak, naming both blockers so neither hides the other.
+        statusOutcome = {
+          description: "Unable to post the review report.",
+          state: "error",
+        }
         await client
           .mutation(api.reviews.workerRecordCommentFailure, {
             error: `Unable to post the PR review: ${errorMessage(reviewError)} The fallback comment also failed: ${errorMessage(posted.postError)}`,
@@ -686,8 +753,16 @@ export const reviewRun = task({
 
       // The report is live on GitHub from here: recording its URL retries on
       // its own, and a record failure must never re-post the review or count
-      // toward the failure streak.
+      // toward the failure streak. The status row surfaces the report's own
+      // confidence verdict when it has one.
       const commentUrl = posted.htmlUrl
+      statusOutcome = {
+        description:
+          report.match(/^Confidence to merge:.*$/im)?.[0]?.trim() ??
+          "Review posted.",
+        state: "success",
+        targetUrl: commentUrl ?? pr.htmlUrl,
+      }
       for (let attempt = 1; attempt <= COMMENT_POST_ATTEMPTS; attempt += 1) {
         try {
           await client.mutation(api.reviews.workerRecordCommentPosted, {
@@ -715,18 +790,43 @@ export const reviewRun = task({
       retrying =
         !(error instanceof ReviewExecutionError) &&
         ctx.attempt.number < REVIEW_RUN_MAX_ATTEMPTS
+      statusOutcome ??= { description: errorMessage(error), state: "error" }
       throw error
     } finally {
-      if (!reviewSubmitted && !retrying) {
-        await withdrawReviewRequest({
-          client,
-          excludeRunId: created.runId,
-          prNumber: pr.number,
-          repo,
-          repoUrl: review.repoUrl,
-          token: postToken,
-          userId: review.userId,
-        })
+      if (!retrying) {
+        // One token serves the status row and the badge withdrawal; mint only
+        // when the posting phase never did.
+        let finalizeToken = postToken
+        if (!finalizeToken) {
+          const credential = await createWorkerGitHubRepoCredential(client, {
+            repoUrl: review.repoUrl,
+            userId: review.userId,
+          }).catch(() => null)
+          finalizeToken = credential?.token
+        }
+        if (finalizeToken) {
+          await setReviewCommitStatus({
+            context: statusContext,
+            repo,
+            sha: pr.headSha,
+            token: finalizeToken,
+            ...(statusOutcome ?? {
+              description: "Review failed.",
+              state: "error" as const,
+            }),
+          })
+        }
+        if (!reviewSubmitted) {
+          await withdrawReviewRequest({
+            client,
+            excludeRunId: created.runId,
+            prNumber: pr.number,
+            repo,
+            repoUrl: review.repoUrl,
+            token: finalizeToken,
+            userId: review.userId,
+          })
+        }
       }
     }
   },

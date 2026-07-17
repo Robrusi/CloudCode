@@ -16,6 +16,11 @@ import type {
 import { stringValue as optionalString } from "@/lib/shared/unknown-values"
 
 export type GitHubAppRepoInstallation = {
+  /** Whether the installation has granted the app's "Commit statuses: write"
+   * permission. Requesting an ungranted permission fails the whole token
+   * mint, so the scope below is added only once this is true — which also
+   * lets the app roll out the permission without breaking existing mints. */
+  canWriteStatuses: boolean
   installationId: string
   owner: string
   repo: string
@@ -130,8 +135,13 @@ export async function getGitHubAppRepoInstallation(
     typeof data.id === "number" || typeof data.id === "string"
       ? String(data.id)
       : undefined
+  if (!installationId) return null
 
-  return installationId ? { ...repo, installationId } : null
+  return {
+    ...repo,
+    canWriteStatuses: data.permissions?.statuses === "write",
+    installationId,
+  }
 }
 
 function hasGitHubWritePermission(
@@ -221,6 +231,10 @@ export async function createGitHubAppRepoCredentialForInstallations({
     permissions: {
       contents: "write",
       pull_requests: "write",
+      // Commit statuses power the per-PR "Review in progress" check row.
+      ...(repoInstallation.canWriteStatuses
+        ? { statuses: "write" as const }
+        : {}),
     },
     repositoryIds: [repoAccess.repositoryId],
   })

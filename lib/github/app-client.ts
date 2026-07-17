@@ -21,6 +21,7 @@ export type GitHubAppInstallationResponse = {
 
 export type GitHubRepoInstallationResponse = {
   id?: unknown
+  permissions?: Record<string, unknown> | null
 }
 
 export type GitHubInstallationTokenResponse = {
