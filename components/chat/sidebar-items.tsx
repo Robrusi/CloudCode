@@ -23,7 +23,11 @@ export function FolderGroup({
   repoUrl,
   items,
   activeId,
+  expanded,
+  open,
   showAll = false,
+  onExpandedChange,
+  onOpenChange,
   onSelect,
   onDelete,
   onRename,
@@ -33,16 +37,21 @@ export function FolderGroup({
   repoUrl: string
   items: SidebarChatNode[]
   activeId: Id<"threads"> | null
+  /** Persistent collapse/preview state is owned by the sidebar (see
+   * useSidebarFolderState) so it survives this group unmounting while a
+   * filter temporarily removes its repo. */
+  expanded: boolean
+  open: boolean
   /** An active search/filter lifts the preview cap so every match stays
    * visible. */
   showAll?: boolean
+  onExpandedChange: (expanded: boolean) => void
+  onOpenChange: (open: boolean) => void
   onSelect: (id: Id<"threads">) => void
   onDelete: (id: Id<"threads">) => void
   onRename: (id: Id<"threads">, title: string) => void
   onNewChatInRepo: (repoUrl: string) => void
 }) {
-  const [open, setOpen] = useState(true)
-  const [expanded, setExpanded] = useState(false)
   // While a search/filter is active the group presents as open so its matches
   // show, via a transient override that leaves the persistent collapse state
   // untouched — clearing the filter restores exactly what the user had. The
@@ -56,7 +65,7 @@ export function FolderGroup({
   const effectiveOpen = showAll ? (filteredOpen ?? true) : open
   const toggleOpen = () => {
     if (showAll) setFilteredOpen(!effectiveOpen)
-    else setOpen(!effectiveOpen)
+    else onOpenChange(!effectiveOpen)
   }
   const visibleItems = effectiveOpen
     ? items
@@ -104,6 +113,7 @@ export function FolderGroup({
               active={node.chat.id === activeId}
               activeId={activeId}
               pending={node.chat.pending}
+              revealChildren={showAll}
               onSelect={() => onSelect(node.chat.id)}
               onDelete={() => onDelete(node.chat.id)}
               onRename={(title) => onRename(node.chat.id, title)}
@@ -117,7 +127,7 @@ export function FolderGroup({
       {canExpand ? (
         <button
           type="button"
-          onClick={() => setExpanded(!expanded)}
+          onClick={() => onExpandedChange(!expanded)}
           aria-expanded={expanded}
           className="flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-[0.75rem] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
         >
@@ -135,6 +145,7 @@ export function SidebarItem({
   active,
   pending,
   nested = false,
+  revealChildren = false,
   showAutomationGlyph = true,
   childChats,
   activeId,
@@ -149,6 +160,9 @@ export function SidebarItem({
   active: boolean
   pending: boolean
   nested?: boolean
+  /** While a search/filter is active a collapsed dispatch subtree presents
+   * as open, so the child that caused the subtree to match is visible. */
+  revealChildren?: boolean
   /** Rows already listed under an automation header skip the Clock glyph. */
   showAutomationGlyph?: boolean
   childChats?: SidebarChat[]
@@ -164,6 +178,24 @@ export function SidebarItem({
   const [draft, setDraft] = useState(chat.title || "")
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const [childrenOpen, setChildrenOpen] = useState(true)
+  // Same transient pattern as FolderGroup: the override presents the subtree
+  // open while filters are active, resets when filtering toggles, and leaves
+  // the persistent childrenOpen state to restore afterwards.
+  const [filteredChildrenOpen, setFilteredChildrenOpen] = useState<
+    boolean | null
+  >(null)
+  const [prevReveal, setPrevReveal] = useState(revealChildren)
+  if (prevReveal !== revealChildren) {
+    setPrevReveal(revealChildren)
+    setFilteredChildrenOpen(null)
+  }
+  const effectiveChildrenOpen = revealChildren
+    ? (filteredChildrenOpen ?? true)
+    : childrenOpen
+  const toggleChildren = () => {
+    if (revealChildren) setFilteredChildrenOpen(!effectiveChildrenOpen)
+    else setChildrenOpen(!effectiveChildrenOpen)
+  }
   const inputRef = useRef<HTMLInputElement>(null)
   const cancelledRef = useRef(false)
   const hasChildren = Boolean(childChats?.length)
@@ -303,11 +335,11 @@ export function SidebarItem({
                 type="button"
                 onClick={(event) => {
                   event.stopPropagation()
-                  setChildrenOpen(!childrenOpen)
+                  toggleChildren()
                 }}
-                aria-expanded={childrenOpen}
+                aria-expanded={effectiveChildrenOpen}
                 aria-label={
-                  childrenOpen
+                  effectiveChildrenOpen
                     ? "Collapse dispatched chats"
                     : "Expand dispatched chats"
                 }
@@ -316,7 +348,7 @@ export function SidebarItem({
                 <ChevronRight
                   className={cn(
                     "size-3 transition-transform",
-                    childrenOpen && "rotate-90"
+                    effectiveChildrenOpen && "rotate-90"
                   )}
                 />
               </button>
@@ -356,7 +388,7 @@ export function SidebarItem({
           />
         ) : null}
       </div>
-      {hasChildren && childrenOpen ? (
+      {hasChildren && effectiveChildrenOpen ? (
         <div className="ml-4">
           {childChats?.map((child) => (
             <SidebarItem

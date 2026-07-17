@@ -76,7 +76,12 @@ function chatMatchesTokens(chat: SidebarChat, tokens: string[]) {
 
 /** Nodes pass a filter as whole subtrees: a match on the root or on any
  * dispatched child keeps the node, so a hit never loses its dispatch
- * context. */
+ * context.
+ *
+ * Search deliberately covers only the loaded sidebar feed — the newest
+ * THREAD_LIST_LIMIT threads served by convex/chats.ts. It narrows the
+ * visible list; querying full thread history would be a server-side search
+ * feature with its own index and UX. */
 export function filterSidebarChatNodes(
   nodes: SidebarChatNode[],
   options: Pick<SidebarThreadListOptions, "filter" | "query">

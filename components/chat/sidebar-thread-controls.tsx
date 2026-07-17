@@ -136,6 +136,10 @@ export function SidebarThreadControls({
         </button>
       </div>
       {menuOpen ? (
+        // Keyboard behavior intentionally matches the app's other role="menu"
+        // surfaces (see ui/context-menu): items are Tab-reachable and Escape
+        // closes. Arrow-key navigation and focus management are deferred to a
+        // future shared menu primitive so they land app-wide, not one-off.
         <div
           role="menu"
           aria-label="Sort and filter threads"

@@ -24,12 +24,18 @@ function isSidebarThreadSort(value: string | null): value is SidebarThreadSort {
   return SIDEBAR_THREAD_SORTS.includes(value as SidebarThreadSort)
 }
 
+export type SidebarThreadFiltersState = ReturnType<
+  typeof useSidebarThreadFilters
+>
+
 /** Search/sort/filter state for the sidebar thread list. Sort persists across
  * sessions; search and status filter are session-local and reset when the
  * sidebar switches thread contexts, so a chats-context search never silently
  * empties the reviews list. Pass null while the sidebar shows a non-thread
  * view (settings); a transient visit then leaves the filters of the
- * underlying context untouched. */
+ * underlying context untouched. Owned by the chat controller rather than the
+ * sidebar itself: the sidebar unmounts on mobile navigation, and state here
+ * must survive that. */
 export function useSidebarThreadFilters(
   context: "chats" | "automations" | "reviews" | null
 ) {

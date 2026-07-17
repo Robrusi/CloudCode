@@ -26,7 +26,8 @@ import { Button } from "@/components/ui/button"
 import type { Id } from "@/convex/_generated/dataModel"
 import { useIsMobile } from "@/hooks/use-is-mobile"
 import { useResizablePanel } from "@/hooks/use-resizable-panel"
-import { useSidebarThreadFilters } from "@/hooks/use-sidebar-thread-filters"
+import { useSidebarFolderState } from "@/hooks/use-sidebar-folder-state"
+import type { SidebarThreadFiltersState } from "@/hooks/use-sidebar-thread-filters"
 import { cn } from "@/lib/shared/utils"
 
 export function Sidebar({
@@ -44,6 +45,7 @@ export function Sidebar({
   onExitSettings,
   sidebarThreadContext,
   settingsSection,
+  threadFilters,
   onSelectSettingsSection,
   onClose,
   brandClassName,
@@ -64,6 +66,9 @@ export function Sidebar({
   // threads render as chats when opened but keep their owning nav item active.
   sidebarThreadContext: "chats" | "automations" | "reviews"
   settingsSection: SettingsSectionId
+  // Owned by the chat controller so it survives the sidebar unmounting on
+  // mobile navigation.
+  threadFilters: SidebarThreadFiltersState
   onSelectSettingsSection: (id: SettingsSectionId) => void
   onClose: () => void
   brandClassName: string
@@ -80,12 +85,7 @@ export function Sidebar({
   })
   const automationContext = sidebarThreadContext === "automations"
   const reviewContext = sidebarThreadContext === "reviews"
-  // The settings view maps to the "chats" thread context upstream; passing
-  // null instead keeps a transient settings visit from resetting the filters
-  // of the context the user will return to.
-  const threadFilters = useSidebarThreadFilters(
-    currentView === "settings" ? null : sidebarThreadContext
-  )
+  const folders = useSidebarFolderState(sidebarThreadContext)
   // The automations context renders its own grouped list, so skip the repo
   // grouping there.
   const groups = useMemo(
@@ -225,20 +225,31 @@ export function Sidebar({
               )
             ) : (
               <div className="space-y-1">
-                {groups.map((g) => (
-                  <FolderGroup
-                    key={g.repo || "untitled"}
-                    label={repoLabel(g.repo)}
-                    repoUrl={g.repo}
-                    items={g.items}
-                    activeId={currentView === "chat" ? activeId : null}
-                    showAll={threadFilters.filtersActive}
-                    onSelect={onSelect}
-                    onDelete={onDelete}
-                    onRename={onRename}
-                    onNewChatInRepo={onNewChatInRepo}
-                  />
-                ))}
+                {groups.map((g) => {
+                  const folder = folders.folderState(g.repo)
+                  return (
+                    <FolderGroup
+                      key={g.repo || "untitled"}
+                      label={repoLabel(g.repo)}
+                      repoUrl={g.repo}
+                      items={g.items}
+                      activeId={currentView === "chat" ? activeId : null}
+                      expanded={folder.expanded}
+                      open={folder.open}
+                      showAll={threadFilters.filtersActive}
+                      onExpandedChange={(expanded) =>
+                        folders.updateFolder(g.repo, { expanded })
+                      }
+                      onOpenChange={(open) =>
+                        folders.updateFolder(g.repo, { open })
+                      }
+                      onSelect={onSelect}
+                      onDelete={onDelete}
+                      onRename={onRename}
+                      onNewChatInRepo={onNewChatInRepo}
+                    />
+                  )
+                })}
               </div>
             )}
           </div>
