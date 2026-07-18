@@ -31,6 +31,7 @@ import {
   userMcpCodexConfig,
   type McpServerInput,
 } from "@/lib/daytona/codex-runtime"
+import { codexSkillsContentFingerprint } from "@/lib/daytona/codex-skills"
 import { cloudcodeContextToolVersion } from "@/lib/daytona/context"
 import { cloudcodeFactoryToolVersion } from "@/lib/daytona/factory"
 import { cloudcodeGitHubToolFingerprint } from "@/lib/daytona/github"
@@ -127,6 +128,9 @@ function codexAppServerDaemonEnv({
       [builtInMcpConfig ?? "", userMcpCodexConfig(mcpServers)].join("\0")
     ),
     CLOUDCODE_REPO_PATH: paths.repoPath,
+    // Codex scans $CODEX_HOME/skills when the app-server process starts, so
+    // updated skill content must restart the daemon to reach the agent.
+    CLOUDCODE_SKILLS_FINGERPRINT: codexSkillsContentFingerprint(),
   }
   const envHash = sha256(
     [

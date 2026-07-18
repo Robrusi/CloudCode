@@ -196,6 +196,21 @@ function isTestFile(path) {
   return TEST_FILE_RE.test(path);
 }
 
+// The optional base-state spec: a normal guarded spec at the top level of
+// .cloudcode/tests that runs first on every run; the browser state it ends in
+// (cookies plus origin storage) becomes the starting state of every test.
+const SETUP_FILE_RE = /^base\.setup\.(?:c|m)?[jt]sx?$/;
+
+function findBaseSetupFile() {
+  if (!existsSync(testDir)) return undefined;
+  for (const entry of readdirSync(testDir, { withFileTypes: true })) {
+    if (entry.isFile() && SETUP_FILE_RE.test(entry.name)) {
+      return join(testDir, entry.name);
+    }
+  }
+  return undefined;
+}
+
 function discoverTests(dir = testDir, acc = []) {
   if (!existsSync(dir)) return acc;
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -296,8 +311,13 @@ const sourceGuardrails = [
 ];
 
 function guardedTestFiles(normalized, discovered) {
-  if (normalized.testPath) return [normalized.testPath];
-  return discovered.map((entry) => resolve(repoPath, entry.path));
+  const files = normalized.testPath
+    ? [normalized.testPath]
+    : discovered.map((entry) => resolve(repoPath, entry.path));
+  // The base-state spec always runs, so it is always guarded.
+  const setupFile = findBaseSetupFile();
+  if (setupFile && !files.includes(setupFile)) files.push(setupFile);
+  return files;
 }
 
 function enforceSourceGuardrails(files) {
@@ -546,6 +566,144 @@ async function chromiumExecutable() {
   throw new Error("Cloudcode UI tests require a Chromium-family browser.");
 }
 
+// ---------------------------------------------------------------------------
+// Desktop window staging.
+//
+// The Daytona recording captures the whole display, and the test browser gets
+// no say in stacking order from the window manager. Hide every pre-existing
+// window (shared desktop browser, terminals) before the recording starts,
+// raise each test browser window as it appears, and restore the hidden
+// windows after the recording stops - so the video shows only the test run.
+// ---------------------------------------------------------------------------
+
+const WINDOW_WATCH_POLL_MS = 700;
+// Never hide the window manager's own surfaces; hiding the panel or the
+// desktop itself is a no-op at best and breaks the session at worst.
+const WINDOW_STAGE_SKIP_RE = /panel|xfdesktop|desktop_window/i;
+
+async function listDesktopWindows(display) {
+  const result = await exec("wmctrl", ["-l", "-x"], {
+    env: { DISPLAY: display },
+    timeout: 5_000,
+  });
+  if (result.exitCode !== 0) return [];
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      const columns = line.split(/\s+/);
+      return /^0x[0-9a-f]+$/i.test(columns[0] || "")
+        ? [{ id: columns[0], windowClass: columns[2] || "" }]
+        : [];
+    });
+}
+
+async function stageDesktopForRun(display) {
+  const windows = await listDesktopWindows(display).catch(() => []);
+  const baselineIds = new Set(windows.map((win) => win.id));
+  const hiddenIds = [];
+  for (const win of windows) {
+    if (WINDOW_STAGE_SKIP_RE.test(win.windowClass)) continue;
+    const result = await exec("wmctrl", ["-i", "-r", win.id, "-b", "add,hidden"], {
+      env: { DISPLAY: display },
+      timeout: 5_000,
+    }).catch(() => null);
+    if (result?.exitCode === 0) hiddenIds.push(win.id);
+  }
+  return { baselineIds, hiddenIds };
+}
+
+async function unstageDesktop(display, hiddenIds) {
+  for (const id of hiddenIds) {
+    await exec("wmctrl", ["-i", "-r", id, "-b", "remove,hidden"], {
+      env: { DISPLAY: display },
+      timeout: 5_000,
+    }).catch(() => null);
+  }
+}
+
+/** Raises every window that appears after the baseline snapshot (headed
+ * Chromium opens one window per browser context, i.e. per test) so the
+ * recording always shows the active test window. Returns a stop function. */
+function watchTestWindows(display, baselineIds) {
+  const raisedIds = new Set();
+  let stopped = false;
+  let timer;
+  const tick = async () => {
+    try {
+      const windows = await listDesktopWindows(display);
+      for (const win of windows) {
+        if (stopped || baselineIds.has(win.id) || raisedIds.has(win.id)) continue;
+        raisedIds.add(win.id);
+        await exec("wmctrl", ["-i", "-a", win.id], {
+          env: { DISPLAY: display },
+          timeout: 5_000,
+        });
+      }
+    } catch {
+    }
+    if (!stopped) timer = setTimeout(tick, WINDOW_WATCH_POLL_MS);
+  };
+  timer = setTimeout(tick, WINDOW_WATCH_POLL_MS);
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Desktop session handoff (useDesktopAuth).
+//
+// Copies the logged-in session (cookies plus origin storage) out of the headed
+// desktop browser over CDP and injects it into the isolated test browser as a
+// Playwright storageState, so tests behind auth run logged-in while keeping
+// their own fresh window and profile.
+// ---------------------------------------------------------------------------
+
+async function exportDesktopStorageState(statePath) {
+  const cdpPort = Number(process.env.CLOUDCODE_BROWSER_CDP_PORT || "9377");
+  const cdpUrl = "http://127.0.0.1:" + cdpPort;
+  let alive = false;
+  try {
+    const response = await fetch(cdpUrl + "/json/version", {
+      signal: AbortSignal.timeout(1_500),
+    });
+    alive = response.ok;
+  } catch {
+  }
+  if (!alive) {
+    throw new Error(
+      "useDesktopAuth needs a logged-in desktop browser session, but the desktop browser is not running. Log in first with the cloudcode_desktop browser tools (browser_open the app and complete the login), then rerun."
+    );
+  }
+  const runtime = await resolveCloudcodePlaywrightRuntime({
+    repoPath,
+    runtimeRoot,
+  });
+  const playwright = requireCloudcodePlaywrightCore(runtime);
+  const browser = await playwright.chromium.connectOverCDP(cdpUrl, {
+    timeout: 10_000,
+  });
+  try {
+    const context = browser.contexts()[0];
+    if (!context) {
+      throw new Error(
+        "useDesktopAuth found no session in the desktop browser. Log in first with the cloudcode_desktop browser tools, then rerun."
+      );
+    }
+    const state = await context.storageState();
+    if (!state.cookies?.length && !state.origins?.length) {
+      throw new Error(
+        "useDesktopAuth found no cookies or storage in the desktop browser session. Complete the login there first (browser_open the app, sign in, confirm the logged-in page), then rerun."
+      );
+    }
+    writeFileSync(statePath, JSON.stringify(state), "utf8");
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
+}
+
 function linkCloudcodeTestPackage() {
   if (!existsSync(cloudcodeTestPackageDir)) {
     throw new Error(
@@ -582,9 +740,12 @@ function cleanupCloudcodeTestPackageLink() {
 function writePlaywrightConfig({
   baseUrl,
   browser,
+  capturedStatePath,
   configPath,
   outputDir,
   screen,
+  setupFile,
+  storageStatePath,
   timeoutMs,
 }) {
   const screenWidth = normalizePositiveInteger(screen?.width, 1280);
@@ -611,6 +772,12 @@ function writePlaywrightConfig({
     "    video: 'off',",
     "    viewport: { width: " + JSON.stringify(viewportWidth) + ", height: " + JSON.stringify(viewportHeight) + " },",
     "    screen: { width: " + JSON.stringify(screenWidth) + ", height: " + JSON.stringify(screenHeight) + " },",
+    // With a base-state setup project, storageState is set per project below:
+    // the setup starts from the desktop-auth state (when any) and the tests
+    // start from the state the setup ended in.
+    ...(storageStatePath && !setupFile
+      ? ["    storageState: " + JSON.stringify(storageStatePath) + ","]
+      : []),
     "    deviceScaleFactor: 1,",
     "    launchOptions: {",
     "      executablePath: " + JSON.stringify(browser) + ",",
@@ -626,6 +793,29 @@ function writePlaywrightConfig({
     "      ],",
     "    },",
     "  },",
+    ...(setupFile
+      ? [
+          "  projects: [",
+          "    {",
+          "      name: 'base-setup',",
+          "      testMatch: 'base.setup.?(c|m)[jt]s?(x)',",
+          ...(storageStatePath
+            ? [
+                "      use: { storageState: " +
+                  JSON.stringify(storageStatePath) +
+                  " },",
+              ]
+            : []),
+          "    },",
+          "    {",
+          "      name: 'tests',",
+          "      dependencies: ['base-setup'],",
+          "      testMatch: '**/*.@(spec|test).?(c|m)[jt]s?(x)',",
+          "      use: { storageState: " + JSON.stringify(capturedStatePath) + " },",
+          "    },",
+          "  ],",
+        ]
+      : []),
     "});",
     "",
   ].join("\n");
@@ -656,6 +846,7 @@ function normalizeRunArgs(args) {
     grep,
     testPath: resolveTestPath(args?.testPath),
     timeoutMs,
+    useDesktopAuth: args?.useDesktopAuth === true,
   };
 }
 
@@ -749,7 +940,20 @@ async function recordedUiTestRun(
     viewport: { height: Math.max(360, desktop.height - 140), width: Math.max(480, desktop.width - 48) },
   };
   let playwright;
+  let stage = { baselineIds: new Set(), hiddenIds: [] };
+  let stopWindowWatcher;
+  const setupFile = findBaseSetupFile();
+  const capturedStatePath = setupFile
+    ? join(dirname(configPath), "base-state.json")
+    : undefined;
   try {
+    // Auth export runs before the recording starts: its failures (no desktop
+    // browser, empty session) must not produce an empty recording artifact.
+    const storageStatePath = normalized.useDesktopAuth
+      ? join(dirname(configPath), "storage-state.json")
+      : undefined;
+    if (storageStatePath) await exportDesktopStorageState(storageStatePath);
+    stage = await stageDesktopForRun(desktop.display);
     recording = await startRecording(
       "ui-test-" +
         (normalized.testPath
@@ -762,9 +966,12 @@ async function recordedUiTestRun(
     layout = writePlaywrightConfig({
       baseUrl: normalized.baseUrl,
       browser,
+      capturedStatePath,
       configPath,
       outputDir,
       screen: desktop,
+      setupFile,
+      storageStatePath,
       timeoutMs: normalized.timeoutMs,
     });
 
@@ -772,6 +979,7 @@ async function recordedUiTestRun(
     if (normalized.grep) playwrightArgs.push("--grep", normalized.grep);
     if (normalized.testPath) playwrightArgs.push(normalized.testPath);
 
+    stopWindowWatcher = watchTestWindows(desktop.display, stage.baselineIds);
     playwright = await exec("node", [playwrightRuntime.cliPath, ...playwrightArgs], {
       cwd: repoPath,
       env: {
@@ -779,6 +987,9 @@ async function recordedUiTestRun(
         CLOUDCODE_UI_TEST_BASE_URL: normalized.baseUrl,
         CLOUDCODE_UI_TEST_EVENTS: eventsPath,
         CLOUDCODE_UI_TEST_RECORDING_STARTED_AT: String(recordingStartMs),
+        ...(capturedStatePath
+          ? { CLOUDCODE_UI_TEST_STORAGE_STATE: capturedStatePath }
+          : {}),
         DISPLAY: desktop.display,
         NODE_PATH: playwrightRuntime.nodePath,
       },
@@ -786,6 +997,7 @@ async function recordedUiTestRun(
       timeout: Math.max(normalized.timeoutMs + 60_000, 180_000),
     });
   } finally {
+    stopWindowWatcher?.();
     if (recordingStarted) {
       try {
         recording = await stopRecording(recordingId);
@@ -794,6 +1006,9 @@ async function recordedUiTestRun(
           error instanceof Error ? error.message : "Unable to stop recording.";
       }
     }
+    // Restore only after the recording stopped so reappearing windows never
+    // show up in the video.
+    await unstageDesktop(desktop.display, stage.hiddenIds).catch(() => undefined);
     cleanupCloudcodeTestPackageLink();
     try {
       const scopedDir = dirname(packageLink);
@@ -841,8 +1056,10 @@ async function recordedUiTestRun(
     stderr: truncate(playwright?.stderr ?? "", 12000),
     stdout: truncate(playwright?.stdout ?? "", 12000),
     stopRecordingError: stopRecordingError || undefined,
+    baseSetupPath: setupFile ? safeRelativePath(setupFile) : undefined,
     testPath: normalized.testPath ? safeRelativePath(normalized.testPath) : null,
     updatedAt: Date.now(),
+    useDesktopAuth: normalized.useDesktopAuth || undefined,
     viewport: layout.viewport,
   };
   writeJson(resultPath, result);
@@ -928,11 +1145,19 @@ async function callTool(name, args = {}, options = {}) {
   switch (name) {
     case "ui_tests_list": {
       const tests = discoverTests();
+      const setupFile = findBaseSetupFile();
       return text(
-        tests.length
+        (tests.length
           ? "Found " + tests.length + " Cloudcode UI test file(s)."
-          : "No Cloudcode UI tests found in .cloudcode/tests.",
-        { testDir: safeRelativePath(testDir), tests }
+          : "No Cloudcode UI tests found in .cloudcode/tests.") +
+          (setupFile
+            ? " Base-state setup: " + safeRelativePath(setupFile) + "."
+            : ""),
+        {
+          baseSetupPath: setupFile ? safeRelativePath(setupFile) : null,
+          testDir: safeRelativePath(testDir),
+          tests,
+        }
       );
     }
     case "ui_tests_run": {
@@ -987,6 +1212,11 @@ const tools = [
         grep: { type: "string" },
         testPath: { type: "string" },
         timeoutMs: { type: "number" },
+        useDesktopAuth: {
+          type: "boolean",
+          description:
+            "Copy the logged-in session (cookies and origin storage) from the headed desktop browser into the isolated test browser before running. Log in first with the cloudcode_desktop browser tools; fails with guidance when no desktop session exists.",
+        },
       },
     },
   },
@@ -1030,7 +1260,7 @@ async function handle(message) {
             capabilities: { tools: {} },
             serverInfo: { name: "cloudcode-ui-tests", version: "1.0.0" },
             instructions:
-              "Deterministic Cloudcode UI tests are opt-in: only write or run .cloudcode/tests specs when the user explicitly asked for a deterministic, recorded test of a flow. Do not use these tools as the default way to verify UI changes; for ordinary verification navigate the app with the cloudcode_desktop browser tools instead. When the user has asked: import { test, expect } from @cloudcode/test, use step and annotate for video annotations, and run tests with ui_tests_run. The runner uses headed Playwright in the Daytona desktop, sizes the browser to the actual desktop, and records only the isolated UI test execution. Write the spec exactly like this and it passes first try: navigate with page.goto using a relative path (baseURL is set); find controls with getByRole/getByLabel/getByPlaceholder/getByText; act with locator.click/fill/press; assert only with await expect(locator or page).toBeVisible/toHaveText/toContainText/toHaveValue/toHaveCount/toHaveURL, which auto-wait, so never add manual timeouts, waitForTimeout, waitForLoadState, networkidle, or waitFor* helpers; never scrape text with innerText/textContent into variables and never pass plain strings or numbers to expect() - all of these are rejected at runtime. Every test must use step(), perform at least one action inside a step, and make an expect(...) assertion after the last action. Do not rehearse the same flow manually first, and do not create screenshot or trace artifacts for this flow.",
+              "Deterministic Cloudcode UI tests are opt-in: only write or run .cloudcode/tests specs when the user explicitly asked for a deterministic, recorded test of a flow. Do not use these tools as the default way to verify UI changes; for ordinary verification navigate the app with the cloudcode_desktop browser tools instead. Before writing a spec or calling ui_tests_run, read the cloudcode-ui-tests skill and follow it exactly - it holds the required spec template, the runner's hard rules, and the run workflow. The runner launches and records its own browser; do not rehearse the flow manually first and never run specs with your own Playwright.",
           },
         });
       }
@@ -1092,6 +1322,7 @@ async function cli() {
     else if (arg === "--grep") args.grep = rest[(i += 1)];
     else if (arg === "--run-id") args.runId = rest[(i += 1)];
     else if (arg === "--timeout-ms") args.timeoutMs = Number(rest[(i += 1)]);
+    else if (arg === "--use-desktop-auth") args.useDesktopAuth = true;
     else if (!args.testPath) args.testPath = arg;
   }
   const result = await callTool(toolName, args, { full: true });
@@ -1633,6 +1864,19 @@ const test = base.test.extend({
     installUiGuard(page);
     await use(page);
   },
+  // Base-state capture: when the base-setup project's test finishes, persist
+  // the browser state it ended in (cookies plus origin storage) so the tests
+  // project starts every test from it. Failures here fail the setup test,
+  // which makes Playwright skip the dependent tests with a visible cause.
+  _cloudcodeBaseState: [
+    async ({ context }, use, testInfo) => {
+      await use();
+      const statePath = process.env.CLOUDCODE_UI_TEST_STORAGE_STATE;
+      if (!statePath || testInfo.project.name !== "base-setup") return;
+      await context.storageState({ path: statePath });
+    },
+    { auto: true },
+  ],
   annotate: async ({ page }, use, testInfo) => {
     await installOverlay(page);
     await use(async (title, options = {}) => {

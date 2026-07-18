@@ -85,6 +85,7 @@ export type DaytonaUiTestRunInput = {
   grep?: string
   testPath?: string
   timeoutMs?: number
+  useDesktopAuth?: boolean
 }
 
 function cliPath(home: string) {
@@ -233,6 +234,7 @@ export async function runDaytonaUiTest(
   if (input.testPath?.trim()) args.push(input.testPath.trim())
   if (input.baseUrl?.trim()) args.push("--base-url", input.baseUrl.trim())
   if (input.grep?.trim()) args.push("--grep", input.grep.trim())
+  if (input.useDesktopAuth) args.push("--use-desktop-auth")
   args.push("--timeout-ms", String(normalizeRunTimeout(input.timeoutMs)))
 
   const parsed = (await runUiTestsCli(sandbox, args, {

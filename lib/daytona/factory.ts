@@ -9,11 +9,6 @@ import {
   type DaytonaSandboxPaths,
 } from "@/lib/daytona/sandbox"
 import {
-  FACTORY_MAX_ACTIVE_DISPATCHED_RUNS_PER_USER,
-  FACTORY_MAX_ACTIVE_WAITS_PER_THREAD,
-  FACTORY_MAX_AGENT_CREATED_AUTOMATIONS,
-  FACTORY_MAX_DISPATCHES_PER_ROOT_THREAD,
-  FACTORY_MAX_SPAWN_DEPTH,
   FACTORY_WAIT_DEFAULT_TTL_MS,
   FACTORY_WAIT_MAX_TTL_MS,
 } from "@/lib/factory/limits"
@@ -21,7 +16,7 @@ import {
 // Bumped for instruction changes too: the version feeds the hot-continuation
 // fingerprint, forcing a cold setup that rewrites AGENTS.md on reused
 // sandboxes so updated guidance actually reaches the agent.
-const FACTORY_TOOL_VERSION = "7"
+const FACTORY_TOOL_VERSION = "8"
 
 const WAIT_DEFAULT_TTL_DAYS = FACTORY_WAIT_DEFAULT_TTL_MS / (24 * 60 * 60_000)
 const WAIT_MAX_TTL_DAYS = FACTORY_WAIT_MAX_TTL_MS / (24 * 60 * 60_000)
@@ -559,7 +554,7 @@ async function handle(message) {
           protocolVersion: params?.protocolVersion || "2025-06-18",
           capabilities: { tools: {} },
           serverInfo: { name: "cloudcode-factory", version: "1.0.0" },
-          instructions: "Use these tools to dispatch parallel Cloudcode agent runs on this repository, follow their progress, send follow-up work to them, schedule recurring agent runs, and register durable waits on external events (Slack replies/reactions via ask_human, PR activity and Linear comments via wait_create) that wake this thread when they fire. Dispatched runs bill usage like normal runs and are capped server-side.",
+          instructions: "Use these tools to dispatch parallel Cloudcode agent runs on this repository, follow their progress, send follow-up work to them, schedule recurring agent runs, and register durable waits on external events (Slack replies/reactions via ask_human, PR activity and Linear comments via wait_create) that wake this thread when they fire. Read the cloudcode-factory skill before the first call - its argument contracts are exact. Dispatched runs bill usage like normal runs and are capped server-side.",
         },
       });
       return;
@@ -611,44 +606,19 @@ export function cloudcodeFactoryAgentInstructions() {
   return [
     "# Cloudcode Factory",
     "",
-    "Cloudcode can dispatch autonomous child agent runs on this repository through the `cloudcode_factory` MCP tools:",
-    "- `run_dispatch` starts a new agent run in its own thread and returns immediately; the child works in parallel.",
-    "- `run_list`, `run_status`, and `run_output` follow dispatched runs and read their results.",
-    "- `run_message` sends a follow-up prompt to a thread dispatched in this tree (rework, review fixes).",
-    "- `automation_create`, `automation_list`, and `automation_set_enabled` manage recurring scheduled agent runs (cron).",
-    "- `ask_human` posts a question to Slack and registers a durable wait on the answer; `wait_create` registers a wait on an existing Slack message, pull request, or Linear issue; `wait_list` and `wait_cancel` manage them. For Slack posts that wait on nothing (status updates, FYIs), use the Slack MCP tools instead.",
+    "Cloudcode can dispatch autonomous child agent runs on this repository, schedule recurring runs, and register durable waits on humans and external events through the `cloudcode_factory` MCP tools (`run_dispatch`, `run_list`, `run_status`, `run_output`, `run_message`, `sandbox_delete`, `automation_create`, `automation_list`, `automation_set_enabled`, `ask_human`, `wait_create`, `wait_list`, `wait_cancel`).",
+    "Before calling any of them, read the `cloudcode-factory` skill and follow its argument contracts exactly — several arguments have strict server-validated formats (Slack channel IDs, per-kind event names, TTLs in seconds, threadId vs runId) that fail otherwise.",
     "",
-    "Waiting on humans and external events:",
-    "- Use `ask_human` when you need human input to proceed (a decision, credentials location, approval). Use `wait_create` to watch something that already exists — most importantly a PR you just created (`kind: github_pr`, events like comment/review/merged/checks) or a Linear issue's comments.",
-    "- Waits are durable: register one, finish your turn with a brief status note, and a wake-up run resumes this thread with the event content when it fires — even days later, after this run finished and the sandbox paused. Never poll or busy-wait for an answer.",
-    "- Every wait has a TTL (default " +
-      String(WAIT_DEFAULT_TTL_DAYS) +
-      " days, max " +
-      String(WAIT_MAX_TTL_DAYS) +
-      " days, ttlSeconds to change). On timeout you are woken with a timeout notice — decide then whether to re-ask, escalate, or proceed without the answer.",
-    "- Waits are single-shot and coalesced: several events arriving while you work are delivered in one wake-up, which consumes the waits it reports. Re-register from the wake-up run if you need to keep listening.",
-    `- At most ${FACTORY_MAX_ACTIVE_WAITS_PER_THREAD} active waits per thread. Cancel waits you no longer need with wait_cancel.`,
-    "",
-    "Choosing a subagent mechanism:",
-    '- When the user says "factory subagents", "factory agents", or asks to dispatch runs/threads, use `run_dispatch`: each child is a separate cloud run with its own thread and sandbox, appears in the user\'s sidebar, bills usage on its own, can push branches and file PRs, and reports back through wake-ups.',
-    '- When the user says just "subagents" or "parallel agents" without "factory", use your built-in Codex collaborator subagents inside this run and sandbox — do not call `run_dispatch` for those.',
-    "- If it is ambiguous, prefer built-in subagents and mention that factory dispatch is available for long-running parallel work.",
-    "",
-    "Wake-ups: you do not need to poll. When a dispatched run finishes, a wake-up message summarizing it is posted to your thread and a new turn starts (default notifyParent=true). After dispatching work, finish your turn with a brief status note — you will be woken to continue. Wake-ups coalesce: several runs finishing while you work arrive as one message.",
-    "",
-    "Rules:",
-    "- Children share nothing with you. Every dispatch prompt must be complete and self-sufficient: task, relevant paths, constraints, and how to prove the work (tests, PR).",
-    "- Children run on this same repository only.",
-    `- Hard caps: dispatch depth ${FACTORY_MAX_SPAWN_DEPTH}, ${FACTORY_MAX_ACTIVE_DISPATCHED_RUNS_PER_USER} concurrently active dispatched runs, ${FACTORY_MAX_DISPATCHES_PER_ROOT_THREAD} runs per tree, ${FACTORY_MAX_AGENT_CREATED_AUTOMATIONS} enabled agent-created automations.`,
-    "- Dispatched runs and automations consume the user's usage like normal runs. Dispatch deliberately, pick the cheapest model/effort that fits each task, and do not create busy-wait loops around run_status.",
-    "- Prefer run_message over a fresh dispatch when work should continue in an existing child's context.",
-    "- Child sandboxes are kept (paused when idle) so run_message rework resumes fast. You own their cleanup: call sandbox_delete on a child once its work is accepted (PR merged, review green). Dispatch with sandboxRetention delete for fire-and-forget tasks that need no rework.",
+    "Rules that always apply:",
+    "- Dispatches and waits are durable: register, finish your turn with a brief status note, and a wake-up run resumes this thread when the result or event arrives — even days later. Never poll or busy-wait (no run_status/wait_list loops).",
+    '- When the user says "factory subagents", "factory agents", or asks to dispatch runs/threads, use `run_dispatch`. Plain "subagents" or "parallel agents" without "factory" means your built-in Codex collaborator subagents inside this run — not `run_dispatch`. If ambiguous, prefer built-in subagents and mention that factory dispatch is available for long-running parallel work.',
+    "- Dispatched runs and automations consume the user's usage like normal runs and are capped server-side. Dispatch deliberately, with complete self-sufficient prompts, at the cheapest model/effort that fits.",
   ].join("\n")
 }
 
 export function cloudcodeFactoryAgentContext() {
   return [
-    "Cloudcode provides the `cloudcode_factory` MCP tools to dispatch parallel child agent runs on this repository (`run_dispatch`), follow them (`run_list`, `run_status`, `run_output`), send follow-up work to them (`run_message`), schedule recurring agent runs (`automation_create`), and register durable waits on external events (`ask_human` for Slack questions, `wait_create` for PR or Linear activity).",
+    "Cloudcode provides the `cloudcode_factory` MCP tools to dispatch parallel child agent runs on this repository (`run_dispatch`), follow them (`run_list`, `run_status`, `run_output`), send follow-up work to them (`run_message`), schedule recurring agent runs (`automation_create`), and register durable waits on external events (`ask_human` for Slack questions, `wait_create` for PR or Linear activity). Read the `cloudcode-factory` skill before calling any of them — its argument contracts are exact.",
     "Dispatch prompts must be self-sufficient — children share none of your context. Dispatched work bills usage and is capped server-side, so dispatch deliberately.",
     "When a dispatched run finishes — or an event you registered a wait for arrives or times out — you are woken with a summary message on this thread. Dispatch or register the wait, end your turn with a status note, and continue when woken instead of polling.",
     'Reserve these tools for requests that say "factory" subagents/agents or ask for dispatched runs; a request for plain "subagents" means your built-in Codex collaborator subagents inside this run, not run_dispatch.',

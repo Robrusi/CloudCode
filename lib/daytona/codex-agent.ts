@@ -35,6 +35,11 @@ import {
   writeCloudcodeFactoryState,
 } from "@/lib/daytona/factory"
 import {
+  codexSkillsContentFingerprint,
+  codexSkillsInstalledCheckScript,
+  installCodexSkills,
+} from "@/lib/daytona/codex-skills"
+import {
   cloudcodeGitHubAgentContext,
   cloudcodeGitHubAgentInstructions,
   cloudcodeGitHubCodexConfig,
@@ -189,6 +194,7 @@ function hotContinuationFingerprint({
         factoryToolVersion: cloudcodeFactoryToolVersion(),
         githubToolVersion: cloudcodeGitHubToolVersion(),
         desktopToolFingerprint: daytonaDesktopToolContentFingerprint(),
+        skillsFingerprint: codexSkillsContentFingerprint(),
         mcpConfig,
         paths: {
           codexHome: paths.codexHome,
@@ -284,6 +290,7 @@ function hotContinuationCheckScript({
     `[ "$factory_enabled" != "1" ] || [ -s ${shellQuote(`${paths.codexHome}/factory/tool-version`)} ] || miss factory-marker`,
     `[ "$github_enabled" != "1" ] || [ -x ${shellQuote(`${paths.codexHome}/github/cloudcode-github-mcp.mjs`)} ] || miss github-tool`,
     `[ "$github_enabled" != "1" ] || [ -s ${shellQuote(`${paths.codexHome}/github/tool-version`)} ] || miss github-marker`,
+    codexSkillsInstalledCheckScript(paths, { factoryEnabled }),
     "yaml_hash=$(repo_cloudcode_hash)",
     "mise_hash=$(repo_mise_hash)",
     'expected_line="$expected_fingerprint $yaml_hash $mise_hash"',
@@ -888,6 +895,11 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
           ]
             .filter(Boolean)
             .join("\n\n"),
+        })
+      )
+      .then(() =>
+        installCodexSkills(sandbox, paths, input.signal, {
+          factoryEnabled: Boolean(factoryConfig),
         })
       )
       .then(() => runPathInstallScript(sandbox, input, paths, gitAuth))
