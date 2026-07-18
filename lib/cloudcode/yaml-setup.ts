@@ -1,6 +1,10 @@
 import type { Sandbox } from "@daytona/sdk"
 
 import {
+  cloudcodeConfigDirectoryPath,
+  cloudcodeYamlPath,
+} from "@/lib/cloudcode/config-path"
+import {
   cloudcodeYamlHash,
   formatCloudcodeYaml,
   normalizeCloudcodeYaml,
@@ -358,9 +362,19 @@ async function writeNormalizedCloudcodeYaml({
   paths: DaytonaSandboxPaths
   sandbox: Sandbox
 }) {
+  const configDirectory = cloudcodeConfigDirectoryPath(paths.repoPath)
+  const createDirectory = await runDaytonaCommand(
+    sandbox,
+    `mkdir -p ${shellQuote(configDirectory)}`,
+    { timeoutMs: 10_000 }
+  )
+  if (createDirectory.exitCode !== 0) {
+    throw new Error(`Unable to create ${configDirectory}.`)
+  }
+
   await writeDaytonaTextFile(
     sandbox,
-    `${paths.repoPath}/cloudcode.yaml`,
+    cloudcodeYamlPath(paths.repoPath),
     cloudcodeYaml
   )
 }

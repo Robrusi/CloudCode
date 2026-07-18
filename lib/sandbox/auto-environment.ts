@@ -1,5 +1,9 @@
 import type { Sandbox } from "@daytona/sdk"
 
+import {
+  CLOUDCODE_YAML_PATH,
+  cloudcodeYamlPath,
+} from "@/lib/cloudcode/config-path"
 import { codexShellEnv, presetSecretEnv } from "@/lib/daytona/codex-runtime"
 import { cloudcodeYamlHash, normalizeCloudcodeYaml } from "@/lib/cloudcode/yaml"
 import {
@@ -87,14 +91,14 @@ async function readRepoCloudcodeYamlFromGitHub({
   if (logCheck) {
     await input.onLog?.({
       kind: "setup",
-      message: "Checking repo cloudcode.yaml",
+      message: `Checking repo ${CLOUDCODE_YAML_PATH}`,
     })
   }
 
   const url = new URL(
     `https://api.github.com/repos/${encodeURIComponent(
       repo.owner
-    )}/${encodeURIComponent(repo.repo)}/contents/cloudcode.yaml`
+    )}/${encodeURIComponent(repo.repo)}/contents/${CLOUDCODE_YAML_PATH}`
   )
   const baseBranch = input.baseBranch?.trim()
   if (baseBranch) url.searchParams.set("ref", baseBranch)
@@ -107,7 +111,7 @@ async function readRepoCloudcodeYamlFromGitHub({
   if (response.status === 404) return undefined
   if (!response.ok) {
     throw new Error(
-      `Unable to check repo cloudcode.yaml. GitHub returned ${response.status}.`
+      `Unable to check repo ${CLOUDCODE_YAML_PATH}. GitHub returned ${response.status}.`
     )
   }
 
@@ -115,7 +119,7 @@ async function readRepoCloudcodeYamlFromGitHub({
   const cloudcodeYaml = normalizeCloudcodeYaml(source)
   await input.onLog?.({
     kind: "setup",
-    message: "Found repo cloudcode.yaml",
+    message: `Found repo ${CLOUDCODE_YAML_PATH}`,
   })
   return cloudcodeYaml
 }
@@ -162,7 +166,7 @@ async function readBuildHashInputs(
     [
       "set +e",
       `cd ${shellQuote(paths.repoPath)}`,
-      "for file in cloudcode.yaml package.json pnpm-lock.yaml package-lock.json yarn.lock bun.lock bun.lockb pyproject.toml uv.lock poetry.lock requirements.txt requirements-dev.txt go.mod go.sum Cargo.toml Cargo.lock Gemfile Gemfile.lock .mise.toml mise.toml .config/mise.toml .config/mise/config.toml .nvmrc .node-version .python-version .tool-versions Dockerfile .devcontainer/devcontainer.json; do",
+      `for file in ${CLOUDCODE_YAML_PATH} package.json pnpm-lock.yaml package-lock.json yarn.lock bun.lock bun.lockb pyproject.toml uv.lock poetry.lock requirements.txt requirements-dev.txt go.mod go.sum Cargo.toml Cargo.lock Gemfile Gemfile.lock .mise.toml mise.toml .config/mise.toml .config/mise/config.toml .nvmrc .node-version .python-version .tool-versions Dockerfile .devcontainer/devcontainer.json; do`,
       '  [ -f "$file" ] && sha256sum "$file"',
       "done",
     ].join("\n"),
@@ -177,7 +181,7 @@ async function readRepoCloudcodeYaml(
 ) {
   const source = await readDaytonaTextFile(
     sandbox,
-    `${paths.repoPath}/cloudcode.yaml`
+    cloudcodeYamlPath(paths.repoPath)
   ).catch(() => "")
 
   return source.trim() ? source : undefined
@@ -322,7 +326,7 @@ async function buildAutoEnvironmentSandbox({
     if (rawYaml) {
       void emit({
         kind: "setup",
-        message: "Found cloudcode.yaml",
+        message: `Found ${CLOUDCODE_YAML_PATH}`,
       })
     } else {
       await prepareBuilderCodex(sandbox, paths, input.authJson, input.signal)
@@ -334,11 +338,13 @@ async function buildAutoEnvironmentSandbox({
       rawYaml = await readRepoCloudcodeYaml(sandbox, paths)
 
       if (!rawYaml) {
-        throw new Error("Environment scanner did not create cloudcode.yaml.")
+        throw new Error(
+          `Environment scanner did not create ${CLOUDCODE_YAML_PATH}.`
+        )
       }
       void emit({
         kind: "setup",
-        message: "cloudcode.yaml generated",
+        message: `${CLOUDCODE_YAML_PATH} generated`,
       })
     }
 
@@ -419,7 +425,7 @@ export async function ensureAutoEnvironmentSandbox(
   if (!currentSandboxId) {
     await input.onLog?.({
       kind: "setup",
-      message: "Checking auto environment cloudcode.yaml",
+      message: `Checking auto environment ${CLOUDCODE_YAML_PATH}`,
     })
   }
   const client = await getAutoEnvironmentConvexClient(input.workerSecret)
@@ -458,7 +464,7 @@ export async function ensureAutoEnvironmentSandbox(
       kind: "setup",
       message:
         cloudcodeYamlSource.source === "repo"
-          ? "Using repo cloudcode.yaml"
+          ? `Using repo ${CLOUDCODE_YAML_PATH}`
           : "Using saved Convex cloudcode.yaml",
     })
     return {
@@ -471,7 +477,7 @@ export async function ensureAutoEnvironmentSandbox(
   await input.onLog?.({
     detail: build.environmentSlug,
     kind: "setup",
-    message: "Preparing auto environment cloudcode.yaml",
+    message: `Preparing auto environment ${CLOUDCODE_YAML_PATH}`,
   })
   const result = await buildAutoEnvironmentSandbox({
     build,

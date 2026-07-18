@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 
 import type { Sandbox } from "@daytona/sdk"
 
+import { cloudcodeYamlPath } from "@/lib/cloudcode/config-path"
 import { runCloudcodeYamlSetup } from "@/lib/cloudcode/yaml-setup"
 import { compactLine } from "@/lib/shared/compact-line"
 import type { RunCodexInSandboxInput } from "@/lib/daytona/codex-agent-types"
@@ -254,7 +255,7 @@ async function readCloudcodeYamlForLiveSandbox(
 
   const repoCloudcodeYaml = await readDaytonaTextFile(
     sandbox,
-    `${paths.repoPath}/cloudcode.yaml`
+    cloudcodeYamlPath(paths.repoPath)
   ).catch(() => "")
   if (repoCloudcodeYaml.trim()) {
     return {

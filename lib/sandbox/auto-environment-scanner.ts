@@ -1,5 +1,6 @@
 import type { Sandbox } from "@daytona/sdk"
 
+import { CLOUDCODE_YAML_PATH } from "@/lib/cloudcode/config-path"
 import { compactAnsiLine } from "@/lib/shared/compact-line"
 import {
   codexCliPackageName,
@@ -108,9 +109,9 @@ function scannerPrompt(repoPath: string) {
     "",
     `The repository is already cloned at ${repoPath}. Your current working directory is outside the repository. Keep Codex running outside the repo; use explicit cd commands or absolute paths when you inspect files.`,
     "",
-    "Goal: create a valid repo-root cloudcode.yaml that tells Cloudcode exactly what to download/install globally, what to install in the repo, and optional environment checks.",
+    `Goal: create a valid ${CLOUDCODE_YAML_PATH} that tells Cloudcode exactly what to download/install globally, what to install in the repo, and optional environment checks.`,
     "",
-    "You may run shell commands to inspect the project. You may download/install tools under the sandbox home and repo dependencies if that is necessary to verify the recipe, but every required step must also be encoded in cloudcode.yaml.",
+    `You may run shell commands to inspect the project. You may download/install tools under the sandbox home and repo dependencies if that is necessary to verify the recipe, but every required step must also be encoded in ${CLOUDCODE_YAML_PATH}.`,
     "",
     "Inspect README files, AGENTS.md, package manifests, lockfiles, pyproject.toml, requirements files, go.mod, Cargo.toml, Dockerfiles, devcontainer config, CI workflows, version files, and scripts.",
     "",
@@ -124,7 +125,7 @@ function scannerPrompt(repoPath: string) {
     "",
     "Do not force compiler variables such as CC=clang or CXX=clang++ unless repository docs require them or you verified those compilers are installed. Prefer the repo's normal install command.",
     "",
-    "Write only this file in the repo unless a generated lockfile is required by the install command: cloudcode.yaml.",
+    `Create the directory containing ${CLOUDCODE_YAML_PATH} if needed. Write only this file in the repo unless a generated lockfile is required by the install command: ${CLOUDCODE_YAML_PATH}.`,
     "",
     "Required YAML shape. Use global as a list of global install commands. Nested global.install and top-level initialize are accepted for compatibility, but do not generate them.",
     "global:",
@@ -142,7 +143,7 @@ function scannerPrompt(repoPath: string) {
     "",
     "Cloudcode setup sandboxes have 4 GB of RAM by default. Keep that limit in mind when choosing install commands, but do not add low-memory flags by default. Add package-manager concurrency limits only when the repo's install is likely to be memory-heavy, such as Bun projects with native dependencies, large monorepos, many lifecycle scripts, or docs/CI/devcontainer evidence of memory pressure. For Bun dependency installs, prefer bun install --frozen-lockfile normally, and use flags such as --concurrent-scripts 1 only when those memory-heavy conditions apply.",
     "",
-    "When finished, make sure cloudcode.yaml parses as YAML and contains concrete run commands.",
+    `When finished, make sure ${CLOUDCODE_YAML_PATH} parses as YAML and contains concrete run commands.`,
   ].join("\n")
 }
 

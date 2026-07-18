@@ -2,6 +2,8 @@ import { createHash } from "node:crypto"
 
 import YAML from "yaml"
 
+import { CLOUDCODE_YAML_PATH } from "@/lib/cloudcode/config-path"
+
 export type CloudcodeCommand = {
   name?: string
   run: string
@@ -44,7 +46,9 @@ function normalizeCommand(value: unknown): CloudcodeCommand | null {
   if (!run) return null
 
   if (run.length > 20_000) {
-    throw new Error("cloudcode.yaml contains a command that is too long.")
+    throw new Error(
+      `${CLOUDCODE_YAML_PATH} contains a command that is too long.`
+    )
   }
 
   return {
@@ -96,7 +100,7 @@ export function parseCloudcodeYaml(source: string): CloudcodeYamlConfig {
     config.checks.length === 0
   ) {
     throw new Error(
-      "cloudcode.yaml must define at least one global install, repo install, or check command."
+      `${CLOUDCODE_YAML_PATH} must define at least one global install, repo install, or check command.`
     )
   }
 
@@ -140,7 +144,7 @@ export function cloudcodeYamlAgentContext(source?: string) {
   if (commands.length === 0) return ""
 
   return [
-    "Repository environment commands from cloudcode.yaml:",
+    `Repository environment commands from ${CLOUDCODE_YAML_PATH}:`,
     ...commands.map((command) => `- ${command}`),
   ].join("\n")
 }

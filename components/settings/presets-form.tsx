@@ -13,6 +13,7 @@ import {
 } from "@/components/settings/shared"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
+import { CLOUDCODE_YAML_PATH } from "@/lib/cloudcode/config-path"
 import { cn } from "@/lib/shared/utils"
 
 type PresetSettingsController = ReturnType<typeof usePresetSettingsController>
@@ -130,12 +131,12 @@ function AutoPresetEnvironmentSummary({
   return (
     <div className="space-y-1.5">
       <div className="text-xs font-medium text-foreground/80">
-        Automatic cloudcode.yaml environments
+        Automatic {CLOUDCODE_YAML_PATH} environments
       </div>
       <p className={fieldHint}>
-        When this preset runs against a repo, Cloudcode uses the repo&apos;s
-        cloudcode.yaml first. If the repo does not have one, it uses the saved
-        Convex cloudcode.yaml for the live sandbox.
+        When this preset runs against a repo, Cloudcode uses the repo&apos;s{" "}
+        {CLOUDCODE_YAML_PATH} first. If the repo does not have one, it uses the
+        saved Convex cloudcode.yaml for the live sandbox.
       </p>
       {selected?.environments?.length ? (
         <div className="mt-3">
@@ -159,10 +160,10 @@ function ManualPresetFields(props: PresetEditorFieldsProps) {
             Auto environment
           </div>
           <p className={fieldHint}>
-            Use the repo&apos;s cloudcode.yaml for each live chat sandbox,
-            falling back to the saved Convex cloudcode.yaml when the repo does
-            not include one. The scripts and secrets below run after the
-            environment is ready.
+            Use the repo&apos;s {CLOUDCODE_YAML_PATH} for each live chat
+            sandbox, falling back to the saved Convex cloudcode.yaml when the
+            repo does not include one. The scripts and secrets below run after
+            the environment is ready.
           </p>
         </div>
         <Switch

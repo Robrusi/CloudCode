@@ -48,6 +48,7 @@ import {
   writeCloudcodeGitHubState,
 } from "@/lib/daytona/github"
 import { buildImageAttachmentPromptBlock } from "@/lib/chat/attachments"
+import { CLOUDCODE_YAML_PATH } from "@/lib/cloudcode/config-path"
 import { compactLine } from "@/lib/shared/compact-line"
 import {
   createDaytonaSandbox,
@@ -226,7 +227,7 @@ function hotContinuationHashHelpers() {
     "  cksum | awk '{print $1}'",
     "}",
     "repo_cloudcode_hash() {",
-    '  if [ -f "$repo_path/cloudcode.yaml" ]; then hash_file "$repo_path/cloudcode.yaml"; else printf \'missing\'; fi',
+    `  if [ -f "$repo_path/${CLOUDCODE_YAML_PATH}" ]; then hash_file "$repo_path/${CLOUDCODE_YAML_PATH}"; else printf 'missing'; fi`,
     "}",
     "repo_mise_hash() {",
     "  {",
