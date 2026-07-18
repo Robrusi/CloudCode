@@ -29,6 +29,23 @@ import { createRequire as __ccPwCreateRequire } from "node:module";
 import { join as __ccPwJoin } from "node:path";
 
 const CLOUDCODE_PLAYWRIGHT_VERSION = ${JSON.stringify(PLAYWRIGHT_TEST_VERSION)};
+// Oldest @playwright/test the generated tooling works with: ariaSnapshot
+// (desktop browser tools) needs 1.49, and the UI test runner's base-setup
+// project relies on dependency projects ignoring CLI filters (1.32).
+const CLOUDCODE_PLAYWRIGHT_MIN_VERSION = "1.49.0";
+
+function __ccPwVersionAtLeast(version, minimum) {
+  const parse = (value) =>
+    String(value).split("-")[0].split(".").map((part) => Number.parseInt(part, 10));
+  const candidate = parse(version);
+  const floor = parse(minimum);
+  for (let i = 0; i < 3; i += 1) {
+    const left = Number.isFinite(candidate[i]) ? candidate[i] : 0;
+    const right = Number.isFinite(floor[i]) ? floor[i] : 0;
+    if (left !== right) return left > right;
+  }
+  return true;
+}
 
 function __ccPwJsonFile(path, fallback) {
   try {
@@ -83,8 +100,16 @@ function installedCloudcodePlaywrightRuntime(root) {
 }
 
 async function resolveCloudcodePlaywrightRuntime({ repoPath, runtimeRoot }) {
+  // A repository-local runtime keeps specs on the repo's own Playwright, but
+  // only when it is new enough for the features the tooling depends on;
+  // otherwise fall through to the pinned runtime.
   const repoRuntime = installedCloudcodePlaywrightRuntime(repoPath);
-  if (repoRuntime) return repoRuntime;
+  if (
+    repoRuntime &&
+    __ccPwVersionAtLeast(repoRuntime.version, CLOUDCODE_PLAYWRIGHT_MIN_VERSION)
+  ) {
+    return repoRuntime;
+  }
 
   const preparedRuntime = installedCloudcodePlaywrightRuntime(runtimeRoot);
   if (preparedRuntime?.version === CLOUDCODE_PLAYWRIGHT_VERSION) {

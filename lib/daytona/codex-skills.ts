@@ -21,7 +21,7 @@ import {
 // Bumped for content changes: the version feeds both the install marker and
 // the hot-continuation fingerprint, forcing a cold setup that rewrites the
 // skills on reused sandboxes so updated guidance actually reaches the agent.
-const CODEX_SKILLS_VERSION = "4"
+const CODEX_SKILLS_VERSION = "5"
 
 const WAIT_MIN_TTL_SECONDS = FACTORY_WAIT_MIN_TTL_MS / 1000
 const WAIT_DEFAULT_TTL_SECONDS = FACTORY_WAIT_DEFAULT_TTL_MS / 1000
@@ -243,9 +243,9 @@ Targeted actions time out after 10 seconds when the element is not found — the
 ## Dev server — probe, then start; never assume
 
 The sandbox starts with NO dev server running. Before opening the app:
-1. Probe from your shell: \`curl -sf -o /dev/null http://127.0.0.1:3000\` (use the app's actual port).
+1. Probe from your shell: \`curl -s -o /dev/null http://127.0.0.1:3000\` (use the app's actual port). Exit code 0 — any HTTP response, even a 401 or 404 — means a server is up; only a connection failure means it is down. Do not add \`-f\`: an app whose root returns 4xx is still running.
 2. If the probe fails, find the real start command in the repository (\`package.json\` scripts, README, Makefile) and start it in a visible desktop terminal: \`desktop_open_terminal\` \`{ "command": "pnpm dev", "title": "Dev Server" }\`.
-3. Wait for readiness from your shell — \`for i in $(seq 60); do curl -sf -o /dev/null http://127.0.0.1:3000 && break; sleep 2; done\` — then \`browser_open\`.
+3. Wait for readiness and verify it explicitly — \`for i in $(seq 60); do curl -s -o /dev/null http://127.0.0.1:3000 && break; sleep 2; done; curl -s -o /dev/null http://127.0.0.1:3000 || echo NOT_READY\` — if it prints NOT_READY, do not open the browser: read the startup error in the desktop terminal, fix it, and probe again.
 
 - Long-running processes (dev server, watcher) run ONLY in \`desktop_open_terminal\`: your own shell would block on them, and the visible terminal shows startup output and crashes on the desktop.
 - If the probe succeeds because you already started the server earlier in this run, continue — never start a second instance.
@@ -369,7 +369,7 @@ The test browser starts with a fresh, empty profile: it is ALWAYS logged out unl
 \`\`\`json
 { "testPath": ".cloudcode/tests/dashboard.spec.ts", "useDesktopAuth": true }
 \`\`\`
-The runner copies the desktop session's cookies and origin storage into the isolated test browser (Playwright storageState) — the test runs logged-in but still in its own fresh window. If it fails with "no desktop browser session", do the login step first; the copied session must be for the same origin as \`baseUrl\`.
+The runner copies the desktop session's cookies and origin storage into the isolated test browser (Playwright storageState) — the test runs logged-in but still in its own fresh window. Only state for the \`baseUrl\` site is copied (sessions for unrelated sites never reach the test browser), and the state file is deleted when the run ends. If it fails with "no cookies or storage for …", complete the login in the desktop browser at the same origin as \`baseUrl\` first.
 
 ## Hard rules the runner enforces
 

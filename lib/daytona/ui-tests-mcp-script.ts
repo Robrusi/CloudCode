@@ -580,13 +580,28 @@ const WINDOW_WATCH_POLL_MS = 700;
 // Never hide the window manager's own surfaces; hiding the panel or the
 // desktop itself is a no-op at best and breaks the session at worst.
 const WINDOW_STAGE_SKIP_RE = /panel|xfdesktop|desktop_window/i;
+const STAGING_ERROR_LIMIT = 20;
+
+// Staging stays best-effort (a wmctrl failure degrades to extra windows in
+// the recording, never a failed run), but every failure is surfaced on the
+// run result so the degraded recording is diagnosable.
+function recordStagingError(errors, action, detail) {
+  if (errors.length >= STAGING_ERROR_LIMIT) return;
+  const message =
+    detail instanceof Error ? detail.message : String(detail ?? "");
+  errors.push(action + ": " + (message.trim() || "unknown error"));
+}
 
 async function listDesktopWindows(display) {
   const result = await exec("wmctrl", ["-l", "-x"], {
     env: { DISPLAY: display },
     timeout: 5_000,
   });
-  if (result.exitCode !== 0) return [];
+  if (result.exitCode !== 0) {
+    throw new Error(
+      result.stderr.trim() || result.stdout.trim() || "wmctrl -l failed"
+    );
+  }
   return result.stdout
     .split("\n")
     .map((line) => line.trim())
@@ -599,8 +614,13 @@ async function listDesktopWindows(display) {
     });
 }
 
-async function stageDesktopForRun(display) {
-  const windows = await listDesktopWindows(display).catch(() => []);
+async function stageDesktopForRun(display, errors) {
+  let windows = [];
+  try {
+    windows = await listDesktopWindows(display);
+  } catch (error) {
+    recordStagingError(errors, "list desktop windows", error);
+  }
   const baselineIds = new Set(windows.map((win) => win.id));
   const hiddenIds = [];
   for (const win of windows) {
@@ -608,25 +628,29 @@ async function stageDesktopForRun(display) {
     const result = await exec("wmctrl", ["-i", "-r", win.id, "-b", "add,hidden"], {
       env: { DISPLAY: display },
       timeout: 5_000,
-    }).catch(() => null);
-    if (result?.exitCode === 0) hiddenIds.push(win.id);
+    });
+    if (result.exitCode === 0) hiddenIds.push(win.id);
+    else recordStagingError(errors, "hide window " + win.id, result.stderr);
   }
   return { baselineIds, hiddenIds };
 }
 
-async function unstageDesktop(display, hiddenIds) {
+async function unstageDesktop(display, hiddenIds, errors) {
   for (const id of hiddenIds) {
-    await exec("wmctrl", ["-i", "-r", id, "-b", "remove,hidden"], {
+    const result = await exec("wmctrl", ["-i", "-r", id, "-b", "remove,hidden"], {
       env: { DISPLAY: display },
       timeout: 5_000,
-    }).catch(() => null);
+    });
+    if (result.exitCode !== 0) {
+      recordStagingError(errors, "restore window " + id, result.stderr);
+    }
   }
 }
 
 /** Raises every window that appears after the baseline snapshot (headed
  * Chromium opens one window per browser context, i.e. per test) so the
  * recording always shows the active test window. Returns a stop function. */
-function watchTestWindows(display, baselineIds) {
+function watchTestWindows(display, baselineIds, errors) {
   const raisedIds = new Set();
   let stopped = false;
   let timer;
@@ -636,12 +660,16 @@ function watchTestWindows(display, baselineIds) {
       for (const win of windows) {
         if (stopped || baselineIds.has(win.id) || raisedIds.has(win.id)) continue;
         raisedIds.add(win.id);
-        await exec("wmctrl", ["-i", "-a", win.id], {
+        const result = await exec("wmctrl", ["-i", "-a", win.id], {
           env: { DISPLAY: display },
           timeout: 5_000,
         });
+        if (result.exitCode !== 0) {
+          recordStagingError(errors, "raise window " + win.id, result.stderr);
+        }
       }
-    } catch {
+    } catch (error) {
+      recordStagingError(errors, "watch test windows", error);
     }
     if (!stopped) timer = setTimeout(tick, WINDOW_WATCH_POLL_MS);
   };
@@ -655,13 +683,39 @@ function watchTestWindows(display, baselineIds) {
 // ---------------------------------------------------------------------------
 // Desktop session handoff (useDesktopAuth).
 //
-// Copies the logged-in session (cookies plus origin storage) out of the headed
-// desktop browser over CDP and injects it into the isolated test browser as a
-// Playwright storageState, so tests behind auth run logged-in while keeping
-// their own fresh window and profile.
+// Copies the logged-in session out of the headed desktop browser over CDP and
+// injects it into the isolated test browser as a Playwright storageState, so
+// tests behind auth run logged-in while keeping their own fresh window and
+// profile. Only cookies and storage for the baseUrl site are copied - the
+// desktop browser may hold sessions for unrelated sites, and those must never
+// reach the repository-controlled test process. The state file is written
+// owner-only and deleted when the run ends.
 // ---------------------------------------------------------------------------
 
-async function exportDesktopStorageState(statePath) {
+function matchesBaseSite(baseHost, candidateHost) {
+  const candidate = String(candidateHost || "")
+    .replace(/^\./, "")
+    .toLowerCase();
+  if (!candidate || !baseHost) return false;
+  if (candidate === baseHost) return true;
+  // Same site in either direction: parent-domain cookies of the app host, and
+  // subdomain state when the app sits on the registrable domain itself.
+  return (
+    baseHost.endsWith("." + candidate) || candidate.endsWith("." + baseHost)
+  );
+}
+
+async function exportDesktopStorageState(statePath, baseUrl) {
+  let baseHost = "";
+  try {
+    baseHost = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+  }
+  if (!baseHost) {
+    throw new Error(
+      "useDesktopAuth requires a valid baseUrl to scope the copied session."
+    );
+  }
   const cdpPort = Number(process.env.CLOUDCODE_BROWSER_CDP_PORT || "9377");
   const cdpUrl = "http://127.0.0.1:" + cdpPort;
   let alive = false;
@@ -693,12 +747,29 @@ async function exportDesktopStorageState(statePath) {
       );
     }
     const state = await context.storageState();
-    if (!state.cookies?.length && !state.origins?.length) {
+    const cookies = (state.cookies || []).filter((cookie) =>
+      matchesBaseSite(baseHost, cookie.domain)
+    );
+    const origins = (state.origins || []).filter((entry) => {
+      try {
+        return matchesBaseSite(baseHost, new URL(entry.origin).hostname);
+      } catch {
+        return false;
+      }
+    });
+    if (!cookies.length && !origins.length) {
       throw new Error(
-        "useDesktopAuth found no cookies or storage in the desktop browser session. Complete the login there first (browser_open the app, sign in, confirm the logged-in page), then rerun."
+        "useDesktopAuth found no cookies or storage for " +
+          baseHost +
+          " in the desktop browser session. Log in to the app at " +
+          baseUrl +
+          " in the desktop browser (browser_open, sign in, confirm the logged-in page), then rerun."
       );
     }
-    writeFileSync(statePath, JSON.stringify(state), "utf8");
+    writeFileSync(statePath, JSON.stringify({ cookies, origins }), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
   } finally {
     await browser.close().catch(() => undefined);
   }
@@ -942,18 +1013,21 @@ async function recordedUiTestRun(
   let playwright;
   let stage = { baselineIds: new Set(), hiddenIds: [] };
   let stopWindowWatcher;
+  const stagingErrors = [];
   const setupFile = findBaseSetupFile();
   const capturedStatePath = setupFile
     ? join(dirname(configPath), "base-state.json")
     : undefined;
+  const storageStatePath = normalized.useDesktopAuth
+    ? join(dirname(configPath), "storage-state.json")
+    : undefined;
   try {
     // Auth export runs before the recording starts: its failures (no desktop
     // browser, empty session) must not produce an empty recording artifact.
-    const storageStatePath = normalized.useDesktopAuth
-      ? join(dirname(configPath), "storage-state.json")
-      : undefined;
-    if (storageStatePath) await exportDesktopStorageState(storageStatePath);
-    stage = await stageDesktopForRun(desktop.display);
+    if (storageStatePath) {
+      await exportDesktopStorageState(storageStatePath, normalized.baseUrl);
+    }
+    stage = await stageDesktopForRun(desktop.display, stagingErrors);
     recording = await startRecording(
       "ui-test-" +
         (normalized.testPath
@@ -979,7 +1053,11 @@ async function recordedUiTestRun(
     if (normalized.grep) playwrightArgs.push("--grep", normalized.grep);
     if (normalized.testPath) playwrightArgs.push(normalized.testPath);
 
-    stopWindowWatcher = watchTestWindows(desktop.display, stage.baselineIds);
+    stopWindowWatcher = watchTestWindows(
+      desktop.display,
+      stage.baselineIds,
+      stagingErrors
+    );
     playwright = await exec("node", [playwrightRuntime.cliPath, ...playwrightArgs], {
       cwd: repoPath,
       env: {
@@ -1008,7 +1086,14 @@ async function recordedUiTestRun(
     }
     // Restore only after the recording stopped so reappearing windows never
     // show up in the video.
-    await unstageDesktop(desktop.display, stage.hiddenIds).catch(() => undefined);
+    await unstageDesktop(desktop.display, stage.hiddenIds, stagingErrors).catch(
+      (error) => recordStagingError(stagingErrors, "restore windows", error)
+    );
+    // The session-state files hold live cookies; they are only needed while
+    // Playwright creates contexts, so never let them outlive the run.
+    for (const statePath of [storageStatePath, capturedStatePath]) {
+      if (statePath) rmSync(statePath, { force: true });
+    }
     cleanupCloudcodeTestPackageLink();
     try {
       const scopedDir = dirname(packageLink);
@@ -1057,6 +1142,7 @@ async function recordedUiTestRun(
     stdout: truncate(playwright?.stdout ?? "", 12000),
     stopRecordingError: stopRecordingError || undefined,
     baseSetupPath: setupFile ? safeRelativePath(setupFile) : undefined,
+    stagingErrors: stagingErrors.length ? stagingErrors : undefined,
     testPath: normalized.testPath ? safeRelativePath(normalized.testPath) : null,
     updatedAt: Date.now(),
     useDesktopAuth: normalized.useDesktopAuth || undefined,
@@ -1874,6 +1960,9 @@ const test = base.test.extend({
       const statePath = process.env.CLOUDCODE_UI_TEST_STORAGE_STATE;
       if (!statePath || testInfo.project.name !== "base-setup") return;
       await context.storageState({ path: statePath });
+      // Live session cookies: keep the file owner-only for its short life
+      // (the runner deletes it when the run ends).
+      fs.chmodSync(statePath, 0o600);
     },
     { auto: true },
   ],

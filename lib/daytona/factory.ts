@@ -380,7 +380,7 @@ async function callTool(name, args = {}) {
 const tools = [
   {
     name: "run_dispatch",
-    description: "Dispatch a new autonomous Cloudcode agent run in a fresh thread on the same repository. Returns the child runId/threadId immediately; the child runs in parallel and shares nothing with you, so the prompt must contain every instruction and piece of context it needs. Poll run_status to follow it.",
+    description: "Dispatch a new autonomous Cloudcode agent run in a fresh thread on the same repository. Returns the child runId/threadId immediately; the child runs in parallel and shares nothing with you, so the prompt must contain every instruction and piece of context it needs. When it finishes, a wake-up message resumes this thread (unless notifyParent is false) - end your turn and wait instead of polling; run_status is for a deliberate one-off check only.",
     inputSchema: {
       type: "object",
       required: ["prompt"],
