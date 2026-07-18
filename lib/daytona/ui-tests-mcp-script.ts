@@ -686,32 +686,34 @@ function watchTestWindows(display, baselineIds, errors) {
 // Copies the logged-in session out of the headed desktop browser over CDP and
 // injects it into the isolated test browser as a Playwright storageState, so
 // tests behind auth run logged-in while keeping their own fresh window and
-// profile. Only cookies and storage for the baseUrl site are copied - the
-// desktop browser may hold sessions for unrelated sites, and those must never
-// reach the repository-controlled test process. The state file is written
-// owner-only and deleted when the run ends.
+// profile. Only cookies applicable to the baseUrl host and storage for the
+// exact baseUrl origin are copied - the desktop browser may hold sessions for
+// unrelated sites, and those must never reach the repository-controlled test
+// process. The state file is written owner-only and deleted when the run ends.
 // ---------------------------------------------------------------------------
 
-function matchesBaseSite(baseHost, candidateHost) {
-  const candidate = String(candidateHost || "")
+function cookieAppliesToBase(baseHost, cookieDomain) {
+  const domain = String(cookieDomain || "")
     .replace(/^\./, "")
     .toLowerCase();
-  if (!candidate || !baseHost) return false;
-  if (candidate === baseHost) return true;
-  // Same site in either direction: parent-domain cookies of the app host, and
-  // subdomain state when the app sits on the registrable domain itself.
-  return (
-    baseHost.endsWith("." + candidate) || candidate.endsWith("." + baseHost)
-  );
+  if (!domain || !baseHost) return false;
+  // Browser applicability: a cookie reaches the app host only when its domain
+  // is that host itself or a parent domain of it. Child-domain cookies (for
+  // example auth.example.com when testing example.com) are never sent to the
+  // base host, so copying them would only widen the credential handoff.
+  return domain === baseHost || baseHost.endsWith("." + domain);
 }
 
 async function exportDesktopStorageState(statePath, baseUrl) {
   let baseHost = "";
+  let baseOrigin = "";
   try {
-    baseHost = new URL(baseUrl).hostname.toLowerCase();
+    const parsed = new URL(baseUrl);
+    baseHost = parsed.hostname.toLowerCase();
+    baseOrigin = parsed.origin;
   } catch {
   }
-  if (!baseHost) {
+  if (!baseHost || !baseOrigin) {
     throw new Error(
       "useDesktopAuth requires a valid baseUrl to scope the copied session."
     );
@@ -748,11 +750,13 @@ async function exportDesktopStorageState(statePath, baseUrl) {
     }
     const state = await context.storageState();
     const cookies = (state.cookies || []).filter((cookie) =>
-      matchesBaseSite(baseHost, cookie.domain)
+      cookieAppliesToBase(baseHost, cookie.domain)
     );
+    // Origin storage is scoped to the exact origin: scheme and port included,
+    // so another app on the same host but a different port never leaks in.
     const origins = (state.origins || []).filter((entry) => {
       try {
-        return matchesBaseSite(baseHost, new URL(entry.origin).hostname);
+        return new URL(entry.origin).origin === baseOrigin;
       } catch {
         return false;
       }
@@ -989,6 +993,13 @@ async function executeUiTestRun(runId, normalized) {
   }
 }
 
+// Per-test limits are enforced inside Playwright by the generated config's
+// timeout, so the process-level timeout is only a hang backstop for the whole
+// sequential suite (base setup plus every test). Deriving it from a single
+// test's timeoutMs killed legitimate multi-test runs; keep it just under the
+// 15-minute CLI transport cap in lib/daytona/ui-tests.ts instead.
+const PLAYWRIGHT_SUITE_TIMEOUT_MS = 14 * 60_000;
+
 async function recordedUiTestRun(
   runId,
   normalized,
@@ -1072,7 +1083,7 @@ async function recordedUiTestRun(
         NODE_PATH: playwrightRuntime.nodePath,
       },
       maxBuffer: 40 * 1024 * 1024,
-      timeout: Math.max(normalized.timeoutMs + 60_000, 180_000),
+      timeout: PLAYWRIGHT_SUITE_TIMEOUT_MS,
     });
   } finally {
     stopWindowWatcher?.();
@@ -1122,7 +1133,7 @@ async function recordedUiTestRun(
       status === "failed"
         ? truncate(
             timedOut
-              ? "The UI test run exceeded its time budget and was killed. Increase timeoutMs or narrow the run with testPath/grep.\n" +
+              ? "The UI test run exceeded the overall 14-minute suite budget and was killed. Individual tests are limited by timeoutMs; narrow the run with testPath/grep or split long suites.\n" +
                   failureDetail
               : failureDetail
           )

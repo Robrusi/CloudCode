@@ -21,7 +21,7 @@ import {
 // Bumped for content changes: the version feeds both the install marker and
 // the hot-continuation fingerprint, forcing a cold setup that rewrites the
 // skills on reused sandboxes so updated guidance actually reaches the agent.
-const CODEX_SKILLS_VERSION = "5"
+const CODEX_SKILLS_VERSION = "6"
 
 const WAIT_MIN_TTL_SECONDS = FACTORY_WAIT_MIN_TTL_MS / 1000
 const WAIT_DEFAULT_TTL_SECONDS = FACTORY_WAIT_DEFAULT_TTL_MS / 1000
@@ -243,9 +243,9 @@ Targeted actions time out after 10 seconds when the element is not found — the
 ## Dev server — probe, then start; never assume
 
 The sandbox starts with NO dev server running. Before opening the app:
-1. Probe from your shell: \`curl -s -o /dev/null http://127.0.0.1:3000\` (use the app's actual port). Exit code 0 — any HTTP response, even a 401 or 404 — means a server is up; only a connection failure means it is down. Do not add \`-f\`: an app whose root returns 4xx is still running.
+1. Probe from your shell: \`curl -s -o /dev/null --connect-timeout 2 --max-time 5 http://127.0.0.1:3000\` (use the app's actual port). Exit code 0 — any HTTP response, even a 401 or 404 — means a server is up; only a connection failure or timeout means it is down. Do not add \`-f\` (an app whose root returns 4xx is still running), and always keep the \`--max-time\` bound so a stalled listener cannot hang your shell.
 2. If the probe fails, find the real start command in the repository (\`package.json\` scripts, README, Makefile) and start it in a visible desktop terminal: \`desktop_open_terminal\` \`{ "command": "pnpm dev", "title": "Dev Server" }\`.
-3. Wait for readiness and verify it explicitly — \`for i in $(seq 60); do curl -s -o /dev/null http://127.0.0.1:3000 && break; sleep 2; done; curl -s -o /dev/null http://127.0.0.1:3000 || echo NOT_READY\` — if it prints NOT_READY, do not open the browser: read the startup error in the desktop terminal, fix it, and probe again.
+3. Wait for readiness and verify it explicitly — \`for i in $(seq 60); do curl -s -o /dev/null --connect-timeout 2 --max-time 5 http://127.0.0.1:3000 && break; sleep 2; done; curl -s -o /dev/null --connect-timeout 2 --max-time 5 http://127.0.0.1:3000 || echo NOT_READY\` — if it prints NOT_READY, do not open the browser: read the startup error in the desktop terminal, fix it, and probe again.
 
 - Long-running processes (dev server, watcher) run ONLY in \`desktop_open_terminal\`: your own shell would block on them, and the visible terminal shows startup output and crashes on the desktop.
 - If the probe succeeds because you already started the server earlier in this run, continue — never start a second instance.
@@ -352,9 +352,10 @@ Spec files must match \`*.spec.ts\` / \`*.test.ts\` (js/jsx/tsx variants too) an
 
 ## Base state — where every test starts (base.setup.ts)
 
-Preferred whenever more than one test needs the same starting point (logged in, on the right page): create ONE spec named \`base.setup.ts\` at the top level of \`.cloudcode/tests\`. It is an ordinary guarded spec — same template, same hard rules — containing exactly one \`test()\` that walks the app into the starting state through real UI actions and ends with an \`expect(...)\` proving it arrived.
+Preferred whenever more than one test needs the same session state (logged in, onboarding dismissed): create ONE spec named \`base.setup.ts\` at the top level of \`.cloudcode/tests\`. It is an ordinary guarded spec — same template, same hard rules — containing exactly one \`test()\` that walks the app into that state through real UI actions and ends with an \`expect(...)\` proving it arrived.
 
-- On every \`ui_tests_run\` it runs first and is recorded like any test; the browser state it ends in (cookies plus origin storage) automatically becomes the starting state of every other test — each still runs in its own fresh window.
+- On every \`ui_tests_run\` it runs first and is recorded like any test; the session state it ends with (cookies plus origin storage) automatically becomes the starting state of every other test — each still runs in its own fresh window.
+- Only cookies and origin storage carry over — NOT the page or URL. Every ordinary test starts on a blank page and must navigate with \`page.goto("/route")\` as its first action, exactly like the template. The base state saves re-recording the login, not the navigation.
 - If it fails, the remaining tests are skipped with the setup failure as the visible cause. Fix the base state before anything else.
 - It is rebuilt fresh on every run, so it can never go stale. Never persist or reuse state files across runs yourself.
 - Do not pass \`base.setup.ts\` as \`testPath\` and do not \`grep\` for its title — it runs automatically; filters select the ordinary tests only.
