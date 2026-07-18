@@ -9,7 +9,10 @@ import {
 import { uiTestsServerEnv } from "@/lib/daytona/ui-tests-mcp-script"
 
 const LIST_TIMEOUT_MS = 30_000
-const RUN_TIMEOUT_MS = 15 * 60 * 1000
+// Must exceed the runner's 14-minute Playwright backstop plus cold-start
+// overhead (runtime install, desktop startup, recording shutdown) so the
+// inner backstop always fires before the CLI transport gives up.
+const RUN_TIMEOUT_MS = 20 * 60 * 1000
 const DEFAULT_RUN_TIMEOUT_MS = 90_000
 const MAX_RUN_TIMEOUT_MS = 10 * 60 * 1000
 

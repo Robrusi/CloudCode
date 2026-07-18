@@ -614,6 +614,19 @@ async function listDesktopWindows(display) {
     });
 }
 
+async function windowIsHidden(display, id) {
+  const result = await exec("xprop", ["-id", id, "_NET_WM_STATE"], {
+    env: { DISPLAY: display },
+    timeout: 5_000,
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(
+      result.stderr.trim() || result.stdout.trim() || "xprop failed"
+    );
+  }
+  return result.stdout.includes("_NET_WM_STATE_HIDDEN");
+}
+
 async function stageDesktopForRun(display, errors) {
   let windows = [];
   try {
@@ -625,6 +638,14 @@ async function stageDesktopForRun(display, errors) {
   const hiddenIds = [];
   for (const win of windows) {
     if (WINDOW_STAGE_SKIP_RE.test(win.windowClass)) continue;
+    // wmctrl lists minimized windows too. One the user already minimized must
+    // stay minimized after the run, so it is neither hidden here nor added to
+    // the restore list; only windows this run actually hid get restored.
+    try {
+      if (await windowIsHidden(display, win.id)) continue;
+    } catch (error) {
+      recordStagingError(errors, "read state of window " + win.id, error);
+    }
     const result = await exec("wmctrl", ["-i", "-r", win.id, "-b", "add,hidden"], {
       env: { DISPLAY: display },
       timeout: 5_000,
@@ -693,15 +714,16 @@ function watchTestWindows(display, baselineIds, errors) {
 // ---------------------------------------------------------------------------
 
 function cookieAppliesToBase(baseHost, cookieDomain) {
-  const domain = String(cookieDomain || "")
-    .replace(/^\./, "")
-    .toLowerCase();
+  const raw = String(cookieDomain || "").toLowerCase();
+  const domain = raw.replace(/^\./, "");
   if (!domain || !baseHost) return false;
-  // Browser applicability: a cookie reaches the app host only when its domain
-  // is that host itself or a parent domain of it. Child-domain cookies (for
-  // example auth.example.com when testing example.com) are never sent to the
-  // base host, so copying them would only widen the credential handoff.
-  return domain === baseHost || baseHost.endsWith("." + domain);
+  if (domain === baseHost) return true;
+  // Browser applicability: a parent-domain cookie reaches subdomains only
+  // when it is a domain cookie, stored with a leading dot (".example.com").
+  // A host-only parent cookie ("example.com") is never sent to
+  // app.example.com, and child-domain cookies never reach the base host -
+  // copying either would only widen the credential handoff.
+  return raw.startsWith(".") && baseHost.endsWith("." + domain);
 }
 
 async function exportDesktopStorageState(statePath, baseUrl) {
@@ -996,8 +1018,11 @@ async function executeUiTestRun(runId, normalized) {
 // Per-test limits are enforced inside Playwright by the generated config's
 // timeout, so the process-level timeout is only a hang backstop for the whole
 // sequential suite (base setup plus every test). Deriving it from a single
-// test's timeoutMs killed legitimate multi-test runs; keep it just under the
-// 15-minute CLI transport cap in lib/daytona/ui-tests.ts instead.
+// test's timeoutMs killed legitimate multi-test runs. The outer budgets
+// (tool_timeout_sec in lib/daytona/desktop.ts and RUN_TIMEOUT_MS in
+// lib/daytona/ui-tests.ts) are 20 minutes, leaving ~6 minutes of headroom for
+// cold runtime install, desktop startup, and recording shutdown so this
+// backstop always fires first.
 const PLAYWRIGHT_SUITE_TIMEOUT_MS = 14 * 60_000;
 
 async function recordedUiTestRun(

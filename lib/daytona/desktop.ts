@@ -644,7 +644,10 @@ function desktopCodexConfig(
     "[mcp_servers.cloudcode_ui_tests]",
     `command = ${JSON.stringify(`${paths.codexHome}/ui-tests/cloudcode-ui-tests-mcp.mjs`)}`,
     "startup_timeout_sec = 20",
-    "tool_timeout_sec = 900",
+    // Must exceed the runner's 14-minute Playwright backstop plus cold-start
+    // overhead (runtime install, desktop startup, recording shutdown) so the
+    // inner backstop always fires before the tool call is cut off.
+    "tool_timeout_sec = 1200",
     "",
     "[mcp_servers.cloudcode_ui_tests.env]",
     `CODEX_HOME = ${JSON.stringify(paths.codexHome)}`,

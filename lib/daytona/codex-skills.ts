@@ -12,8 +12,10 @@ import {
   FACTORY_MAX_ACTIVE_WAITS_PER_THREAD,
   FACTORY_MAX_AGENT_CREATED_AUTOMATIONS,
   FACTORY_MAX_DISPATCHES_PER_ROOT_THREAD,
+  FACTORY_MAX_PENDING_EVENTS_PER_WAIT,
   FACTORY_MAX_SPAWN_DEPTH,
   FACTORY_WAIT_DEFAULT_TTL_MS,
+  FACTORY_WAIT_EVENT_WINDOW_MAX,
   FACTORY_WAIT_MAX_TTL_MS,
   FACTORY_WAIT_MIN_TTL_MS,
 } from "@/lib/factory/limits"
@@ -21,7 +23,7 @@ import {
 // Bumped for content changes: the version feeds both the install marker and
 // the hot-continuation fingerprint, forcing a cold setup that rewrites the
 // skills on reused sandboxes so updated guidance actually reaches the agent.
-const CODEX_SKILLS_VERSION = "6"
+const CODEX_SKILLS_VERSION = "7"
 
 const WAIT_MIN_TTL_SECONDS = FACTORY_WAIT_MIN_TTL_MS / 1000
 const WAIT_DEFAULT_TTL_SECONDS = FACTORY_WAIT_DEFAULT_TTL_MS / 1000
@@ -73,7 +75,7 @@ Dispatches and waits are durable. After \`run_dispatch\`, \`ask_human\`, or \`wa
 
 Never poll. Do not call \`run_status\`, \`run_output\`, or \`wait_list\` in a loop, and never busy-wait with sleeps. One status check when you actively need the answer now is fine; a loop never is.
 
-Wake-ups coalesce: everything that happened while you were away arrives as one message. A wake-up consumes the waits it reports (single-shot) — re-register with \`ask_human\`/\`wait_create\` from the wake-up run if you must keep listening.
+Wake-ups coalesce, bounded: events arriving while you work are delivered together, but each wait records at most ${FACTORY_WAIT_EVENT_WINDOW_MAX} events per hour and queues at most ${FACTORY_MAX_PENDING_EVENTS_PER_WAIT}; anything beyond is dropped. A wake-up is a signal, NOT a complete event log — on a busy PR or Slack thread, read the source itself after waking when completeness matters. A wake-up consumes the waits it reports (single-shot) — re-register with \`ask_human\`/\`wait_create\` from the wake-up run if you must keep listening.
 
 ## Which tool
 
