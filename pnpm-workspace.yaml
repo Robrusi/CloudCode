@@ -68,6 +68,7 @@ overrides:
 allowBuilds:
   "@clerk/shared": false
   "@depot/cli": false
+  "@sentry/cli": false
   esbuild: false
   msgpackr-extract: false
   msw: false
