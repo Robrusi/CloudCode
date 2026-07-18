@@ -9,7 +9,10 @@ import {
 import { uiTestsServerEnv } from "@/lib/daytona/ui-tests-mcp-script"
 
 const LIST_TIMEOUT_MS = 30_000
-const RUN_TIMEOUT_MS = 15 * 60 * 1000
+// Must exceed the runner's 14-minute Playwright backstop plus cold-start
+// overhead (runtime install, desktop startup, recording shutdown) so the
+// inner backstop always fires before the CLI transport gives up.
+const RUN_TIMEOUT_MS = 20 * 60 * 1000
 const DEFAULT_RUN_TIMEOUT_MS = 90_000
 const MAX_RUN_TIMEOUT_MS = 10 * 60 * 1000
 
@@ -85,6 +88,7 @@ export type DaytonaUiTestRunInput = {
   grep?: string
   testPath?: string
   timeoutMs?: number
+  useDesktopAuth?: boolean
 }
 
 function cliPath(home: string) {
@@ -233,6 +237,7 @@ export async function runDaytonaUiTest(
   if (input.testPath?.trim()) args.push(input.testPath.trim())
   if (input.baseUrl?.trim()) args.push("--base-url", input.baseUrl.trim())
   if (input.grep?.trim()) args.push("--grep", input.grep.trim())
+  if (input.useDesktopAuth) args.push("--use-desktop-auth")
   args.push("--timeout-ms", String(normalizeRunTimeout(input.timeoutMs)))
 
   const parsed = (await runUiTestsCli(sandbox, args, {
