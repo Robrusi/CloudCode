@@ -197,6 +197,10 @@ async function cloudcodeDaytonaRecordingRequest(path, body) {
     body: JSON.stringify(body),
     headers: { "content-type": "application/json" },
     method: "POST",
+    // Callers await these requests inside cleanup paths; a stalled toolbox
+    // proxy must fail the request, never hang the caller until the outer
+    // transport kills it.
+    signal: AbortSignal.timeout(60_000),
   });
   const textBody = await response.text();
   let data = {};

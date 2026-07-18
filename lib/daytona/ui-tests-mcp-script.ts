@@ -1112,6 +1112,13 @@ async function recordedUiTestRun(
     });
   } finally {
     stopWindowWatcher?.();
+    // The session-state files hold live cookies; they are only needed while
+    // Playwright creates contexts, and deleting them has no ordering
+    // dependency on the recording - do it first so credential cleanup can
+    // never be delayed by a slow or failing recording stop.
+    for (const statePath of [storageStatePath, capturedStatePath]) {
+      if (statePath) rmSync(statePath, { force: true });
+    }
     if (recordingStarted) {
       try {
         recording = await stopRecording(recordingId);
@@ -1125,11 +1132,6 @@ async function recordedUiTestRun(
     await unstageDesktop(desktop.display, stage.hiddenIds, stagingErrors).catch(
       (error) => recordStagingError(stagingErrors, "restore windows", error)
     );
-    // The session-state files hold live cookies; they are only needed while
-    // Playwright creates contexts, so never let them outlive the run.
-    for (const statePath of [storageStatePath, capturedStatePath]) {
-      if (statePath) rmSync(statePath, { force: true });
-    }
     cleanupCloudcodeTestPackageLink();
     try {
       const scopedDir = dirname(packageLink);
