@@ -20,7 +20,12 @@ export type RecordingsResponse = {
 
 type DesktopPanelView = "desktop" | "recordings" | "tests"
 
-export type BusyKind = "refresh" | "start" | "stop"
+export type BusyKind =
+  | "record-start"
+  | "record-stop"
+  | "refresh"
+  | "start"
+  | "stop"
 
 type DesktopPanelState = {
   busy: BusyKind | null
@@ -40,6 +45,12 @@ type DesktopPanelAction =
   | { type: "refresh-finish" }
   | { type: "refresh-start" }
   | { type: "refresh-success" }
+  | { type: "record-start-error"; error: string }
+  | { type: "record-start-start" }
+  | { type: "record-start-success" }
+  | { type: "record-stop-error"; error: string }
+  | { type: "record-stop-start" }
+  | { type: "record-stop-success" }
   | { type: "set-view"; view: DesktopPanelView }
   | { type: "start-error"; error: string }
   | { type: "start-start" }
@@ -89,6 +100,18 @@ export function desktopPanelReducer(
       return { ...state, busy: state.busy ?? "refresh" }
     case "refresh-success":
       return { ...state, error: null }
+    case "record-start-error":
+      return { ...state, busy: null, error: action.error }
+    case "record-start-start":
+      return { ...state, busy: "record-start", error: null }
+    case "record-start-success":
+      return { ...state, busy: null, error: null }
+    case "record-stop-error":
+      return { ...state, busy: null, error: action.error }
+    case "record-stop-start":
+      return { ...state, busy: "record-stop", error: null }
+    case "record-stop-success":
+      return { ...state, busy: null, error: null }
     case "set-view":
       return { ...state, view: action.view }
     case "start-error":

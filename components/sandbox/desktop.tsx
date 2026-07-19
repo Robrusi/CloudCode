@@ -152,6 +152,43 @@ export function SandboxDesktopPanel({
     }
   }
 
+  async function startRecording() {
+    if (!sandboxId || state.busy) return
+    dispatch({ type: "record-start-start" })
+    try {
+      await postJson("/api/sandbox/desktop/recordings", {
+        action: "start",
+        sandboxId,
+      })
+      await Promise.all([loadStatus(), loadRecordings()])
+      dispatch({ type: "record-start-success" })
+    } catch (err) {
+      dispatch({
+        type: "record-start-error",
+        error: err instanceof Error ? err.message : "Recording start failed.",
+      })
+    }
+  }
+
+  async function stopRecording() {
+    if (!sandboxId || state.busy || !activeRecording) return
+    dispatch({ type: "record-stop-start" })
+    try {
+      await postJson("/api/sandbox/desktop/recordings", {
+        action: "stop",
+        recordingId: activeRecording.id,
+        sandboxId,
+      })
+      await loadRecordings()
+      dispatch({ type: "record-stop-success" })
+    } catch (err) {
+      dispatch({
+        type: "record-stop-error",
+        error: err instanceof Error ? err.message : "Recording stop failed.",
+      })
+    }
+  }
+
   if (!open) return null
 
   const { busy, connectRequested, error, recordings, status, view } = state
@@ -222,6 +259,8 @@ export function SandboxDesktopPanel({
             onConnect={requestConnect}
             onDisconnect={disconnect}
             onConnectionLost={handleConnectionLost}
+            onStartRecording={startRecording}
+            onStopRecording={stopRecording}
             onStart={startDesktop}
             onStop={stopDesktop}
           />
