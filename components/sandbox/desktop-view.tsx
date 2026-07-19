@@ -1,6 +1,6 @@
 "use client"
 
-import { Loader2, Maximize2, Monitor, Play, Square } from "lucide-react"
+import { Circle, Loader2, Maximize2, Monitor, Play, Square } from "lucide-react"
 import {
   type ReactNode,
   useEffect,
@@ -51,6 +51,8 @@ export function DesktopView({
   onConnect,
   onDisconnect,
   onConnectionLost,
+  onStartRecording,
+  onStopRecording,
   onStart,
   onStop,
 }: {
@@ -64,6 +66,8 @@ export function DesktopView({
   onConnect: () => void
   onDisconnect: () => void
   onConnectionLost: () => void
+  onStartRecording: () => void
+  onStopRecording: () => void
   onStart: () => void
   onStop: () => void
 }) {
@@ -121,18 +125,33 @@ export function DesktopView({
           title={offTitle}
           description={offDescription}
           action={
-            <Button
-              size="sm"
-              onClick={onStart}
-              disabled={!sandboxId || actionsDisabled || !statusKnown}
-            >
-              {busy === "start" ? (
-                <Loader2 className="animate-spin" />
-              ) : (
-                <Play />
-              )}
-              Start desktop
-            </Button>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Button
+                size="sm"
+                onClick={onStart}
+                disabled={!sandboxId || actionsDisabled || !statusKnown}
+              >
+                {busy === "start" ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <Play />
+                )}
+                Start desktop
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={onStartRecording}
+                disabled={!sandboxId || actionsDisabled || !statusKnown}
+              >
+                {busy === "record-start" ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <Circle className="fill-destructive text-destructive" />
+                )}
+                Start recording
+              </Button>
+            </div>
           }
         />
       )}
@@ -154,6 +173,31 @@ export function DesktopView({
           >
             <Maximize2 className="size-3.5" />
           </SandboxDesktopIconLink>
+          {hasActiveRecording ? (
+            <SandboxDesktopIconButton
+              label="Stop recording"
+              disabled={!sandboxId || actionsDisabled}
+              onClick={onStopRecording}
+            >
+              {busy === "record-stop" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Square className="size-3.5 fill-destructive text-destructive" />
+              )}
+            </SandboxDesktopIconButton>
+          ) : (
+            <SandboxDesktopIconButton
+              label="Start recording"
+              disabled={!sandboxId || actionsDisabled}
+              onClick={onStartRecording}
+            >
+              {busy === "record-start" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Circle className="size-3.5 fill-destructive text-destructive" />
+              )}
+            </SandboxDesktopIconButton>
+          )}
           {viewerActive ? (
             <Button size="sm" variant="ghost" onClick={onDisconnect}>
               Disconnect
