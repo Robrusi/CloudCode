@@ -16,10 +16,10 @@ import { compactAnsiLine } from "@/lib/shared/compact-line"
 import {
   createDaytonaSandbox,
   daytonaTerminalPath,
-  miseTrustedConfigPaths,
   defaultDaytonaSnapshot,
   deleteDaytonaSandboxQuietly,
-  readDaytonaTextFile,
+  miseTrustedConfigPaths,
+  readOptionalDaytonaTextFile,
   resolveDaytonaPaths,
   runDaytonaCommand,
   shellQuote,
@@ -308,7 +308,11 @@ async function buildAutoEnvironmentSandbox({
       paths,
       input.signal
     )
-    const rawYamlPromise = readRepoCloudcodeYamlFile(sandbox, paths.repoPath)
+    const rawYamlPromise = readRepoCloudcodeYamlFile(
+      sandbox,
+      paths.repoPath,
+      input.signal
+    )
     await trustCloudcodeMiseConfigFiles({
       configFiles: miseConfigFiles,
       env: terminalEnv,
@@ -329,17 +333,22 @@ async function buildAutoEnvironmentSandbox({
         message: "Starting environment scan",
       })
       await runScannerCodex(sandbox, paths, gitAuth, input.signal)
-      rawYaml = await readRepoCloudcodeYamlFile(sandbox, paths.repoPath)
+      rawYaml = await readRepoCloudcodeYamlFile(
+        sandbox,
+        paths.repoPath,
+        input.signal
+      )
 
       if (!rawYaml) {
-        const lastMessage = await readDaytonaTextFile(
+        const lastMessage = await readOptionalDaytonaTextFile(
           sandbox,
-          scannerLastMessagePath(paths)
-        ).catch(() => "")
+          scannerLastMessagePath(paths),
+          { signal: input.signal, timeoutMs: 10_000 }
+        )
         throw new Error(
           [
             `Environment scanner did not create ${CLOUDCODE_YAML_PATH}.`,
-            compactAnsiLine(lastMessage, 500),
+            compactAnsiLine(lastMessage ?? "", 500),
           ]
             .filter(Boolean)
             .join("\n")
@@ -361,9 +370,10 @@ async function buildAutoEnvironmentSandbox({
     await writeEnvironmentGitExcludes(sandbox, paths, input.signal)
     const [hashInputs, updatedAuthJson] = await Promise.all([
       readBuildHashInputs(sandbox, paths, input.signal),
-      readDaytonaTextFile(sandbox, `${paths.codexHome}/auth.json`).catch(
-        () => input.authJson
-      ),
+      readOptionalDaytonaTextFile(sandbox, `${paths.codexHome}/auth.json`, {
+        signal: input.signal,
+        timeoutMs: 10_000,
+      }).then((source) => source ?? input.authJson),
     ])
     const configHash = cloudcodeYamlHash(cloudcodeYaml, hashInputs)
     await cleanupBuilderFiles(sandbox, paths, input.signal)

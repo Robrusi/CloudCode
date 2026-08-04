@@ -16,7 +16,7 @@ import {
 import { compactAnsiLine } from "@/lib/shared/compact-line"
 import {
   daytonaTerminalPath,
-  readDaytonaTextFile,
+  readOptionalDaytonaTextFile,
   runDaytonaCommand,
   shellQuote,
   writeDaytonaTextFile,
@@ -288,14 +288,18 @@ function addMiseTrustCommand(
 
 export async function readRepoCloudcodeYamlFile(
   sandbox: Sandbox,
-  repoPath: string
+  repoPath: string,
+  signal?: AbortSignal
 ) {
   for (const path of [
     cloudcodeYamlPath(repoPath),
     legacyCloudcodeYamlPath(repoPath),
   ]) {
-    const source = await readDaytonaTextFile(sandbox, path).catch(() => "")
-    if (source.trim()) return source
+    const source = await readOptionalDaytonaTextFile(sandbox, path, {
+      signal,
+      timeoutMs: 10_000,
+    })
+    if (source?.trim()) return source
   }
   return undefined
 }

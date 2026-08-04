@@ -257,7 +257,8 @@ async function readCloudcodeYamlForLiveSandbox(
 
   const repoCloudcodeYaml = await readRepoCloudcodeYamlFile(
     sandbox,
-    paths.repoPath
+    paths.repoPath,
+    input.signal
   )
   if (repoCloudcodeYaml) {
     return {

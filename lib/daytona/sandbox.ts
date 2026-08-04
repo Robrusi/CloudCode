@@ -6,7 +6,12 @@ import {
   type DaytonaBillingState,
 } from "@/lib/billing/model"
 import { envNumber } from "@/lib/daytona/env"
-import { installDaytonaTarWrapper } from "@/lib/daytona/sandbox-command"
+import {
+  installDaytonaTarWrapper,
+  runDaytonaCommand,
+  shellQuote,
+  type DaytonaRunCommandOptions,
+} from "@/lib/daytona/sandbox-command"
 import { clampSandboxIdleMinutes } from "@/lib/sandbox/idle"
 
 export {
@@ -683,6 +688,28 @@ export function startDaytonaActivityHeartbeat(
 
 export async function readDaytonaTextFile(sandbox: Sandbox, path: string) {
   return (await sandbox.fs.downloadFile(path)).toString("utf8")
+}
+
+export async function readOptionalDaytonaTextFile(
+  sandbox: Sandbox,
+  path: string,
+  options: Pick<DaytonaRunCommandOptions, "signal" | "timeoutMs"> = {}
+) {
+  const exists = await runDaytonaCommand(
+    sandbox,
+    `test -f ${shellQuote(path)}`,
+    options
+  )
+  if (exists.exitCode === 1) return undefined
+  if (exists.exitCode !== 0) {
+    throw new Error(
+      exists.stderr.trim() ||
+        exists.stdout.trim() ||
+        `Unable to check sandbox file ${path}.`
+    )
+  }
+
+  return await readDaytonaTextFile(sandbox, path)
 }
 
 export async function readDaytonaFile(sandbox: Sandbox, path: string) {

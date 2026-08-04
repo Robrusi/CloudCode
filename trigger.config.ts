@@ -18,9 +18,9 @@ export default defineConfig({
   dirs: ["./trigger"],
   maxDuration: timeout.None,
   build: {
-    // Daytona resolves form-data with createRequire at upload time. Keep it as
-    // an installed worker dependency so that lookup succeeds from bundled code.
-    external: ["form-data"],
+    // Daytona resolves these with createRequire while transferring files. Keep
+    // them as installed worker dependencies so bundled workers can find them.
+    external: ["busboy", "form-data"],
   },
   retries: {
     enabledInDev: false,

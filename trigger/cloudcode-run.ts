@@ -2,6 +2,7 @@ import { schedules, task, tasks, timeout } from "@trigger.dev/sdk"
 // Daytona loads this package dynamically when it uploads sandbox files. The
 // direct import lets Trigger's external dependency collector install it in the
 // worker image instead of leaving Daytona's createRequire call unresolved.
+import "busboy"
 import "form-data"
 
 import { api } from "@/convex/_generated/api"
