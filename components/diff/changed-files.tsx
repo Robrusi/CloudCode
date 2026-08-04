@@ -4,7 +4,7 @@ import { FileDiff, type ThemeTypes } from "@pierre/diffs/react"
 import type { FileDiffOptions } from "@pierre/diffs"
 import { ChevronDown, ChevronRight, Folder } from "lucide-react"
 import { useTheme } from "next-themes"
-import { type CSSProperties, useMemo, useState } from "react"
+import { type CSSProperties, useCallback, useMemo, useState } from "react"
 
 import { TreeFileIcon } from "@/components/files/tree-file-icon"
 import { Button } from "@/components/ui/button"
@@ -287,12 +287,54 @@ export function ChangedFiles({
 
 export type DiffStyle = "unified" | "split"
 
+export type DiffListExpansion = {
+  allCollapsed: boolean
+  expanded: Set<string>
+  toggle: (path: string) => void
+  toggleAll: () => void
+}
+
+/** Expansion state for a `DiffList`, hoistable so a surrounding header can
+ * render expand/collapse-all controls. Files added by a later diff update
+ * keep the state they would have had at mount (collapsed unless
+ * `defaultExpanded`). */
+export function useDiffListExpansion(
+  diff: string,
+  { defaultExpanded = true }: { defaultExpanded?: boolean } = {}
+): DiffListExpansion {
+  const paths = useMemo(
+    () => getDiffStats(diff).files.map((file) => file.path),
+    [diff]
+  )
+  const [expanded, setExpanded] = useState<Set<string>>(() =>
+    defaultExpanded ? new Set(paths) : new Set()
+  )
+
+  const allCollapsed = !paths.some((path) => expanded.has(path))
+  const toggle = useCallback((path: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }, [])
+  const toggleAll = useCallback(() => {
+    setExpanded(allCollapsed ? new Set(paths) : new Set())
+  }, [allCollapsed, paths])
+
+  return { allCollapsed, expanded, toggle, toggleAll }
+}
+
 export function DiffList({
   diff,
   diffStyle = "unified",
+  expansion,
 }: {
   diff: string
   diffStyle?: DiffStyle
+  /** Controlled expansion state; defaults to internal all-expanded state. */
+  expansion?: DiffListExpansion
 }) {
   // Side-by-side diffs don't fit a phone's width; collapse to a single column.
   const isMobile = useIsMobile()
@@ -310,9 +352,8 @@ export function DiffList({
     return map
   }, [parsedDiff.stats.files])
 
-  const [expanded, setExpanded] = useState<Set<string>>(
-    () => new Set(files.map((f) => f.name))
-  )
+  const internalExpansion = useDiffListExpansion(diff)
+  const { expanded, toggle } = expansion ?? internalExpansion
 
   const { resolvedTheme } = useTheme()
   const themeType: ThemeTypes = resolvedTheme === "dark" ? "dark" : "light"
@@ -340,14 +381,6 @@ export function DiffList({
     )
   }
 
-  const toggle = (name: string) =>
-    setExpanded((prev) => {
-      const next = new Set(prev)
-      if (next.has(name)) next.delete(name)
-      else next.add(name)
-      return next
-    })
-
   return (
     <div className="divide-y divide-border/60">
       {files.map((file) => {
@@ -359,6 +392,7 @@ export function DiffList({
               type="button"
               onClick={() => toggle(file.name)}
               aria-expanded={isOpen}
+              title={file.name}
               className="sticky top-0 z-10 flex w-full items-center gap-2.5 border-b border-border/60 bg-background/85 px-4 py-2.5 text-left backdrop-blur-xl transition-colors hover:bg-muted/60"
             >
               <ChevronRight

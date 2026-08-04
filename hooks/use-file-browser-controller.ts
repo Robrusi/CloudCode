@@ -66,17 +66,12 @@ export function useFileBrowserController({
     [diffStats.files, entries, entriesAuthoritative]
   )
 
-  const sandboxFilePaths = useMemo(
+  // The tree serves the files view only; the diffs view renders its own
+  // inline diff list from the raw diff.
+  const filePaths = useMemo(
     () => liveEntries.map((e) => (e.type === "dir" ? `${e.path}/` : e.path)),
     [liveEntries]
   )
-
-  const diffFilePaths = useMemo(
-    () => diffStats.files.map((file) => file.path),
-    [diffStats.files]
-  )
-
-  const filePaths = view === "diffs" ? diffFilePaths : sandboxFilePaths
 
   const diffStatsByPath = useMemo(() => {
     const map = new Map<string, DiffFileStat>()
@@ -103,23 +98,18 @@ export function useFileBrowserController({
     return map
   }, [diffStats.files])
 
-  const expandedDirPaths = useMemo<readonly string[] | undefined>(() => {
-    if (view !== "diffs") return undefined
-    return Array.from(diffStatsByDirectory.keys())
-  }, [view, diffStatsByDirectory])
-
   const gitStatus = useMemo<GitStatusEntry[]>(
     () =>
       diffStats.files.flatMap((file) => {
         const status = diffTypeToGitStatus(file.type)
-        return file.prevPath && view === "files"
+        return file.prevPath
           ? [
               { path: file.path, status },
               { path: file.prevPath, status },
             ]
           : [{ path: file.path, status }]
       }),
-    [diffStats.files, view]
+    [diffStats.files]
   )
 
   const treePaths = filePaths.length > 0 ? filePaths : ["__empty__"]
@@ -127,29 +117,23 @@ export function useFileBrowserController({
 
   useEffect(() => {
     const set = new Set<string>()
-    if (view === "diffs") {
-      for (const file of diffStats.files) set.add(file.path)
-    } else {
-      for (const e of liveEntries) if (e.type === "file") set.add(e.path)
-    }
+    for (const e of liveEntries) if (e.type === "file") set.add(e.path)
     fileEntryPathsRef.current = set
-  }, [diffStats.files, liveEntries, view])
+  }, [liveEntries])
 
   const onOpenFileRef = useRef(onOpenFile)
   const syncingSelectionRef = useRef(false)
-  const viewRef = useRef(view)
 
   useEffect(() => {
     onOpenFileRef.current = onOpenFile
-    viewRef.current = view
-  }, [onOpenFile, view])
+  }, [onOpenFile])
 
   const handleSelectionChange = useCallback((paths: readonly string[]) => {
     if (syncingSelectionRef.current) return
     const path = paths[0]
     if (!path || path === "__empty__") return
     if (!fileEntryPathsRef.current?.has(path)) return
-    onOpenFileRef.current(path, viewRef.current === "diffs" ? "diff" : "file")
+    onOpenFileRef.current(path, "file")
   }, [])
 
   const diffStatsByPathRef = useRef(diffStatsByPath)
@@ -189,13 +173,8 @@ export function useFileBrowserController({
   useEffect(() => {
     if (!model) return
     if (filePaths.length === 0) return
-    model.resetPaths(
-      filePaths,
-      expandedDirPaths !== undefined
-        ? { initialExpandedPaths: expandedDirPaths }
-        : undefined
-    )
-  }, [model, filePaths, expandedDirPaths])
+    model.resetPaths(filePaths)
+  }, [model, filePaths])
 
   useEffect(() => {
     model.setGitStatus(gitStatus)
@@ -205,8 +184,7 @@ export function useFileBrowserController({
     if (!model) return
     syncingSelectionRef.current = true
     const selected = model.getSelectedPaths()
-    const viewMode: FileBrowserOpenMode = view === "diffs" ? "diff" : "file"
-    if (activePath && activeMode === viewMode) {
+    if (activePath && activeMode === "file") {
       for (const p of selected) {
         if (p !== activePath) model.getItem(p)?.deselect()
       }
@@ -221,7 +199,7 @@ export function useFileBrowserController({
     queueMicrotask(() => {
       syncingSelectionRef.current = false
     })
-  }, [activeMode, activePath, model, view])
+  }, [activeMode, activePath, model])
 
   const fetchList = useCallback(
     async ({
@@ -327,6 +305,7 @@ export function useFileBrowserController({
   }, [open, sandboxId, fetchList])
 
   return {
+    changedFileCount: diffStats.files.length,
     error,
     fetchList,
     filePaths,

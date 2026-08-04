@@ -1,9 +1,17 @@
 "use client"
 
-import { Columns2, RefreshCw, Rows2 } from "lucide-react"
+import {
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Columns2,
+  Maximize2,
+  RefreshCw,
+  Rows2,
+} from "lucide-react"
 import { useTheme } from "next-themes"
 
 import { EnvironmentPanel } from "@/components/sandbox/environment-panel"
+import { DiffList, useDiffListExpansion } from "@/components/diff/changed-files"
 import type { FileBrowserOpenMode } from "@/components/files/browser-model"
 import {
   FileBrowserEmptyState,
@@ -44,10 +52,12 @@ export function FileBrowser({
   activeMode: FileBrowserOpenMode
   onClose: () => void
   onOpenFile: (path: string, mode: FileBrowserOpenMode) => void
+  /** Opens the fullscreen all-diffs panel in the main content area. */
   onOpenAllDiffs?: () => void
 }) {
   const { resolvedTheme } = useTheme()
   const {
+    changedFileCount,
     error,
     fetchList,
     filePaths,
@@ -64,6 +74,11 @@ export function FileBrowser({
     onOpenFile,
     open,
     sandboxId,
+  })
+  // Diffs render inline in the sidebar, collapsed to their file rows until
+  // expanded; the header toggles all rows and can open the fullscreen panel.
+  const diffExpansion = useDiffListExpansion(diff ?? "", {
+    defaultExpanded: false,
   })
 
   if (!open) return null
@@ -107,6 +122,32 @@ export function FileBrowser({
               ]}
             />
           ) : null}
+          {view === "diffs" && changedFileCount > 0 ? (
+            <IconButton
+              onClick={diffExpansion.toggleAll}
+              aria-label={
+                diffExpansion.allCollapsed
+                  ? "Expand all diffs"
+                  : "Collapse all diffs"
+              }
+              title={diffExpansion.allCollapsed ? "Expand all" : "Collapse all"}
+            >
+              {diffExpansion.allCollapsed ? (
+                <ChevronsUpDown className="size-3.5" />
+              ) : (
+                <ChevronsDownUp className="size-3.5" />
+              )}
+            </IconButton>
+          ) : null}
+          {view === "diffs" && onOpenAllDiffs ? (
+            <IconButton
+              onClick={onOpenAllDiffs}
+              aria-label="Open diffs fullscreen"
+              title="Fullscreen"
+            >
+              <Maximize2 className="size-3.5" />
+            </IconButton>
+          ) : null}
           {view === "files" ? (
             <IconButton
               onClick={() => void fetchList({ force: true })}
@@ -130,10 +171,7 @@ export function FileBrowser({
         <SidePanelTabButton
           active={view === "diffs"}
           label="Diffs"
-          onClick={() => {
-            setView("diffs")
-            onOpenAllDiffs?.()
-          }}
+          onClick={() => setView("diffs")}
         />
         <div aria-hidden className="w-px self-stretch bg-border/60" />
         <SidePanelTabButton
@@ -149,6 +187,18 @@ export function FileBrowser({
             key={sandboxId ?? "no-sandbox"}
             sandboxId={sandboxId}
           />
+        ) : view === "diffs" ? (
+          diff && changedFileCount > 0 ? (
+            <div className="h-full overflow-y-auto bg-background">
+              <DiffList
+                diff={diff}
+                diffStyle={diffStyle ?? "unified"}
+                expansion={diffExpansion}
+              />
+            </div>
+          ) : (
+            <FileBrowserEmptyState message="No changed files." />
+          )
         ) : !sandboxId && filePaths.length === 0 ? (
           <FileBrowserEmptyState message="No cached files yet." />
         ) : error ? (
@@ -159,18 +209,14 @@ export function FileBrowser({
           />
         ) : filePaths.length === 0 && !loading ? (
           <FileBrowserEmptyState
-            message={view === "diffs" ? "No changed files." : "No files yet."}
-            actionLabel={view === "diffs" ? undefined : "Refresh"}
-            onAction={
-              view === "diffs"
-                ? undefined
-                : () => void fetchList({ force: true })
-            }
+            message="No files yet."
+            actionLabel="Refresh"
+            onAction={() => void fetchList({ force: true })}
           />
         ) : (
           <FileTreeWrapper dark={resolvedTheme === "dark"} model={model} />
         )}
-        {truncated ? (
+        {truncated && view === "files" ? (
           <div className="pointer-events-none absolute inset-x-0 bottom-0 border-t border-border/60 bg-sidebar/95 px-3 py-1.5 text-[10px] tracking-wide text-muted-foreground uppercase">
             Listing truncated · refine search
           </div>
