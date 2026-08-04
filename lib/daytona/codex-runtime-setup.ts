@@ -2,8 +2,10 @@ import { createHash } from "node:crypto"
 
 import type { Sandbox } from "@daytona/sdk"
 
-import { cloudcodeYamlPath } from "@/lib/cloudcode/config-path"
-import { runCloudcodeYamlSetup } from "@/lib/cloudcode/yaml-setup"
+import {
+  readRepoCloudcodeYamlFile,
+  runCloudcodeYamlSetup,
+} from "@/lib/cloudcode/yaml-setup"
 import { compactLine } from "@/lib/shared/compact-line"
 import type { RunCodexInSandboxInput } from "@/lib/daytona/codex-agent-types"
 import {
@@ -253,11 +255,11 @@ async function readCloudcodeYamlForLiveSandbox(
 ) {
   if (!isAutoEnvironmentRun(input)) return undefined
 
-  const repoCloudcodeYaml = await readDaytonaTextFile(
+  const repoCloudcodeYaml = await readRepoCloudcodeYamlFile(
     sandbox,
-    cloudcodeYamlPath(paths.repoPath)
-  ).catch(() => "")
-  if (repoCloudcodeYaml.trim()) {
+    paths.repoPath
+  )
+  if (repoCloudcodeYaml) {
     return {
       source: "repo" as const,
       yaml: repoCloudcodeYaml,

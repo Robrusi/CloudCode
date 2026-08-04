@@ -3,6 +3,7 @@ import type { Sandbox } from "@daytona/sdk"
 import {
   cloudcodeConfigDirectoryPath,
   cloudcodeYamlPath,
+  legacyCloudcodeYamlPath,
 } from "@/lib/cloudcode/config-path"
 import {
   cloudcodeYamlHash,
@@ -15,6 +16,7 @@ import {
 import { compactAnsiLine } from "@/lib/shared/compact-line"
 import {
   daytonaTerminalPath,
+  readDaytonaTextFile,
   runDaytonaCommand,
   shellQuote,
   writeDaytonaTextFile,
@@ -282,6 +284,20 @@ function addMiseTrustCommand(
     run: miseTrustCommand(configFiles),
     timeoutMinutes: 2,
   })
+}
+
+export async function readRepoCloudcodeYamlFile(
+  sandbox: Sandbox,
+  repoPath: string
+) {
+  for (const path of [
+    cloudcodeYamlPath(repoPath),
+    legacyCloudcodeYamlPath(repoPath),
+  ]) {
+    const source = await readDaytonaTextFile(sandbox, path).catch(() => "")
+    if (source.trim()) return source
+  }
+  return undefined
 }
 
 export async function listCloudcodeMiseConfigFiles(

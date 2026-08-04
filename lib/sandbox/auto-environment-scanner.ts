@@ -1,6 +1,9 @@
 import type { Sandbox } from "@daytona/sdk"
 
-import { CLOUDCODE_YAML_PATH } from "@/lib/cloudcode/config-path"
+import {
+  cloudcodeConfigDirectoryPath,
+  cloudcodeYamlPath,
+} from "@/lib/cloudcode/config-path"
 import { compactAnsiLine } from "@/lib/shared/compact-line"
 import {
   codexCliPackageName,
@@ -104,14 +107,15 @@ export async function prepareBuilderCodex(
 }
 
 function scannerPrompt(repoPath: string) {
+  const yamlPath = cloudcodeYamlPath(repoPath)
   return [
     "You are Cloudcode's automatic environment scanner.",
     "",
     `The repository is already cloned at ${repoPath}. Your current working directory is outside the repository. Keep Codex running outside the repo; use explicit cd commands or absolute paths when you inspect files.`,
     "",
-    `Goal: create a valid ${CLOUDCODE_YAML_PATH} that tells Cloudcode exactly what to download/install globally, what to install in the repo, and optional environment checks.`,
+    `Goal: create a valid cloudcode.yaml at the absolute path ${yamlPath} that tells Cloudcode exactly what to download/install globally, what to install in the repo, and optional environment checks.`,
     "",
-    `You may run shell commands to inspect the project. You may download/install tools under the sandbox home and repo dependencies if that is necessary to verify the recipe, but every required step must also be encoded in ${CLOUDCODE_YAML_PATH}.`,
+    `You may run shell commands to inspect the project. You may download/install tools under the sandbox home and repo dependencies if that is necessary to verify the recipe, but every required step must also be encoded in ${yamlPath}.`,
     "",
     "Inspect README files, AGENTS.md, package manifests, lockfiles, pyproject.toml, requirements files, go.mod, Cargo.toml, Dockerfiles, devcontainer config, CI workflows, version files, and scripts.",
     "",
@@ -125,7 +129,7 @@ function scannerPrompt(repoPath: string) {
     "",
     "Do not force compiler variables such as CC=clang or CXX=clang++ unless repository docs require them or you verified those compilers are installed. Prefer the repo's normal install command.",
     "",
-    `Create the directory containing ${CLOUDCODE_YAML_PATH} if needed. Write only this file in the repo unless a generated lockfile is required by the install command: ${CLOUDCODE_YAML_PATH}.`,
+    `Create the ${cloudcodeConfigDirectoryPath(repoPath)} directory if needed. Write only this file in the repo unless a generated lockfile is required by the install command: ${yamlPath}. Do not write it anywhere else, such as your home directory or the repo root.`,
     "",
     "Required YAML shape. Use global as a list of global install commands. Nested global.install and top-level initialize are accepted for compatibility, but do not generate them.",
     "global:",
@@ -143,8 +147,12 @@ function scannerPrompt(repoPath: string) {
     "",
     "Cloudcode setup sandboxes have 4 GB of RAM by default. Keep that limit in mind when choosing install commands, but do not add low-memory flags by default. Add package-manager concurrency limits only when the repo's install is likely to be memory-heavy, such as Bun projects with native dependencies, large monorepos, many lifecycle scripts, or docs/CI/devcontainer evidence of memory pressure. For Bun dependency installs, prefer bun install --frozen-lockfile normally, and use flags such as --concurrent-scripts 1 only when those memory-heavy conditions apply.",
     "",
-    `When finished, make sure ${CLOUDCODE_YAML_PATH} parses as YAML and contains concrete run commands.`,
+    `When finished, make sure ${yamlPath} parses as YAML and contains concrete run commands.`,
   ].join("\n")
+}
+
+export function scannerLastMessagePath(paths: DaytonaSandboxPaths) {
+  return `${paths.codexHome}/auto-environment-last-message.txt`
 }
 
 export async function runScannerCodex(
@@ -154,7 +162,7 @@ export async function runScannerCodex(
   signal?: AbortSignal
 ) {
   const promptPath = `${paths.codexHome}/auto-environment-prompt.txt`
-  const lastMessagePath = `${paths.codexHome}/auto-environment-last-message.txt`
+  const lastMessagePath = scannerLastMessagePath(paths)
   await writeDaytonaTextFile(sandbox, promptPath, scannerPrompt(paths.repoPath))
 
   const help = (

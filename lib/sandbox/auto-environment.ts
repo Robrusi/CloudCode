@@ -2,15 +2,17 @@ import type { Sandbox } from "@daytona/sdk"
 
 import {
   CLOUDCODE_YAML_PATH,
-  cloudcodeYamlPath,
+  LEGACY_CLOUDCODE_YAML_PATH,
 } from "@/lib/cloudcode/config-path"
 import { codexShellEnv, presetSecretEnv } from "@/lib/daytona/codex-runtime"
 import { cloudcodeYamlHash, normalizeCloudcodeYaml } from "@/lib/cloudcode/yaml"
 import {
   listCloudcodeMiseConfigFiles,
   prepareCloudcodeYamlForSandbox,
+  readRepoCloudcodeYamlFile,
   trustCloudcodeMiseConfigFiles,
 } from "@/lib/cloudcode/yaml-setup"
+import { compactAnsiLine } from "@/lib/shared/compact-line"
 import {
   createDaytonaSandbox,
   daytonaTerminalPath,
@@ -35,6 +37,7 @@ import {
 import {
   prepareBuilderCodex,
   runScannerCodex,
+  scannerLastMessagePath,
 } from "@/lib/sandbox/auto-environment-scanner"
 import {
   beginAutoEnvironmentBuild,
@@ -95,33 +98,36 @@ async function readRepoCloudcodeYamlFromGitHub({
     })
   }
 
-  const url = new URL(
-    `https://api.github.com/repos/${encodeURIComponent(
-      repo.owner
-    )}/${encodeURIComponent(repo.repo)}/contents/${CLOUDCODE_YAML_PATH}`
-  )
   const baseBranch = input.baseBranch?.trim()
-  if (baseBranch) url.searchParams.set("ref", baseBranch)
-
-  const response = await fetch(url, {
-    headers: githubApiHeaders(input.githubToken),
-    signal: input.signal,
-  })
-
-  if (response.status === 404) return undefined
-  if (!response.ok) {
-    throw new Error(
-      `Unable to check repo ${CLOUDCODE_YAML_PATH}. GitHub returned ${response.status}.`
+  for (const yamlPath of [CLOUDCODE_YAML_PATH, LEGACY_CLOUDCODE_YAML_PATH]) {
+    const url = new URL(
+      `https://api.github.com/repos/${encodeURIComponent(
+        repo.owner
+      )}/${encodeURIComponent(repo.repo)}/contents/${yamlPath}`
     )
-  }
+    if (baseBranch) url.searchParams.set("ref", baseBranch)
 
-  const source = await response.text()
-  const cloudcodeYaml = normalizeCloudcodeYaml(source)
-  await input.onLog?.({
-    kind: "setup",
-    message: `Found repo ${CLOUDCODE_YAML_PATH}`,
-  })
-  return cloudcodeYaml
+    const response = await fetch(url, {
+      headers: githubApiHeaders(input.githubToken),
+      signal: input.signal,
+    })
+
+    if (response.status === 404) continue
+    if (!response.ok) {
+      throw new Error(
+        `Unable to check repo ${yamlPath}. GitHub returned ${response.status}.`
+      )
+    }
+
+    const source = await response.text()
+    const cloudcodeYaml = normalizeCloudcodeYaml(source)
+    await input.onLog?.({
+      kind: "setup",
+      message: `Found repo ${yamlPath}`,
+    })
+    return cloudcodeYaml
+  }
+  return undefined
 }
 
 async function cloneRepoForBuild({
@@ -166,25 +172,13 @@ async function readBuildHashInputs(
     [
       "set +e",
       `cd ${shellQuote(paths.repoPath)}`,
-      `for file in ${CLOUDCODE_YAML_PATH} package.json pnpm-lock.yaml package-lock.json yarn.lock bun.lock bun.lockb pyproject.toml uv.lock poetry.lock requirements.txt requirements-dev.txt go.mod go.sum Cargo.toml Cargo.lock Gemfile Gemfile.lock .mise.toml mise.toml .config/mise.toml .config/mise/config.toml .nvmrc .node-version .python-version .tool-versions Dockerfile .devcontainer/devcontainer.json; do`,
+      `for file in ${CLOUDCODE_YAML_PATH} ${LEGACY_CLOUDCODE_YAML_PATH} package.json pnpm-lock.yaml package-lock.json yarn.lock bun.lock bun.lockb pyproject.toml uv.lock poetry.lock requirements.txt requirements-dev.txt go.mod go.sum Cargo.toml Cargo.lock Gemfile Gemfile.lock .mise.toml mise.toml .config/mise.toml .config/mise/config.toml .nvmrc .node-version .python-version .tool-versions Dockerfile .devcontainer/devcontainer.json; do`,
       '  [ -f "$file" ] && sha256sum "$file"',
       "done",
     ].join("\n"),
     { signal, timeoutMs: 20_000 }
   )
   return result.stdout
-}
-
-async function readRepoCloudcodeYaml(
-  sandbox: Sandbox,
-  paths: DaytonaSandboxPaths
-) {
-  const source = await readDaytonaTextFile(
-    sandbox,
-    cloudcodeYamlPath(paths.repoPath)
-  ).catch(() => "")
-
-  return source.trim() ? source : undefined
 }
 
 async function writeEnvironmentGitExcludes(
@@ -231,7 +225,7 @@ async function cleanupBuilderFiles(
     sandbox,
     `rm -f ${shellQuote(`${paths.codexHome}/auth.json`)} ${shellQuote(
       `${paths.codexHome}/auto-environment-prompt.txt`
-    )} ${shellQuote(`${paths.codexHome}/auto-environment-last-message.txt`)}`,
+    )} ${shellQuote(scannerLastMessagePath(paths))}`,
     { signal, timeoutMs: 10_000 }
   ).catch(() => undefined)
 }
@@ -314,7 +308,7 @@ async function buildAutoEnvironmentSandbox({
       paths,
       input.signal
     )
-    const rawYamlPromise = readRepoCloudcodeYaml(sandbox, paths)
+    const rawYamlPromise = readRepoCloudcodeYamlFile(sandbox, paths.repoPath)
     await trustCloudcodeMiseConfigFiles({
       configFiles: miseConfigFiles,
       env: terminalEnv,
@@ -335,11 +329,20 @@ async function buildAutoEnvironmentSandbox({
         message: "Starting environment scan",
       })
       await runScannerCodex(sandbox, paths, gitAuth, input.signal)
-      rawYaml = await readRepoCloudcodeYaml(sandbox, paths)
+      rawYaml = await readRepoCloudcodeYamlFile(sandbox, paths.repoPath)
 
       if (!rawYaml) {
+        const lastMessage = await readDaytonaTextFile(
+          sandbox,
+          scannerLastMessagePath(paths)
+        ).catch(() => "")
         throw new Error(
-          `Environment scanner did not create ${CLOUDCODE_YAML_PATH}.`
+          [
+            `Environment scanner did not create ${CLOUDCODE_YAML_PATH}.`,
+            compactAnsiLine(lastMessage, 500),
+          ]
+            .filter(Boolean)
+            .join("\n")
         )
       }
       void emit({
