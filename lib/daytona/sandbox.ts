@@ -528,8 +528,11 @@ export async function ensureDaytonaSandboxStarted(
   autoStopMinutes?: number
 ) {
   const timeout = defaultDaytonaCreateTimeoutSeconds()
-  await sandbox.refreshData().catch(() => undefined)
 
+  // Daytona.get() and Daytona.create() both return current sandbox data. An
+  // unconditional refresh here duplicated that lookup on every warm connect.
+  // start() and recover() update the instance from their own API responses and
+  // poll until it is ready when a lifecycle transition is actually required.
   if (sandbox.recoverable) {
     await sandbox.recover(timeout)
   } else if (sandbox.state !== "started") {
@@ -676,7 +679,6 @@ export function startDaytonaActivityHeartbeat(
     void sandbox.refreshActivity().catch(() => undefined)
   }
 
-  refreshActivity()
   const heartbeat = setInterval(refreshActivity, intervalMs)
   heartbeat.unref?.()
 

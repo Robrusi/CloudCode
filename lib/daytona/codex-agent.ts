@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto"
-
 import type { Sandbox } from "@daytona/sdk"
 
 import { runCodexViaAppServer } from "@/lib/daytona/codex-app-server-run"
@@ -110,6 +108,7 @@ import {
   runPathInstallScript,
   runPresetInstallScript,
 } from "@/lib/daytona/codex-install-scripts"
+import { codexWarmStartFingerprint } from "@/lib/daytona/codex-warm-start"
 import type {
   RunCodexInSandboxInput,
   RunCodexInSandboxResult,
@@ -117,7 +116,6 @@ import type {
 
 export type { RunCodexLog, RunCodexLogKind }
 
-const HOT_CONTINUATION_VERSION = "1"
 const HOT_CONTINUATION_STATUS_MARKER = "__cloudcode_hot_continuation__"
 
 function withUpdatedAuthJson(
@@ -134,84 +132,8 @@ function withUpdatedAuthJson(
   return result as RunCodexInSandboxResult
 }
 
-function sha256(value: string) {
-  return createHash("sha256").update(value).digest("hex")
-}
-
-function stableJson(value: unknown): string {
-  return JSON.stringify(stableValue(value))
-}
-
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableValue)
-  if (!value || typeof value !== "object") return value ?? null
-
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, entryValue]) => entryValue !== undefined)
-      .sort(([left], [right]) => {
-        if (left < right) return -1
-        if (left > right) return 1
-        return 0
-      })
-      .map(([key, entryValue]) => [key, stableValue(entryValue)])
-  )
-}
-
 function hotContinuationMarkerPath(paths: DaytonaSandboxPaths) {
   return `${paths.codexHome}/hot-continuation.sha256`
-}
-
-function hotContinuationFingerprint({
-  baseBranch,
-  contextConfig,
-  input,
-  mcpConfig,
-  paths,
-  repoUrl,
-  requestedBranchName,
-  useBaseBranch,
-}: {
-  baseBranch?: string
-  contextConfig: string
-  input: RunCodexInSandboxInput
-  mcpConfig: string
-  paths: DaytonaSandboxPaths
-  repoUrl: string
-  requestedBranchName?: string
-  useBaseBranch: boolean
-}) {
-  return sha256(
-    [
-      HOT_CONTINUATION_VERSION,
-      repoUrl,
-      stableJson({
-        baseBranch,
-        branchMode: input.branchMode ?? "auto",
-        contextConfig,
-        codexCliVersion: desiredCodexCliVersion(),
-        codexDaemonVersion: CODEX_APP_SERVER_DAEMON_VERSION,
-        contextToolVersion: cloudcodeContextToolVersion(),
-        factoryToolVersion: cloudcodeFactoryToolVersion(),
-        githubToolVersion: cloudcodeGitHubToolVersion(),
-        desktopToolFingerprint: daytonaDesktopToolContentFingerprint(),
-        skillsFingerprint: codexSkillsContentFingerprint(),
-        mcpConfig,
-        paths: {
-          codexHome: paths.codexHome,
-          codexLauncherPath: paths.codexLauncherPath,
-          home: paths.home,
-          presetEnvPath: paths.presetEnvPath,
-          repoPath: paths.repoPath,
-          runtimeHome: paths.runtimeHome,
-        },
-        prNumber: input.prNumber ?? null,
-        requestedBranchName,
-        sandboxPreset: input.sandboxPreset ?? null,
-        useBaseBranch,
-      }),
-    ].join("\0")
-  )
 }
 
 function hotContinuationHashHelpers() {
@@ -591,6 +513,18 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     ]
       .filter(Boolean)
       .join("\n")
+    const desktopInstructions = [
+      githubConfig
+        ? cloudcodeGitHubAgentInstructions({
+            authenticated: Boolean(gitAuth),
+          })
+        : undefined,
+      contextConfig ? cloudcodeContextAgentInstructions() : undefined,
+      factoryConfig ? cloudcodeFactoryAgentInstructions() : undefined,
+      input.agentInstructions?.trim() || undefined,
+    ]
+      .filter(Boolean)
+      .join("\n\n")
 
     const writeRunToolState = async () => {
       await Promise.all([
@@ -679,21 +613,28 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       )
     }
 
-    const hotFingerprint = hotContinuationFingerprint({
+    const hotFingerprint = codexWarmStartFingerprint({
       baseBranch,
       contextConfig,
+      desktopInstructions,
       input,
       mcpConfig,
       paths,
       repoUrl,
       requestedBranchName,
       useBaseBranch,
+      versions: {
+        cli: desiredCodexCliVersion(),
+        contextTool: cloudcodeContextToolVersion(),
+        daemon: CODEX_APP_SERVER_DAEMON_VERSION,
+        desktopTool: daytonaDesktopToolContentFingerprint(),
+        factoryTool: cloudcodeFactoryToolVersion(),
+        githubTool: cloudcodeGitHubToolVersion(),
+        skills: codexSkillsContentFingerprint(),
+      },
     })
     const hotContinuationEnabled = Boolean(
-      input.sandboxId &&
-      existingCodexThreadId &&
-      !createdSandbox &&
-      !recoveredSandbox
+      input.sandboxId && !createdSandbox && !recoveredSandbox
     )
 
     // One staged-upload round plus one command covers GitHub auth setup, the
@@ -886,18 +827,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
       .then(() =>
         installDaytonaDesktopTools(sandbox, paths, input.signal, {
           config: mcpConfig,
-          instructions: [
-            githubConfig
-              ? cloudcodeGitHubAgentInstructions({
-                  authenticated: Boolean(gitAuth),
-                })
-              : undefined,
-            contextConfig ? cloudcodeContextAgentInstructions() : undefined,
-            factoryConfig ? cloudcodeFactoryAgentInstructions() : undefined,
-            input.agentInstructions?.trim() || undefined,
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
+          instructions: desktopInstructions,
         })
       )
       .then(() =>

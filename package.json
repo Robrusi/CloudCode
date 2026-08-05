@@ -28,6 +28,7 @@
     "test:integration-mcp": "tsx scripts/test-integration-mcp.ts",
     "test:integration-delivery": "tsx scripts/test-integration-delivery.ts",
     "test:factory-waits": "tsx scripts/test-factory-waits.ts",
+    "test:sandbox-warm-start": "tsx scripts/test-sandbox-warm-start.ts",
     "test:codex-app-server": "tsx scripts/test-codex-app-server.ts && tsx scripts/test-codex-app-server-daemon.ts && pnpm check:codex-app-server-protocol",
     "typecheck": "tsc --noEmit"
   },

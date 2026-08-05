@@ -214,18 +214,17 @@ export async function prepareSandboxRuntime(
     await writeDaytonaTextFile(sandbox, markerPath, `${bootstrapHash}\n`)
   }
 
-  if (input.sandboxPreset?.secrets.length) {
+  const secrets = input.sandboxPreset?.secrets ?? []
+  const envLocalSync = await writeCloudcodeEnvLocal(
+    target,
+    paths.repoPath,
+    secrets
+  )
+  if (envLocalSync.changed && secrets.length) {
     await emitRunLog(input, {
       kind: "setup",
-      message: `Writing ${input.sandboxPreset.secrets.length} preset secret${input.sandboxPreset.secrets.length === 1 ? "" : "s"} to .env.local`,
+      message: `Writing ${secrets.length} preset secret${secrets.length === 1 ? "" : "s"} to .env.local`,
     })
-    await writeCloudcodeEnvLocal(
-      target,
-      paths.repoPath,
-      input.sandboxPreset.secrets
-    )
-  } else {
-    await writeCloudcodeEnvLocal(target, paths.repoPath, [])
   }
 }
 
