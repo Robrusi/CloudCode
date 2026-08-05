@@ -23,7 +23,6 @@ import { AutomationsScreen } from "@/components/automations/screen"
 import { ReviewsScreen } from "@/components/reviews/screen"
 import type { SettingsSectionId } from "@/components/settings/sections"
 import { SettingsScreen } from "@/components/settings/screen"
-import { ThreadWaits } from "@/components/chat/thread-waits"
 import type { Message } from "@/components/chat/types"
 import { OnboardingChecklist } from "@/components/chat/onboarding-checklist"
 import type { FileBrowserOpenMode } from "@/components/files/browser"
@@ -105,7 +104,6 @@ type ThreadContent = {
   setElement: (element: HTMLDivElement | null) => void
   showNewActivity: boolean
   showOnboarding: boolean
-  threadId: Id<"threads"> | null
   threadViewKey: string
   userFirstName: string | null
 }
@@ -362,7 +360,6 @@ function ChatThreadMessages({ thread }: { thread: ThreadContent }) {
                 />
               )
             )}
-            <ThreadWaits threadId={thread.threadId} />
           </div>
           <div
             aria-hidden="true"

@@ -578,56 +578,6 @@ export const userCancelWait = mutation({
   },
 })
 
-export const userWakeWaitRecord = internalMutation({
-  args: { waitId: v.id("factoryWaits") },
-  handler: async (
-    ctx,
-    args
-  ): Promise<{ factoryWakeRuns: FactoryRunCreated[]; woken: boolean }> => {
-    const wait = await requireOwnedWait(ctx, args.waitId)
-    if (!isActiveWaitStatus(wait.status)) {
-      return { factoryWakeRuns: [], woken: false }
-    }
-
-    await closeWait(ctx, wait, "fired", "Woken early by the user in the chat.")
-    await insertWaitEvent(ctx, wait, {
-      eventKey: `user_wake:${wait._id}`,
-      eventVars: {
-        event: "user_wake",
-        summary:
-          "woken manually by the user before any event arrived. The wait is closed — continue without the external response, or register a new wait if you still need it.",
-      },
-    })
-    const wake = await maybeCreateFactoryWakeRun(ctx, wait.threadId)
-    return { factoryWakeRuns: wake ? [wake] : [], woken: true }
-  },
-})
-
-/** "Wake now" from the chat UI: consumes the wait and wakes the agent
- * immediately with a notice instead of waiting for the event or timeout.
- * Dispatch failures are logged, not thrown — the tick's
- * workerRecoverWakeDispatches backstop re-enqueues stranded wake runs. */
-export const userWakeWait = action({
-  args: { waitId: v.id("factoryWaits") },
-  handler: async (ctx, args): Promise<{ woken: boolean }> => {
-    const result = await ctx.runMutation(
-      internal.factoryWaits.userWakeWaitRecord,
-      { waitId: args.waitId }
-    )
-    for (const wake of result.factoryWakeRuns) {
-      await triggerTaskViaApi({
-        idempotencyKey: `factory-dispatch:${wake.runId}`,
-        payload: { runId: wake.runId },
-        tags: [`user:${wake.userId}`, `thread:${wake.threadId}`],
-        taskId: "factory-dispatch",
-      }).catch((error) => {
-        console.warn("Unable to queue factory wake-up run.", error)
-      })
-    }
-    return { woken: result.woken }
-  },
-})
-
 // ---------------------------------------------------------------------------
 // Worker functions (Trigger tasks and webhook routes).
 // ---------------------------------------------------------------------------

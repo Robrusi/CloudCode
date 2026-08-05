@@ -16,6 +16,7 @@ import { DraftAttachmentList } from "@/components/chat/composer-attachments"
 import { QueuedMessages } from "@/components/chat/composer-queue"
 import { NewChatComposerSettings } from "@/components/chat/composer-settings"
 import { ComposerSubmitRow } from "@/components/chat/composer-submit-row"
+import { ThreadWaits } from "@/components/chat/thread-waits"
 import type {
   DraftImageAttachment,
   QueuedMessage,
@@ -34,6 +35,7 @@ import { cn } from "@/lib/shared/utils"
 export type ChatComposerProps = {
   activeQueuedMessages: QueuedMessage[]
   activeRunPending: boolean
+  activeThreadId: Id<"threads"> | null
   activeThreadKey: string | null
   attachmentDragActive: boolean
   attachmentError: string
@@ -100,6 +102,7 @@ export type ChatComposerProps = {
 export function ChatComposer({
   activeQueuedMessages,
   activeRunPending,
+  activeThreadId,
   activeThreadKey,
   attachmentDragActive,
   attachmentError,
@@ -175,6 +178,7 @@ export function ChatComposer({
 
   return (
     <div className="pointer-events-auto w-full max-w-3xl rounded-3xl">
+      <ThreadWaits threadId={activeThreadId} />
       {activeQueuedMessages.length > 0 && activeThreadKey ? (
         <QueuedMessages
           messages={activeQueuedMessages}

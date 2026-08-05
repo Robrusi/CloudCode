@@ -595,6 +595,7 @@ export function useChatController(): ChatShellProps {
   const composerProps: ChatComposerProps = {
     activeQueuedMessages,
     activeRunPending,
+    activeThreadId: activeId ?? null,
     activeThreadKey: activeId ? (activeId as string) : null,
     attachmentDragActive,
     attachmentError,
@@ -773,7 +774,6 @@ export function useChatController(): ChatShellProps {
         setElement: setThreadElement,
         showNewActivity,
         showOnboarding,
-        threadId: activeId ?? null,
         threadViewKey,
         userFirstName,
       },
