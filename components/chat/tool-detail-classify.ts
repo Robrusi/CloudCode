@@ -5,12 +5,14 @@ export type DetailKind =
   | "read"
   | "search"
   | "command"
+  | "diff"
   | "edit"
   | "create"
   | "other"
 
 type CommandIntent =
   | { kind: "command" }
+  | { kind: "diff" }
   | { kind: "read"; target: string }
   | { kind: "search"; query: string }
 
@@ -71,6 +73,9 @@ export function inferCommandIntent(rawCmd: string): CommandIntent {
   const program = stripQuotes(tokens[0]).split("/").pop() ?? ""
   const args = tokens.slice(1).map(stripQuotes)
 
+  if (program === "git" && isGitDiffInvocation(args)) {
+    return { kind: "diff" }
+  }
   if (READ_PROGRAMS.has(program)) {
     const target = pickReadTarget(program, args)
     if (target) return { kind: "read", target }
@@ -101,6 +106,28 @@ export function classifyDetail(detail: ParsedLogDetail): DetailKind {
   if (/list|search|grep|glob|find/.test(name)) return "search"
   if (/read|view|cat|open|file/.test(name)) return "read"
   return "other"
+}
+
+/** Global git options that take a value and may precede the subcommand,
+ * e.g. `git -C repo -c core.pager=cat diff`. */
+const GIT_GLOBAL_VALUE_OPTIONS = new Set([
+  "-C",
+  "-c",
+  "--git-dir",
+  "--work-tree",
+])
+
+function isGitDiffInvocation(args: string[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (GIT_GLOBAL_VALUE_OPTIONS.has(arg)) {
+      i += 1
+      continue
+    }
+    if (arg.startsWith("-")) continue
+    return arg === "diff"
+  }
+  return false
 }
 
 function tokenizeShell(cmd: string): string[] {

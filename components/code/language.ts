@@ -43,6 +43,48 @@ const PIERRE_LANGUAGE_ALIASES: Record<string, string> = {
   go: "go",
 }
 
+const FILE_EXTENSION_LANGUAGES: Record<string, string> = {
+  bash: "bash",
+  c: "c",
+  cjs: "javascript",
+  cpp: "cpp",
+  cs: "csharp",
+  css: "css",
+  go: "go",
+  h: "c",
+  hpp: "cpp",
+  html: "html",
+  java: "java",
+  js: "javascript",
+  json: "json",
+  jsx: "jsx",
+  kt: "kotlin",
+  md: "markdown",
+  mjs: "javascript",
+  php: "php",
+  py: "python",
+  rb: "ruby",
+  rs: "rust",
+  scss: "scss",
+  sh: "bash",
+  sql: "sql",
+  svelte: "svelte",
+  swift: "swift",
+  toml: "toml",
+  ts: "typescript",
+  tsx: "tsx",
+  vue: "vue",
+  xml: "xml",
+  yaml: "yaml",
+  yml: "yaml",
+  zsh: "bash",
+}
+
+export function languageForFilePath(path: string) {
+  const ext = path.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1]
+  return (ext && FILE_EXTENSION_LANGUAGES[ext]) || "plaintext"
+}
+
 export function formatCodeLanguage(lang: string) {
   return CODE_LANGUAGE_LABELS[lang] ?? lang
 }

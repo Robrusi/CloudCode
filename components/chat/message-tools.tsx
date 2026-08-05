@@ -6,6 +6,7 @@ import { memo, useMemo, useState } from "react"
 import { DiffList } from "@/components/diff/changed-files"
 import {
   classifyDetail,
+  inferCommandIntent,
   unwrapShellCommand,
 } from "@/components/chat/tool-detail-classify"
 import { coalesceToolDetails } from "@/components/chat/tool-detail-coalesce"
@@ -29,8 +30,10 @@ import {
   type ToolUmbrella,
 } from "@/components/chat/tool-details"
 import { CodeBlock } from "@/components/code/block"
+import { languageForFilePath } from "@/components/code/language"
 import { RecordingVideo } from "@/components/sandbox/recording-video"
 import { cardSurfaceClass } from "@/components/ui/surface"
+import { getDiffStats } from "@/lib/diff/metadata"
 import { cn } from "@/lib/shared/utils"
 
 export const ToolGroup = memo(function ToolGroup({
@@ -296,15 +299,38 @@ const DetailView = memo(function DetailView({
     ? applyPatchToUnifiedDiff(rawPatchBody)
     : (changesDiff ?? runFileDiff)
   const hasDiff = Boolean(diffBody)
+  const output = detail.output?.trim() ?? ""
+  // A `git diff` command's output is itself a diff: render it as one instead
+  // of a raw command + output dump.
+  const commandDiff = useMemo(
+    () =>
+      kind === "diff" && output && getDiffStats(output).files.length > 0
+        ? output
+        : null,
+    [kind, output]
+  )
+  // A file read shows the file itself (path header + scrollable content),
+  // not the shell command that produced it.
+  const readPath = useMemo(() => {
+    if (kind !== "read") return null
+    if (isCommand) {
+      const intent = inferCommandIntent(
+        unwrapShellCommand(detail.command?.trim() ?? "")
+      )
+      return intent.kind === "read" ? intent.target : null
+    }
+    return detail.text?.trim().split(/\s+/)[0] || null
+  }, [kind, isCommand, detail.command, detail.text])
+  const readContent = kind === "read" && output ? output : null
   const cmd =
-    isCommand && !hasDiff
+    isCommand && !hasDiff && !commandDiff && !readContent
       ? unwrapShellCommand(detail.command?.trim() ?? "")
       : ""
   const text =
-    !isCommand && !hasDiff
+    !isCommand && !hasDiff && !readContent
       ? detail.query?.trim() || detail.text?.trim() || ""
       : ""
-  const output = detail.output?.trim() ?? ""
+  const rawOutput = commandDiff || readContent ? "" : output
   const fileChanges = !hasDiff ? fileOps : []
   const recording =
     detail.recording && (detail.recording.sandboxId || sandboxId)
@@ -321,6 +347,21 @@ const DetailView = memo(function DetailView({
           <DiffList diff={diffBody} />
         </div>
       ) : null}
+      {commandDiff ? (
+        <div className={cn("overflow-hidden", cardSurfaceClass)}>
+          <div className="max-h-[480px] overflow-y-auto">
+            <DiffList diff={commandDiff} />
+          </div>
+        </div>
+      ) : null}
+      {readContent ? (
+        <CodeBlock
+          body={readContent}
+          lang={languageForFilePath(readPath ?? "")}
+          title={readPath ?? "File"}
+          scrollable
+        />
+      ) : null}
       {fileChanges.length > 0 ? (
         <div className="space-y-1 rounded-md border border-border/70 bg-muted/30 px-3 py-2">
           {fileChanges.map((change, index) => (
@@ -336,7 +377,7 @@ const DetailView = memo(function DetailView({
       ) : null}
       {cmd ? <CodeBlock body={cmd} lang="bash" /> : null}
       {text ? <CodeBlock body={text} lang="plaintext" /> : null}
-      {output ? <CodeBlock body={output} lang="plaintext" /> : null}
+      {rawOutput ? <CodeBlock body={rawOutput} lang="plaintext" /> : null}
       {failed ? (
         <div className="font-mono text-[11px] text-destructive/80">
           exit {detail.exitCode}

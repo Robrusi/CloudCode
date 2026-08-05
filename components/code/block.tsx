@@ -30,9 +30,15 @@ const PIERRE_FILE_STYLE = {
 export const CodeBlock = memo(function CodeBlock({
   body,
   lang,
+  title,
+  scrollable = false,
 }: {
   body: string
   lang?: string
+  /** Header label; defaults to the language name. */
+  title?: string
+  /** Cap the body height and scroll overflowing content. */
+  scrollable?: boolean
 }) {
   const code = body.replace(/\n$/, "")
   const language = lang ?? "plaintext"
@@ -60,15 +66,21 @@ export const CodeBlock = memo(function CodeBlock({
 
   return (
     <div className={`overflow-hidden ${cardSurfaceClass}`}>
-      <div className="flex h-8 items-center border-b border-border bg-muted/70 px-3 font-mono text-[11px] font-medium text-muted-foreground uppercase">
-        {formatCodeLanguage(language)}
+      <div
+        className={`flex h-8 items-center border-b border-border bg-muted/70 px-3 font-mono text-[11px] font-medium text-muted-foreground ${title ? "" : "uppercase"}`}
+      >
+        <span className="min-w-0 truncate" title={title}>
+          {title ?? formatCodeLanguage(language)}
+        </span>
       </div>
-      <PierreFile
-        file={file}
-        options={options}
-        disableWorkerPool
-        style={PIERRE_FILE_STYLE}
-      />
+      <div className={scrollable ? "max-h-[420px] overflow-y-auto" : undefined}>
+        <PierreFile
+          file={file}
+          options={options}
+          disableWorkerPool
+          style={PIERRE_FILE_STYLE}
+        />
+      </div>
     </div>
   )
 })

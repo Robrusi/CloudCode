@@ -121,6 +121,7 @@ export function summarizeBundle(
   const counts: Record<DetailKind, number> = {
     command: 0,
     create: 0,
+    diff: 0,
     edit: 0,
     other: 0,
     read: 0,
@@ -164,14 +165,26 @@ export function summarizeBundle(
     const verb = parts.length === 0 ? "" : ""
     parts.push(`${verb}${pluralize(counts.search, "search", "searches")}`)
   }
+  if (counts.diff > 0) {
+    const label = pluralize(counts.diff, "diff", "diffs")
+    parts.push(parts.length === 0 ? `Viewed ${label}` : `viewed ${label}`)
+  }
   if (counts.command > 0) {
     parts.push(`ran ${pluralize(counts.command, "command", "commands")}`)
   }
 
   if (parts.length === 0) return "Ran command"
 
+  // Diff-only bundle: the expanded rows already say "Viewed diff".
+  if (counts.diff > 0 && parts.length === 1) return parts[0]
+
   // Commands-only bundle: use the per-command label form.
-  if (counts.read === 0 && counts.search === 0 && counts.command > 0) {
+  if (
+    counts.read === 0 &&
+    counts.search === 0 &&
+    counts.diff === 0 &&
+    counts.command > 0
+  ) {
     if (counts.command === 1) {
       const cmd = unwrapShellCommand(
         items.find((i) => i.kind === "command_execution")?.command?.trim() ?? ""
@@ -219,6 +232,7 @@ export function describeItem(detail: ParsedLogDetail): string {
   if (detail.kind === "command_execution") {
     const cmd = unwrapShellCommand(detail.command?.trim() ?? "")
     const intent = inferCommandIntent(cmd)
+    if (intent.kind === "diff") return "Viewed diff"
     if (intent.kind === "read") return `Read ${basename(intent.target)}`
     if (intent.kind === "search") return `Searched for ${intent.query}`
     const oneLine = cmd.split(/\n/)[0].trim()
