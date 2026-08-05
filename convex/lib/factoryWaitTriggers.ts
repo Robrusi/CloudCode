@@ -13,22 +13,24 @@ import { canonicalGitHubRepoUrl } from "@/lib/github/repo"
 export const factoryWaitProvider = v.union(
   v.literal("slack"),
   v.literal("github"),
-  v.literal("linear")
+  v.literal("linear"),
+  v.literal("external")
 )
 
 export type FactoryWaitProvider = Infer<typeof factoryWaitProvider>
 
 export const factoryWaitStatus = v.union(
-  // ask_human: the Slack post has been handed to the arm task but its
-  // message ts is not yet confirmed, so no match keys exist yet.
+  // Persisted rollout compatibility only. These values belonged to the
+  // retired message-posting flow and are never created or treated as active;
+  // the minute sweep converts any remaining rows to canceled. Removing them
+  // from validation before that cleanup would make Convex reject deployment.
   v.literal("arming"),
+  v.literal("failed"),
   v.literal("armed"),
   // Consumed by a wake run (or superseded by the integration follow-up path).
   v.literal("fired"),
   v.literal("expired"),
-  v.literal("canceled"),
-  // The arm task exhausted its retries; the agent is woken about it.
-  v.literal("failed")
+  v.literal("canceled")
 )
 
 export type FactoryWaitStatus = Infer<typeof factoryWaitStatus>
@@ -57,7 +59,8 @@ export function factoryWaitEventsForProvider(
 ): readonly string[] {
   if (provider === "slack") return SLACK_WAIT_EVENTS
   if (provider === "github") return GITHUB_WAIT_EVENTS
-  return LINEAR_WAIT_EVENTS
+  if (provider === "linear") return LINEAR_WAIT_EVENTS
+  return []
 }
 
 /** Match keys for a Slack wait: the thread root catches replies, the watched
@@ -92,13 +95,22 @@ export function githubWaitSourceKey(repoUrl: string, prNumber: number) {
   return `github:${canonicalRepoUrl.toLowerCase()}:pr:${prNumber}`
 }
 
+export function githubInstallationWaitSourceKey(
+  installationId: string,
+  repoUrl: string,
+  prNumber: number
+) {
+  const canonicalRepoUrl = canonicalGitHubRepoUrl(repoUrl) ?? repoUrl.trim()
+  return `github:${installationId}:${canonicalRepoUrl.toLowerCase()}:pr:${prNumber}`
+}
+
 export function linearWaitSourceKey(installationId: string, issueId: string) {
   return `linear:${installationId}:${issueId}`
 }
 
-/** Maps the GitHub webhook automation event names onto the coarser wait
- * event vocabulary an agent filters on. Events without a mapping (issues,
- * pushes, PR opens) can never wake a wait. */
+/** Maps GitHub webhook events onto the compact vocabulary used by waits on
+ * one specific PR. Repository-wide event waits retain the provider event
+ * name and use the trigger helpers in integrationTriggers.ts. */
 const GITHUB_EVENT_TO_WAIT_EVENT: Record<string, GitHubWaitEvent> = {
   checkSuiteCompleted: "checks",
   issueCommented: "comment",

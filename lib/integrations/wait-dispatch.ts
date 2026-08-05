@@ -3,9 +3,14 @@ import { ConvexHttpClient } from "convex/browser"
 
 import { api } from "@/convex/_generated/api"
 import {
+  githubInstallationWaitSourceKey,
   githubWaitEventName,
   githubWaitSourceKey,
 } from "@/convex/lib/factoryWaitTriggers"
+import {
+  githubEventTriggerSourceKey,
+  githubInstallationEventTriggerSourceKey,
+} from "@/convex/lib/integrationTriggers"
 import { requireConvexUrl } from "@/lib/convex/env"
 import type { GitHubAutomationEvent } from "@/lib/github/automation-events"
 import {
@@ -13,9 +18,12 @@ import {
   isTrustedGitHubAssociation,
 } from "@/lib/github/webhook"
 import {
-  githubWaitEventVars,
+  githubEventWaitVars,
   githubWaitPullRequestNumbers,
-  linearWaitEventVars,
+  githubIntegrationEventMatches,
+  linearEventWaitVars,
+  linearIntegrationEventMatches,
+  type FactoryWaitEventPayload,
   type LinearAutomationEvent,
 } from "@/lib/integrations/events"
 import { slackThreadParts } from "@/lib/integrations/slack-threads"
@@ -90,107 +98,137 @@ export async function dispatchSlackWaitEvent(
   return true
 }
 
-/** Does this GitHub event land on a PR an agent registered a wait for?
- * Best-effort by design: GitHub does not redeliver failed webhooks, and a
- * wait-subsystem outage must never drop the review and automation dispatches
- * sharing the delivery — an undelivered wait event still resolves through
- * the wait's TTL timeout. */
-export async function dispatchGitHubWaitEvent(
+/** Match a durably persisted GitHub candidate to PR-specific and filtered
+ * repository waits. The webhook route stores the candidate before enqueue;
+ * this worker may therefore throw and retry without losing the delivery. */
+export async function matchGitHubWaitEvent(
+  client: ConvexHttpClient,
   event: GitHubAutomationEvent,
-  deliveryId: string | null
-) {
-  try {
-    const eventName = githubWaitEventName(event.event)
-    if (!eventName) return false
-    // Comments and reviews carry actor-authored text straight into a
-    // privileged continuation run's prompt, so they wake a wait only from
-    // trusted authors (owner/member/collaborator — the same rule as app
-    // mentions): on a public repository any GitHub account can comment, and
-    // an untrusted account must not be able to place instructions in front
-    // of the agent. The agent's own posts (the app's bot) never wake it.
-    // State changes (merged, closed, reopened, checks) carry no authored
-    // text and count regardless of the actor.
-    if (eventName === "comment" || eventName === "review") {
-      if (isCloudcodeActor(event.actorLogin)) return false
-      if (!isTrustedGitHubAssociation(event.actorAssociation)) return false
-    }
-    const prNumbers = githubWaitPullRequestNumbers(event)
-    if (prNumbers.length === 0) return false
+  deliveryId: string | undefined,
+  receivedAt: number
+): Promise<FactoryWaitEventPayload | null> {
+  const specificEventName = githubWaitEventName(event.event)
+  // Comments and reviews carry actor-authored text straight into a
+  // privileged continuation run's prompt, so they wake a wait only from
+  // trusted authors (owner/member/collaborator — the same rule as app
+  // mentions): on a public repository any GitHub account can comment, and
+  // an untrusted account must not be able to place instructions in front
+  // of the agent. The agent's own posts (the app's bot) never wake it.
+  // State changes (merged, closed, reopened, checks) carry no authored
+  // text and count regardless of the actor.
+  if (specificEventName === "comment" || specificEventName === "review") {
+    if (isCloudcodeActor(event.actorLogin)) return null
+    if (!isTrustedGitHubAssociation(event.actorAssociation)) return null
+  }
+  const prNumbers = githubWaitPullRequestNumbers(event).slice(0, 10)
 
-    const client = new ConvexHttpClient(requireConvexUrl())
-    const matches = await client.query(api.factoryWaits.workerMatchWaitEvents, {
-      sourceKeys: prNumbers.map((number) =>
-        githubWaitSourceKey(event.repoUrl, number)
+  const matches = await client.query(api.factoryWaits.workerMatchWaitEvents, {
+    githubInstallationId: event.installationId,
+    sourceKeys: [
+      githubInstallationEventTriggerSourceKey(
+        event.installationId,
+        event.repoUrl,
+        event.event
       ),
-      workerSecret: getWorkerSecret(),
+      githubEventTriggerSourceKey(event.repoUrl, event.event),
+      ...(specificEventName
+        ? prNumbers.flatMap((number) => [
+            githubInstallationWaitSourceKey(
+              event.installationId,
+              event.repoUrl,
+              number
+            ),
+            githubWaitSourceKey(event.repoUrl, number),
+          ])
+        : []),
+    ],
+    workerSecret: getWorkerSecret(),
+  })
+  const waits = matches
+    .filter((match) => {
+      if (match.eventTrigger?.kind === "github") {
+        return (
+          !isCloudcodeActor(event.actorLogin) &&
+          githubIntegrationEventMatches(match.eventTrigger, event)
+        )
+      }
+      return Boolean(
+        specificEventName && match.events.includes(specificEventName)
+      )
     })
-    const waits = matches
-      .filter((match) => match.events.includes(eventName))
-      .map((match) => ({ threadId: match.threadId, waitId: match.waitId }))
-    if (waits.length === 0) return false
+    .map((match) => ({
+      eventName:
+        match.eventTrigger?.kind === "github"
+          ? event.event
+          : specificEventName!,
+      threadId: match.threadId,
+      waitId: match.waitId,
+    }))
+  if (waits.length === 0) return null
 
-    await tasks.trigger<typeof integrationEvent>(
-      "integration-event",
-      {
-        eventKey:
-          deliveryId ??
-          `${event.event}:${prNumbers.join(",")}:${event.comment?.id ?? event.actorLogin ?? "unknown"}`,
-        eventName,
-        eventVars: githubWaitEventVars(event, eventName),
-        kind: "wait_event",
-        provider: "github",
-        receivedAt: Date.now(),
-        waits,
-      },
-      deliveryId ? { idempotencyKey: `fwg:${deliveryId}` } : undefined
-    )
-    return true
-  } catch (error) {
-    console.error("GitHub wait event dispatch failed.", error)
-    return false
+  return {
+    eventKey:
+      deliveryId ??
+      `${event.event}:${prNumbers.join(",")}:${event.comment?.id ?? event.review?.url ?? event.push?.after ?? event.actorLogin ?? "unknown"}`,
+    eventName: event.event,
+    eventVars: githubEventWaitVars(event),
+    kind: "wait_event",
+    provider: "github",
+    receivedAt,
+    waits,
   }
 }
 
-/** New comments on Linear issues an agent registered a wait for. Throws on
- * failure so the route returns 500 and Linear redelivers. */
+/** Linear issue and comment events that match an agent-registered wait.
+ * Throws on failure so the route returns 500 and Linear redelivers. */
 export async function dispatchLinearWaitEvents(
   events: LinearAutomationEvent[],
   organizationId: string,
   deliveryId: string
 ) {
-  const comments = events.filter(
-    (event) => event.event === "commentCreated" && event.comment
-  )
-  if (comments.length === 0) return
+  if (events.length === 0) return
 
   const client = new ConvexHttpClient(requireConvexUrl())
-  for (const event of comments) {
+  for (const event of events) {
     const matches = await client.query(
       api.factoryWaits.workerMatchLinearWaitEvent,
       {
-        actorId: event.comment?.authorId,
+        actorId: event.comment?.authorId ?? event.actorId,
+        event: event.event,
         externalId: organizationId,
         issueId: event.issue.id,
         workerSecret: getWorkerSecret(),
       }
     )
-    if (matches.length === 0) continue
+    const waits = matches
+      .filter((match) =>
+        match.eventTrigger?.kind === "linear"
+          ? linearIntegrationEventMatches(match.eventTrigger, event)
+          : event.event === "commentCreated" && match.events.includes("comment")
+      )
+      .map((match) => ({
+        eventName:
+          match.eventTrigger?.kind === "linear" ? event.event : "comment",
+        threadId: match.threadId,
+        waitId: match.waitId,
+      }))
+    if (waits.length === 0) continue
+
+    const eventKey =
+      event.comment?.id ?? `${deliveryId}:${event.event}:${event.issue.id}`
 
     await tasks.trigger<typeof integrationEvent>(
       "integration-event",
       {
-        eventKey: event.comment?.id ?? deliveryId,
-        eventName: "comment",
-        eventVars: linearWaitEventVars(event),
+        eventKey,
+        eventName: event.event,
+        eventVars: linearEventWaitVars(event),
         kind: "wait_event",
         provider: "linear",
         receivedAt: Date.now(),
-        waits: matches.map((match) => ({
-          threadId: match.threadId,
-          waitId: match.waitId,
-        })),
+        waits,
       },
-      { idempotencyKey: `fwl:${event.comment?.id ?? deliveryId}` }
+      { idempotencyKey: `fwl:${eventKey}` }
     )
   }
 }

@@ -6,7 +6,7 @@ import {
   parseCommentlessLinearDelegation,
   parseLinearAutomationEvents,
 } from "../lib/integrations/linear-webhook"
-import { linearAutomationEventMatches } from "../lib/integrations/events"
+import { linearIntegrationEventMatches } from "../lib/integrations/events"
 import {
   linearAgentSessionThreadId,
   linearAgentSessionThreadParts,
@@ -209,9 +209,9 @@ const commentTrigger = {
   installationId: "installation-1" as Id<"integrationInstallations">,
   kind: "linear" as const,
 }
-assert.equal(linearAutomationEventMatches(commentTrigger, commentEvent), true)
+assert.equal(linearIntegrationEventMatches(commentTrigger, commentEvent), true)
 assert.equal(
-  linearAutomationEventMatches(
+  linearIntegrationEventMatches(
     {
       ...commentTrigger,
       commentAuthorIds: ["user-3"],
@@ -222,7 +222,7 @@ assert.equal(
   true
 )
 assert.equal(
-  linearAutomationEventMatches(
+  linearIntegrationEventMatches(
     {
       ...commentTrigger,
       commentAuthorIds: ["user-4"],
@@ -233,7 +233,7 @@ assert.equal(
   false
 )
 assert.equal(
-  linearAutomationEventMatches(
+  linearIntegrationEventMatches(
     {
       ...commentTrigger,
       commentAuthorIds: ["user-3"],
@@ -263,7 +263,7 @@ assert.deepEqual(oauthClientComment, {
 })
 assert.ok(oauthClientComment)
 assert.equal(
-  linearAutomationEventMatches(commentTrigger, oauthClientComment),
+  linearIntegrationEventMatches(commentTrigger, oauthClientComment),
   true
 )
 
@@ -291,11 +291,11 @@ assert.deepEqual(legacyBotComment, {
 })
 assert.ok(legacyBotComment)
 assert.equal(
-  linearAutomationEventMatches(commentTrigger, legacyBotComment),
+  linearIntegrationEventMatches(commentTrigger, legacyBotComment),
   true
 )
 assert.equal(
-  linearAutomationEventMatches(
+  linearIntegrationEventMatches(
     {
       ...commentTrigger,
       commentAuthorIds: ["user-3"],
@@ -322,7 +322,7 @@ const userLikeLegacyBotComment = parseLinearAutomationEvents({
 assert.ok(userLikeLegacyBotComment)
 assert.equal(userLikeLegacyBotComment.comment?.authorId, "legacy-app-2")
 assert.equal(
-  linearAutomationEventMatches(commentTrigger, userLikeLegacyBotComment),
+  linearIntegrationEventMatches(commentTrigger, userLikeLegacyBotComment),
   true
 )
 
@@ -339,11 +339,11 @@ const unidentifiedBotComment = parseLinearAutomationEvents({
 }).events[0]
 assert.ok(unidentifiedBotComment)
 assert.equal(
-  linearAutomationEventMatches(commentTrigger, unidentifiedBotComment),
+  linearIntegrationEventMatches(commentTrigger, unidentifiedBotComment),
   true
 )
 assert.equal(
-  linearAutomationEventMatches(
+  linearIntegrationEventMatches(
     {
       ...commentTrigger,
       commentAuthorIds: ["user-3"],
@@ -354,7 +354,7 @@ assert.equal(
   false
 )
 assert.equal(
-  linearAutomationEventMatches(
+  linearIntegrationEventMatches(
     {
       ...commentTrigger,
       commentAuthorIds: ["user-3"],
@@ -502,18 +502,18 @@ const assignmentTrigger = {
   teamId: "team-1",
 }
 assert.equal(
-  linearAutomationEventMatches(assignmentTrigger, assignmentEvent),
+  linearIntegrationEventMatches(assignmentTrigger, assignmentEvent),
   true
 )
 assert.equal(
-  linearAutomationEventMatches(
+  linearIntegrationEventMatches(
     { ...assignmentTrigger, assigneeId: "user-3" },
     assignmentEvent
   ),
   false
 )
 assert.equal(
-  linearAutomationEventMatches(
+  linearIntegrationEventMatches(
     { ...assignmentTrigger, teamId: "team-2" },
     assignmentEvent
   ),

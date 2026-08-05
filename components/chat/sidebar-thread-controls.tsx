@@ -1,6 +1,6 @@
 "use client"
 
-import { Check, ListFilter, Search, X } from "lucide-react"
+import { Check, Inbox, ListFilter, Search, X } from "lucide-react"
 import { useMemo, useRef, useState } from "react"
 
 import {
@@ -16,6 +16,7 @@ import {
   type SidebarChat,
   type SidebarThreadFilter,
   type SidebarThreadSort,
+  type SidebarThreadView,
 } from "@/components/chat/sidebar-model"
 import { useClickOutside } from "@/hooks/use-click-outside"
 import { cn } from "@/lib/shared/utils"
@@ -48,16 +49,20 @@ export function SidebarThreadControls({
   onFilterChange,
   onQueryChange,
   onSortChange,
+  onViewChange,
   query,
   sort,
+  view,
 }: {
   chats: SidebarChat[]
   filter: SidebarThreadFilter
   onFilterChange: (filter: SidebarThreadFilter) => void
   onQueryChange: (query: string) => void
   onSortChange: (sort: SidebarThreadSort) => void
+  onViewChange: (view: SidebarThreadView) => void
   query: string
   sort: SidebarThreadSort
+  view: SidebarThreadView
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -115,6 +120,18 @@ export function SidebarThreadControls({
             </button>
           ) : null}
         </div>
+        <button
+          type="button"
+          onClick={() => onViewChange(view === "inbox" ? "folders" : "inbox")}
+          aria-pressed={view === "inbox"}
+          aria-label={
+            view === "inbox" ? "Show repo folders" : "Show inbox view"
+          }
+          title={view === "inbox" ? "Repo folders" : "Inbox"}
+          className="grid size-7 shrink-0 place-items-center rounded-lg text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/30 aria-pressed:bg-muted aria-pressed:text-foreground"
+        >
+          <Inbox className="size-3.5" />
+        </button>
         <button
           type="button"
           onClick={() => setMenuOpen(!menuOpen)}

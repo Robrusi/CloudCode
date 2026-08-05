@@ -18,10 +18,17 @@ export const FACTORY_MAX_DISPATCHES_PER_ROOT_THREAD = 200
 /** Enabled automations created through automation_create, per user. */
 export const FACTORY_MAX_AGENT_CREATED_AUTOMATIONS = 20
 
-/** Arming/armed waits registered through ask_human or wait_create, per
- * thread and across all of a user's threads. */
+/** Active durable waits, per thread and across all of a user's threads. */
 export const FACTORY_MAX_ACTIVE_WAITS_PER_THREAD = 10
 export const FACTORY_MAX_ACTIVE_WAITS_PER_USER = 100
+
+/** Armed waits sharing one webhook match key. Enforced at insertion so
+ * provider delivery queries can use a bounded `take` without dropping rows. */
+export const FACTORY_MAX_ACTIVE_WAITS_PER_SOURCE = 500
+
+/** One reusable authenticated callback endpoint per supported external
+ * provider and user. Kept explicit for future multi-account support. */
+export const FACTORY_MAX_WEBHOOK_ENDPOINTS_PER_USER = 10
 
 /** Queued (not yet reported) events one wait may accumulate while its
  * thread is busy. */

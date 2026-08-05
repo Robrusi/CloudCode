@@ -40,6 +40,7 @@ export type ChatRecord = {
   codexThreadId?: string
   factoryRootThreadId?: Id<"threads">
   id: Id<"threads">
+  inboxSettledAt?: number
   lastUserMessageAt?: number
   notes?: string
   repoUrl: string

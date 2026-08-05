@@ -1,10 +1,7 @@
 import { v } from "convex/values"
 
-import { api, internal } from "./_generated/api"
 import type { Doc, Id } from "./_generated/dataModel"
 import {
-  action,
-  internalMutation,
   mutation,
   query,
   type MutationCtx,
@@ -35,7 +32,7 @@ import {
   GITHUB_WAIT_EVENTS,
   LINEAR_WAIT_EVENTS,
   SLACK_WAIT_EVENTS,
-  githubWaitSourceKey,
+  githubInstallationWaitSourceKey,
   linearWaitSourceKey,
   slackWaitEventSourceKey,
   slackWaitSourceKeys,
@@ -44,31 +41,138 @@ import {
   enabledInstallationForUser,
   installationForProviderExternal,
 } from "./lib/integrationInstallations"
-import { triggerTaskViaApi } from "./lib/triggerApi"
+import {
+  externalEventTriggerSourceKey,
+  externalFactoryWaitProvider,
+  githubInstallationEventTriggerSourceKey,
+  linearEventTriggerSourceKey,
+  type FactoryEventWaitTrigger,
+  type ExternalFactoryWaitProvider,
+} from "./lib/integrationTriggers"
 import { getCurrentUser } from "./lib/users"
-import { requireWorkerSecret, workerSecretFromEnv } from "./lib/workerAuth"
+import { requireWorkerSecret } from "./lib/workerAuth"
+import {
+  FACTORY_MAX_ACTIVE_WAITS_PER_SOURCE,
+  FACTORY_MAX_WEBHOOK_ENDPOINTS_PER_USER,
+} from "@/lib/factory/limits"
+import {
+  assertWaitKindArguments,
+  normalizeExternalEventConfig,
+  normalizeGitHubEventTrigger,
+  normalizeLinearEventTrigger,
+  validateLinearIssueId,
+  validateSlackWaitTarget,
+  type FactoryWaitKind,
+  type FactoryWaitRequestFields,
+} from "@/lib/factory/wait-config"
 import { canonicalGitHubRepoUrl } from "@/lib/github/repo"
-import { slackThreadParts } from "@/lib/integrations/slack-threads"
 
 /** Reported events are kept this long for webhook dedupe, then swept.
  * Pending events on threads that never free up (user-canceled) share the
  * retention so they cannot accumulate forever. */
 const WAIT_EVENT_RETENTION_MS = 30 * 24 * 60 * 60_000
+const WAIT_INGRESS_PAYLOAD_MAX = 256 * 1024
 
 /** Pending events older than this on an idle thread mean the worker that
  * recorded them died before dispatching the wake; the tick redelivers. */
 const WAIT_WAKE_RECOVERY_AGE_MS = 5 * 60_000
 
-/** An arming wait older than this was orphaned (the process died between
- * creating it and enqueueing the post, or the arm task was lost); far beyond
- * any legitimate post-retry latency. */
-const ARMING_TIMEOUT_MS = 15 * 60_000
-
 const WAKE_RECOVERY_SCAN_LIMIT = 500
 const WAKE_RECOVERY_DELIVERY_LIMIT = 20
 
 const EXPIRE_SWEEP_DEFAULT_LIMIT = 50
-const MATCH_SOURCE_KEYS_MAX = 10
+const LEGACY_WAIT_CLEANUP_LIMIT = 100
+const MATCH_SOURCE_KEYS_MAX = 25
+const GITHUB_WAIT_INSTALLATION_MAX = 50
+
+async function sha256Hex(value: string) {
+  const bytes = new TextEncoder().encode(value)
+  const digest = await crypto.subtle.digest("SHA-256", bytes)
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+}
+
+function externalProviderForKind(
+  kind: FactoryWaitKind
+): ExternalFactoryWaitProvider | undefined {
+  if (kind === "sentry_event") return "sentry"
+  if (kind === "datadog_event") return "datadog"
+  if (kind === "pagerduty_event") return "pagerduty"
+  if (kind === "webhook_event") return "webhook"
+  return undefined
+}
+
+async function resolveOrCreateWebhookEndpoint(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  provider: ExternalFactoryWaitProvider,
+  endpointId?: Id<"factoryWebhookEndpoints">
+) {
+  if (endpointId) {
+    const endpoint = await ctx.db.get(endpointId)
+    if (
+      !endpoint ||
+      endpoint.userId !== userId ||
+      endpoint.provider !== provider
+    ) {
+      throw new Error("Webhook endpoint not found for this provider.")
+    }
+    return { endpoint, webhookToken: undefined }
+  }
+
+  const existing = await ctx.db
+    .query("factoryWebhookEndpoints")
+    .withIndex("by_user_provider", (q) =>
+      q.eq("userId", userId).eq("provider", provider)
+    )
+    .first()
+  if (existing) return { endpoint: existing, webhookToken: undefined }
+
+  const endpointCount = (
+    await ctx.db
+      .query("factoryWebhookEndpoints")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .take(FACTORY_MAX_WEBHOOK_ENDPOINTS_PER_USER)
+  ).length
+  if (endpointCount >= FACTORY_MAX_WEBHOOK_ENDPOINTS_PER_USER) {
+    throw new Error("Too many Factory webhook endpoints are configured.")
+  }
+
+  const webhookToken = `${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`
+  const now = Date.now()
+  const createdId = await ctx.db.insert("factoryWebhookEndpoints", {
+    createdAt: now,
+    provider,
+    tokenHash: await sha256Hex(webhookToken),
+    updatedAt: now,
+    userId,
+  })
+  const endpoint = await ctx.db.get(createdId)
+  if (!endpoint) throw new Error("Unable to create webhook endpoint.")
+  return { endpoint, webhookToken }
+}
+
+async function githubWaitInstallationIds(
+  ctx: MutationCtx,
+  userId: Id<"users">
+) {
+  const installations = await ctx.db
+    .query("githubAppInstallations")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .take(GITHUB_WAIT_INSTALLATION_MAX + 1)
+  if (installations.length === 0) {
+    throw new Error(
+      "Install the GitHub App before creating a GitHub Factory wait."
+    )
+  }
+  if (installations.length > GITHUB_WAIT_INSTALLATION_MAX) {
+    throw new Error(
+      "Too many GitHub App installations are connected to create a bounded wait."
+    )
+  }
+  return [...new Set(installations.map((row) => row.installationId))]
+}
 
 function parseWaitEvents(
   values: string[] | undefined,
@@ -120,6 +224,7 @@ function waitSummary(wait: Doc<"factoryWaits">) {
   return {
     channelId: wait.messageChannelId,
     createdAt: wait.createdAt,
+    eventTrigger: wait.eventTrigger,
     events: wait.events,
     expiresAt: wait.expiresAt,
     issueId: wait.linearIssueId,
@@ -134,61 +239,6 @@ function waitSummary(wait: Doc<"factoryWaits">) {
   }
 }
 
-/** Where an agent-authored Slack message goes: the thread's originating
- * Slack conversation when it has one and no explicit channel was given
- * (the question lands where the humans already are), otherwise the given
- * channel in the user's connected workspace. */
-async function resolveSlackPostTarget(
-  ctx: QueryCtx | MutationCtx,
-  run: Doc<"codexRuns">,
-  args: { channelId?: string; threadTs?: string }
-): Promise<{
-  channelId: string
-  installationId: Id<"integrationInstallations">
-  slackTeamId: string
-  threadTs?: string
-}> {
-  const explicitChannel = args.channelId?.trim() || undefined
-  const explicitThreadTs = args.threadTs?.trim() || undefined
-
-  if (!explicitChannel) {
-    const bridge = await ctx.db
-      .query("integrationThreads")
-      .withIndex("by_thread", (q) => q.eq("threadId", run.threadId))
-      .first()
-    if (bridge && bridge.provider === "slack") {
-      const installation = await ctx.db.get(bridge.installationId)
-      if (installation?.enabled) {
-        const parts = slackThreadParts(bridge.externalThreadId)
-        return {
-          channelId: parts.channel,
-          installationId: installation._id,
-          slackTeamId: installation.externalId,
-          threadTs: explicitThreadTs ?? parts.threadTs,
-        }
-      }
-    }
-    throw new Error(
-      "channelId is required: this thread has no originating Slack conversation to default to."
-    )
-  }
-
-  const installation = await enabledInstallationForUser(
-    ctx,
-    run.userId,
-    "slack"
-  )
-  if (!installation) {
-    throw new Error("No enabled Slack workspace is connected.")
-  }
-  return {
-    channelId: explicitChannel,
-    installationId: installation._id,
-    slackTeamId: installation.externalId,
-    threadTs: explicitThreadTs,
-  }
-}
-
 async function matchWaitsBySourceKeys(
   ctx: QueryCtx | MutationCtx,
   sourceKeys: string[]
@@ -199,7 +249,7 @@ async function matchWaitsBySourceKeys(
       ctx.db
         .query("factoryWaitKeys")
         .withIndex("by_source", (q) => q.eq("sourceKey", sourceKey))
-        .collect()
+        .take(FACTORY_MAX_ACTIVE_WAITS_PER_SOURCE)
     )
   )
   const waitIds = [...new Set(rowsPerKey.flat().map((row) => row.waitId))]
@@ -210,10 +260,13 @@ async function matchWaitsBySourceKeys(
       Boolean(wait && wait.status === "armed")
     )
     .map((wait) => ({
+      eventTrigger: wait.eventTrigger,
       events: wait.events,
       note: wait.note,
       provider: wait.provider,
+      sourceKeys: wait.sourceKeys,
       threadId: wait.threadId,
+      userId: wait.userId,
       waitId: wait._id,
     }))
 }
@@ -225,29 +278,91 @@ async function matchWaitsBySourceKeys(
 export const createWait = mutation({
   args: {
     ...factoryAccessArgs,
+    actorLogin: v.optional(v.string()),
+    assigneeId: v.optional(v.string()),
+    assigneeName: v.optional(v.string()),
+    branch: v.optional(v.string()),
     channelId: v.optional(v.string()),
+    commentAuthorIds: v.optional(v.array(v.string())),
+    commentAuthorMode: v.optional(
+      v.union(v.literal("any"), v.literal("include"), v.literal("exclude"))
+    ),
+    commentAuthorNames: v.optional(v.array(v.string())),
+    endpointId: v.optional(v.id("factoryWebhookEndpoints")),
+    event: v.optional(v.string()),
     events: v.optional(v.array(v.string())),
+    filters: v.optional(v.record(v.string(), v.string())),
     issueId: v.optional(v.string()),
     kind: v.union(
       v.literal("slack_thread"),
       v.literal("github_pr"),
-      v.literal("linear_issue")
+      v.literal("github_event"),
+      v.literal("linear_issue"),
+      v.literal("linear_event"),
+      v.literal("sentry_event"),
+      v.literal("datadog_event"),
+      v.literal("pagerduty_event"),
+      v.literal("webhook_event")
     ),
+    labelId: v.optional(v.string()),
+    labelName: v.optional(v.string()),
     messageTs: v.optional(v.string()),
     note: v.optional(v.string()),
     prNumber: v.optional(v.number()),
     prUrl: v.optional(v.string()),
+    stateId: v.optional(v.string()),
+    stateName: v.optional(v.string()),
+    teamId: v.optional(v.string()),
+    teamName: v.optional(v.string()),
     threadTs: v.optional(v.string()),
     ttlSeconds: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const run = await requireActiveFactoryRunAccess(ctx, args)
+    const requestFields: FactoryWaitRequestFields = {
+      actorLogin: args.actorLogin,
+      assigneeId: args.assigneeId,
+      assigneeName: args.assigneeName,
+      branch: args.branch,
+      channelId: args.channelId,
+      commentAuthorIds: args.commentAuthorIds,
+      commentAuthorMode: args.commentAuthorMode,
+      commentAuthorNames: args.commentAuthorNames,
+      endpointId: args.endpointId,
+      event: args.event,
+      events: args.events,
+      filters: args.filters,
+      issueId: args.issueId,
+      labelId: args.labelId,
+      labelName: args.labelName,
+      messageTs: args.messageTs,
+      note: args.note,
+      prNumber: args.prNumber,
+      prUrl: args.prUrl,
+      stateId: args.stateId,
+      stateName: args.stateName,
+      teamId: args.teamId,
+      teamName: args.teamName,
+      threadTs: args.threadTs,
+      ttlSeconds: args.ttlSeconds,
+    }
+    assertWaitKindArguments(args.kind, requestFields)
     await requireWaitCapacity(ctx, run.threadId, run.userId)
     const now = Date.now()
     const expiresAt = now + clampWaitTtlMs(args.ttlSeconds)
     const note = args.note?.trim() || undefined
+    if (note && note.length > 500) {
+      throw new Error("note must be at most 500 characters.")
+    }
+    let webhookSetup:
+      | {
+          endpointId: Id<"factoryWebhookEndpoints">
+          webhookPath?: string
+        }
+      | undefined
 
     let target: {
+      eventTrigger?: FactoryEventWaitTrigger
       events: string[]
       installationId?: Id<"integrationInstallations">
       linearIssueId?: string
@@ -261,6 +376,9 @@ export const createWait = mutation({
     }
 
     if (args.kind === "slack_thread") {
+      if (args.event !== undefined) {
+        throw new Error("slack_thread waits use events, not event.")
+      }
       const channelId = args.channelId?.trim()
       const messageTs = args.messageTs?.trim()
       const threadTs = args.threadTs?.trim() || undefined
@@ -269,6 +387,7 @@ export const createWait = mutation({
           "channelId and messageTs are required for slack_thread waits."
         )
       }
+      validateSlackWaitTarget(channelId, messageTs, threadTs)
       const installation = await enabledInstallationForUser(
         ctx,
         run.userId,
@@ -292,24 +411,55 @@ export const createWait = mutation({
         }),
       }
     } else if (args.kind === "github_pr") {
+      if (args.event !== undefined) {
+        throw new Error("github_pr waits use events, not event.")
+      }
       const prNumber =
         args.prNumber ??
         (args.prUrl ? prNumberFromUrl(args.prUrl, run.repoUrl) : undefined)
       if (!prNumber || !Number.isInteger(prNumber) || prNumber <= 0) {
         throw new Error("prNumber (or prUrl) is required for github_pr waits.")
       }
+      const installationIds = await githubWaitInstallationIds(ctx, run.userId)
       target = {
         events: parseWaitEvents(args.events, GITHUB_WAIT_EVENTS),
         prNumber,
         provider: "github",
         repoUrl: run.repoUrl,
-        sourceKeys: [githubWaitSourceKey(run.repoUrl, prNumber)],
+        sourceKeys: installationIds.map((installationId) =>
+          githubInstallationWaitSourceKey(installationId, run.repoUrl, prNumber)
+        ),
       }
-    } else {
+    } else if (args.kind === "github_event") {
+      if (args.events !== undefined) {
+        throw new Error(
+          "github_event waits use the singular event field, not events."
+        )
+      }
+      const eventTrigger = normalizeGitHubEventTrigger(args)
+      const installationIds = await githubWaitInstallationIds(ctx, run.userId)
+      target = {
+        eventTrigger,
+        events: [eventTrigger.event],
+        provider: "github",
+        repoUrl: run.repoUrl,
+        sourceKeys: installationIds.map((installationId) =>
+          githubInstallationEventTriggerSourceKey(
+            installationId,
+            run.repoUrl,
+            eventTrigger.event
+          )
+        ),
+      }
+    } else if (args.kind === "linear_issue") {
+      if (args.event !== undefined) {
+        throw new Error("linear_issue waits use events, not event.")
+      }
       const issueId = args.issueId?.trim()
       if (!issueId) {
         throw new Error("issueId is required for linear_issue waits.")
       }
+      validateLinearIssueId(issueId)
       const installation = await enabledInstallationForUser(
         ctx,
         run.userId,
@@ -325,11 +475,77 @@ export const createWait = mutation({
         provider: "linear",
         sourceKeys: [linearWaitSourceKey(installation._id, issueId)],
       }
+    } else if (args.kind === "linear_event") {
+      if (args.events !== undefined) {
+        throw new Error(
+          "linear_event waits use the singular event field, not events."
+        )
+      }
+      const installation = await enabledInstallationForUser(
+        ctx,
+        run.userId,
+        "linear"
+      )
+      if (!installation) {
+        throw new Error("No enabled Linear workspace is connected.")
+      }
+      const eventTrigger = {
+        ...normalizeLinearEventTrigger(args),
+        installationId: installation._id,
+      }
+      target = {
+        eventTrigger,
+        events: [eventTrigger.event],
+        installationId: installation._id,
+        provider: "linear",
+        sourceKeys: [
+          linearEventTriggerSourceKey(installation._id, eventTrigger.event),
+        ],
+      }
+    } else {
+      const provider = externalProviderForKind(args.kind)
+      if (!provider) throw new Error("Unsupported external wait provider.")
+      const normalized = normalizeExternalEventConfig(args)
+      const resolved = await resolveOrCreateWebhookEndpoint(
+        ctx,
+        run.userId,
+        provider,
+        args.endpointId
+      )
+      const eventTrigger = {
+        endpointId: resolved.endpoint._id,
+        event: normalized.event,
+        ...(Object.keys(normalized.filters).length
+          ? { filters: normalized.filters }
+          : {}),
+        kind: "external" as const,
+        provider,
+      }
+      target = {
+        eventTrigger,
+        events: [normalized.event],
+        provider: "external",
+        sourceKeys: [
+          externalEventTriggerSourceKey(
+            resolved.endpoint._id,
+            normalized.event
+          ),
+        ],
+      }
+      webhookSetup = {
+        endpointId: resolved.endpoint._id,
+        ...(resolved.webhookToken
+          ? {
+              webhookPath: `/api/factory/webhooks/${provider}/${resolved.endpoint._id}/${resolved.webhookToken}`,
+            }
+          : {}),
+      }
     }
 
     const waitId = await ctx.db.insert("factoryWaits", {
       createdAt: now,
       createdByRunId: run._id,
+      ...(target.eventTrigger ? { eventTrigger: target.eventTrigger } : {}),
       events: target.events,
       expiresAt,
       ...(target.installationId
@@ -359,7 +575,61 @@ export const createWait = mutation({
       target.sourceKeys
     )
 
-    return { events: target.events, expiresAt, status: "armed", waitId }
+    return {
+      eventTrigger: target.eventTrigger,
+      events: target.events,
+      expiresAt,
+      status: "armed",
+      waitId,
+      ...webhookSetup,
+    }
+  },
+})
+
+export const listWebhookEndpoints = query({
+  args: factoryAccessArgs,
+  handler: async (ctx, args) => {
+    const run = await requireFactoryRunAccess(ctx, args)
+    const endpoints = await ctx.db
+      .query("factoryWebhookEndpoints")
+      .withIndex("by_user", (q) => q.eq("userId", run.userId))
+      .take(FACTORY_MAX_WEBHOOK_ENDPOINTS_PER_USER)
+    return endpoints.map((endpoint) => ({
+      endpointId: endpoint._id,
+      lastReceivedAt: endpoint.lastReceivedAt,
+      provider: endpoint.provider,
+    }))
+  },
+})
+
+export const rotateWebhookEndpoint = mutation({
+  args: {
+    ...factoryAccessArgs,
+    provider: externalFactoryWaitProvider,
+  },
+  handler: async (ctx, args) => {
+    const run = await requireActiveFactoryRunAccess(ctx, args)
+    const endpoint = await ctx.db
+      .query("factoryWebhookEndpoints")
+      .withIndex("by_user_provider", (q) =>
+        q.eq("userId", run.userId).eq("provider", args.provider)
+      )
+      .first()
+    if (!endpoint) {
+      throw new Error(
+        `Create a ${args.provider}_event wait before rotating its endpoint.`
+      )
+    }
+    const webhookToken = `${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`
+    await ctx.db.patch(endpoint._id, {
+      tokenHash: await sha256Hex(webhookToken),
+      updatedAt: Date.now(),
+    })
+    return {
+      endpointId: endpoint._id,
+      provider: endpoint.provider,
+      webhookPath: `/api/factory/webhooks/${endpoint.provider}/${endpoint._id}/${webhookToken}`,
+    }
   },
 })
 
@@ -398,134 +668,6 @@ export const cancelWait = mutation({
     await deletePendingWaitEvents(ctx, wait._id)
 
     return { canceled: true, status: "canceled" as const }
-  },
-})
-
-export const workerCreateArmingWait = internalMutation({
-  args: {
-    ...factoryAccessArgs,
-    channelId: v.optional(v.string()),
-    events: v.optional(v.array(v.string())),
-    note: v.optional(v.string()),
-    threadTs: v.optional(v.string()),
-    ttlSeconds: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
-    const run = await requireActiveFactoryRunAccess(ctx, args)
-    await requireWaitCapacity(ctx, run.threadId, run.userId)
-    const events = parseWaitEvents(args.events, SLACK_WAIT_EVENTS)
-    const now = Date.now()
-    const expiresAt = now + clampWaitTtlMs(args.ttlSeconds)
-    const note = args.note?.trim() || undefined
-    const target = await resolveSlackPostTarget(ctx, run, {
-      channelId: args.channelId,
-      threadTs: args.threadTs,
-    })
-
-    const waitId = await ctx.db.insert("factoryWaits", {
-      createdAt: now,
-      createdByRunId: run._id,
-      events,
-      expiresAt,
-      installationId: target.installationId,
-      messageChannelId: target.channelId,
-      ...(target.threadTs ? { messageThreadTs: target.threadTs } : {}),
-      ...(note ? { note } : {}),
-      provider: "slack",
-      sourceKeys: [],
-      status: "arming",
-      threadId: run.threadId,
-      updatedAt: now,
-      userId: run.userId,
-    })
-
-    return {
-      channelId: target.channelId,
-      expiresAt,
-      slackTeamId: target.slackTeamId,
-      threadTs: target.threadTs,
-      userId: run.userId,
-      waitId,
-    }
-  },
-})
-
-/** ask_human: posts a question to Slack and registers a wait on replies and
- * reactions in one call. The post happens in the factory-wait-arm Trigger
- * task (provider SDKs live in Node workers, not Convex); until it confirms,
- * the wait is "arming". A post that ultimately fails wakes the agent so the
- * question is never silently lost. */
-export const askHuman = action({
-  args: {
-    ...factoryAccessArgs,
-    channelId: v.optional(v.string()),
-    events: v.optional(v.array(v.string())),
-    message: v.string(),
-    note: v.optional(v.string()),
-    threadTs: v.optional(v.string()),
-    ttlSeconds: v.optional(v.number()),
-  },
-  handler: async (
-    ctx,
-    args
-  ): Promise<{
-    channelId: string
-    expiresAt: number
-    status: string
-    waitId: string
-  }> => {
-    const message = args.message.trim()
-    if (!message) throw new Error("message is required.")
-
-    const created = await ctx.runMutation(
-      internal.factoryWaits.workerCreateArmingWait,
-      {
-        accessToken: args.accessToken,
-        channelId: args.channelId,
-        events: args.events,
-        note: args.note,
-        runId: args.runId,
-        threadId: args.threadId,
-        threadTs: args.threadTs,
-        ttlSeconds: args.ttlSeconds,
-      }
-    )
-
-    try {
-      await triggerTaskViaApi({
-        idempotencyKey: `factory-wait-arm:${created.waitId}`,
-        payload: {
-          channelId: created.channelId,
-          markdown: message,
-          slackTeamId: created.slackTeamId,
-          threadTs: created.threadTs,
-          waitId: created.waitId,
-        },
-        tags: [`user:${created.userId}`, `thread:${args.threadId}`],
-        taskId: "factory-wait-arm",
-      })
-    } catch (error) {
-      // The agent is still running and sees this error directly, so fail the
-      // wait without the wake-notification a background arm failure needs.
-      const errorMessage =
-        error instanceof Error ? error.message : "Unable to queue the post."
-      await ctx
-        .runMutation(api.factoryWaits.workerFailWaitArm, {
-          error: errorMessage,
-          notify: false,
-          waitId: created.waitId,
-          workerSecret: workerSecretFromEnv(),
-        })
-        .catch(() => undefined)
-      throw new Error(errorMessage)
-    }
-
-    return {
-      channelId: created.channelId,
-      expiresAt: created.expiresAt,
-      status: "arming",
-      waitId: created.waitId,
-    }
   },
 })
 
@@ -582,104 +724,153 @@ export const userCancelWait = mutation({
 // Worker functions (Trigger tasks and webhook routes).
 // ---------------------------------------------------------------------------
 
-/** Pre-post check for the factory-wait-arm task: a task that starts late
- * (after the wait was canceled, expired, or failed by the orphan sweep) must
- * not post a question nobody is listening for. */
-export const workerGetWaitState = query({
+export const workerClaimWebhookEndpoint = mutation({
   args: {
-    waitId: v.id("factoryWaits"),
+    endpointId: v.string(),
+    provider: externalFactoryWaitProvider,
+    tokenHash: v.string(),
     workerSecret: v.string(),
   },
   handler: async (ctx, args) => {
     requireWorkerSecret(args.workerSecret)
-    const wait = await ctx.db.get(args.waitId)
-    if (!wait) return null
-    return { expiresAt: wait.expiresAt, status: wait.status }
+    const endpointId = ctx.db.normalizeId(
+      "factoryWebhookEndpoints",
+      args.endpointId
+    )
+    if (!endpointId) return { authenticated: false as const }
+    const endpoint = await ctx.db.get(endpointId)
+    if (
+      !endpoint ||
+      endpoint.provider !== args.provider ||
+      endpoint.tokenHash !== args.tokenHash
+    ) {
+      return { authenticated: false as const }
+    }
+    const receivedAt = Date.now()
+    await ctx.db.patch(endpoint._id, {
+      lastReceivedAt: receivedAt,
+      updatedAt: receivedAt,
+    })
+    return {
+      authenticated: true as const,
+      endpointId: endpoint._id,
+      receivedAt,
+    }
   },
 })
 
-export const workerArmWait = mutation({
+export const workerEnqueueWaitIngress = mutation({
   args: {
-    channelId: v.string(),
-    messageTs: v.string(),
-    threadTs: v.optional(v.string()),
-    waitId: v.id("factoryWaits"),
+    dedupeKey: v.string(),
+    payloadJson: v.string(),
     workerSecret: v.string(),
   },
   handler: async (ctx, args) => {
     requireWorkerSecret(args.workerSecret)
-
-    const wait = await ctx.db.get(args.waitId)
-    if (!wait) return { armed: false }
-    // Idempotent success: a retry of an arm whose mutation committed but
-    // whose response was lost sees the wait already armed on this exact
-    // message. Reporting armed:false here would make the caller retract a
-    // live question the armed wait still watches.
+    if (!args.dedupeKey.trim() || args.dedupeKey.length > 500) {
+      throw new Error("Invalid Factory wait ingress dedupe key.")
+    }
     if (
-      wait.status === "armed" &&
-      wait.messageTs === args.messageTs &&
-      wait.messageChannelId === args.channelId
+      !args.payloadJson ||
+      new TextEncoder().encode(args.payloadJson).byteLength >
+        WAIT_INGRESS_PAYLOAD_MAX
     ) {
-      return { armed: true }
+      throw new Error("Factory wait ingress payload is too large.")
     }
-    if (wait.status !== "arming" || !wait.installationId) {
-      return { armed: false }
+    const existing = await ctx.db
+      .query("factoryWaitIngressEvents")
+      .withIndex("by_dedupe", (q) => q.eq("dedupeKey", args.dedupeKey))
+      .first()
+    if (existing) {
+      return { ingressId: existing._id, status: existing.status }
     }
-    // A post delayed past the wait's own deadline must not arm a listener
-    // that would accept post-TTL events; the sweep expires the wait and
-    // wakes the agent with the timeout notice instead.
-    if (Date.now() > wait.expiresAt) {
-      return { armed: false }
-    }
-
-    const sourceKeys = slackWaitSourceKeys({
-      channelId: args.channelId,
-      installationId: wait.installationId,
-      messageTs: args.messageTs,
-      threadTs: args.threadTs,
+    const now = Date.now()
+    const ingressId = await ctx.db.insert("factoryWaitIngressEvents", {
+      createdAt: now,
+      dedupeKey: args.dedupeKey,
+      payloadJson: args.payloadJson,
+      status: "queued",
+      updatedAt: now,
     })
-    await ctx.db.patch(wait._id, {
-      messageChannelId: args.channelId,
-      ...(args.threadTs ? { messageThreadTs: args.threadTs } : {}),
-      messageTs: args.messageTs,
-      sourceKeys,
-      status: "armed",
+    return { ingressId, status: "queued" as const }
+  },
+})
+
+export const workerGetWaitIngress = query({
+  args: {
+    ingressId: v.id("factoryWaitIngressEvents"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    return await ctx.db.get(args.ingressId)
+  },
+})
+
+export const workerCompleteWaitIngress = mutation({
+  args: {
+    ingressId: v.id("factoryWaitIngressEvents"),
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const ingress = await ctx.db.get(args.ingressId)
+    if (!ingress || ingress.status === "processed") return { completed: false }
+    await ctx.db.patch(ingress._id, {
+      status: "processed",
       updatedAt: Date.now(),
     })
-    await insertWaitKeys(ctx, wait, sourceKeys)
-
-    return { armed: true }
+    return { completed: true }
   },
 })
 
-export const workerFailWaitArm = mutation({
+export const workerPendingWaitIngress = query({
   args: {
-    error: v.string(),
-    notify: v.boolean(),
-    waitId: v.id("factoryWaits"),
+    limit: v.optional(v.number()),
     workerSecret: v.string(),
   },
-  handler: async (
-    ctx,
-    args
-  ): Promise<{ factoryWakeRuns: FactoryRunCreated[] }> => {
+  handler: async (ctx, args) => {
     requireWorkerSecret(args.workerSecret)
+    const limit = Math.min(Math.max(args.limit ?? 50, 1), 100)
+    const edgeLimit = Math.ceil(limit / 2)
+    const [oldest, newest] = await Promise.all([
+      ctx.db
+        .query("factoryWaitIngressEvents")
+        .withIndex("by_status_updated", (q) => q.eq("status", "queued"))
+        .take(edgeLimit),
+      ctx.db
+        .query("factoryWaitIngressEvents")
+        .withIndex("by_status_updated", (q) => q.eq("status", "queued"))
+        .order("desc")
+        .take(edgeLimit),
+    ])
+    return [...new Set([...oldest, ...newest].map((row) => row._id))].slice(
+      0,
+      limit
+    )
+  },
+})
 
-    const wait = await ctx.db.get(args.waitId)
-    if (!wait || wait.status !== "arming") return { factoryWakeRuns: [] }
-
-    await closeWait(ctx, wait, "failed", args.error)
-    if (!args.notify) return { factoryWakeRuns: [] }
-
-    await insertWaitEvent(ctx, wait, {
-      eventKey: `arm_failed:${wait._id}`,
-      eventVars: {
-        event: "arm_failed",
-        summary: `ask_human failed: ${args.error} The wait is closed — retry ask_human or continue without the answer.`,
-      },
-    })
-    const wake = await maybeCreateFactoryWakeRun(ctx, wait.threadId)
-    return { factoryWakeRuns: wake ? [wake] : [] }
+export const workerMatchExternalWaitEvent = query({
+  args: {
+    endpointId: v.id("factoryWebhookEndpoints"),
+    event: v.string(),
+    provider: externalFactoryWaitProvider,
+    workerSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireWorkerSecret(args.workerSecret)
+    const endpoint = await ctx.db.get(args.endpointId)
+    if (!endpoint || endpoint.provider !== args.provider) return []
+    const matches = await matchWaitsBySourceKeys(ctx, [
+      externalEventTriggerSourceKey(endpoint._id, args.event),
+    ])
+    return matches.filter(
+      (match) =>
+        match.eventTrigger?.kind === "external" &&
+        match.eventTrigger.endpointId === endpoint._id &&
+        match.eventTrigger.provider === endpoint.provider
+    )
   },
 })
 
@@ -688,12 +879,33 @@ export const workerFailWaitArm = mutation({
  * nothing more. */
 export const workerMatchWaitEvents = query({
   args: {
+    githubInstallationId: v.optional(v.string()),
     sourceKeys: v.array(v.string()),
     workerSecret: v.string(),
   },
   handler: async (ctx, args) => {
     requireWorkerSecret(args.workerSecret)
-    return await matchWaitsBySourceKeys(ctx, args.sourceKeys)
+    const matches = await matchWaitsBySourceKeys(ctx, args.sourceKeys)
+    if (!args.githubInstallationId) return matches
+
+    const owners = new Set(
+      (
+        await ctx.db
+          .query("githubAppInstallations")
+          .withIndex("by_installation", (q) =>
+            q.eq("installationId", args.githubInstallationId!)
+          )
+          .take(FACTORY_MAX_ACTIVE_WAITS_PER_SOURCE)
+      ).map((installation) => installation.userId)
+    )
+    return matches.filter(
+      (match) =>
+        match.provider !== "github" ||
+        match.sourceKeys.some((sourceKey) =>
+          sourceKey.startsWith(`github:${args.githubInstallationId}:`)
+        ) ||
+        owners.has(match.userId)
+    )
   },
 })
 
@@ -736,6 +948,13 @@ export const workerMatchSlackWaitEvent = query({
 export const workerMatchLinearWaitEvent = query({
   args: {
     actorId: v.optional(v.string()),
+    event: v.union(
+      v.literal("issueCreated"),
+      v.literal("issueAssigned"),
+      v.literal("labelAdded"),
+      v.literal("statusChanged"),
+      v.literal("commentCreated")
+    ),
     externalId: v.string(),
     issueId: v.string(),
     workerSecret: v.string(),
@@ -752,9 +971,16 @@ export const workerMatchLinearWaitEvent = query({
     if (args.actorId && args.actorId === installation.botUserId) return []
 
     const matches = await matchWaitsBySourceKeys(ctx, [
-      linearWaitSourceKey(installation._id, args.issueId),
+      linearEventTriggerSourceKey(installation._id, args.event),
+      ...(args.event === "commentCreated"
+        ? [linearWaitSourceKey(installation._id, args.issueId)]
+        : []),
     ])
-    return matches.filter((match) => match.events.includes("comment"))
+    return matches.filter((match) =>
+      match.eventTrigger?.kind === "linear"
+        ? match.events.includes(args.event)
+        : args.event === "commentCreated" && match.events.includes("comment")
+    )
   },
 })
 
@@ -885,6 +1111,57 @@ export const workerRecordWaitEvents = mutation({
   },
 })
 
+/** Current batch protocol. One provider delivery can satisfy legacy
+ * target-specific waits and structured event waits, whose stored event names
+ * differ, while still creating at most one wake per affected thread. */
+export const workerRecordMatchedWaitEvents = mutation({
+  args: {
+    eventKey: v.string(),
+    eventVars: v.record(v.string(), v.string()),
+    externalThreadId: v.optional(v.string()),
+    matches: v.array(
+      v.object({
+        eventName: v.string(),
+        waitId: v.id("factoryWaits"),
+      })
+    ),
+    receivedAt: v.optional(v.number()),
+    workerSecret: v.string(),
+  },
+  handler: async (
+    ctx,
+    args
+  ): Promise<{ factoryWakeRuns: FactoryRunCreated[]; queued: number }> => {
+    requireWorkerSecret(args.workerSecret)
+
+    const uniqueMatches = new Map(
+      args.matches.map((match) => [String(match.waitId), match])
+    )
+    const threadIds = new Set<Id<"threads">>()
+    let queued = 0
+    for (const match of uniqueMatches.values()) {
+      const result = await recordMatchedWaitEvent(ctx, match.waitId, {
+        eventKey: args.eventKey,
+        eventName: match.eventName,
+        eventVars: args.eventVars,
+        externalThreadId: args.externalThreadId,
+        receivedAt: args.receivedAt,
+      })
+      if (result.queued && result.threadId) {
+        queued += 1
+        threadIds.add(result.threadId)
+      }
+    }
+
+    const factoryWakeRuns: FactoryRunCreated[] = []
+    for (const threadId of threadIds) {
+      const wake = await maybeCreateFactoryWakeRun(ctx, threadId)
+      if (wake) factoryWakeRuns.push(wake)
+    }
+    return { factoryWakeRuns, queued }
+  },
+})
+
 /** TTL sweep: expires overdue waits and wakes their threads with a timeout
  * event, and garbage-collects old event rows. Runs from the automations
  * tick. */
@@ -948,33 +1225,26 @@ export const workerExpireWaits = mutation({
       threadIds.add(wait.threadId)
     }
 
-    // Waits stuck in "arming" were orphaned before the post task could run
-    // (or the task was lost). Fail them with a wake now instead of letting
-    // them hold capacity until their TTL reads as an ordinary timeout.
-    // Selected directly by age, so fresh arming waits can never crowd an
-    // old orphan out of the page.
-    const staleArming = await ctx.db
-      .query("factoryWaits")
-      .withIndex("by_status_created", (q) =>
-        q.eq("status", "arming").lt("createdAt", now - ARMING_TIMEOUT_MS)
+    // A previous Factory version persisted two states for its retired
+    // message-posting workflow. They are deliberately non-active and are
+    // canceled here so rolling out this version cannot strand match keys or
+    // fail Convex's existing-document schema validation.
+    const legacyByStatus = await Promise.all(
+      (["arming", "failed"] as const).map((status) =>
+        ctx.db
+          .query("factoryWaits")
+          .withIndex("by_status_expires", (q) => q.eq("status", status))
+          .take(LEGACY_WAIT_CLEANUP_LIMIT)
       )
-      .take(100)
-    for (const wait of staleArming) {
+    )
+    for (const wait of legacyByStatus.flat()) {
       await closeWait(
         ctx,
         wait,
-        "failed",
-        "The Slack post was never confirmed."
+        "canceled",
+        "Canceled while removing a retired Factory wait workflow."
       )
-      await insertWaitEvent(ctx, wait, {
-        eventKey: `arm_failed:${wait._id}`,
-        eventVars: {
-          event: "arm_failed",
-          summary:
-            "ask_human failed: the Slack post was never confirmed, so the question was likely not delivered. The wait is closed — retry ask_human or continue without the answer.",
-        },
-      })
-      threadIds.add(wait.threadId)
+      await deletePendingWaitEvents(ctx, wait._id)
     }
 
     const factoryWakeRuns: FactoryRunCreated[] = []
@@ -1006,6 +1276,14 @@ export const workerExpireWaits = mutation({
       }
       await ctx.db.delete(event._id)
     }
+
+    const staleIngress = await ctx.db
+      .query("factoryWaitIngressEvents")
+      .withIndex("by_status_updated", (q) =>
+        q.eq("status", "processed").lt("updatedAt", cutoff)
+      )
+      .take(100)
+    for (const ingress of staleIngress) await ctx.db.delete(ingress._id)
 
     return { expired: due.length, factoryWakeRuns }
   },

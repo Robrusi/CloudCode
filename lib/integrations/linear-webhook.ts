@@ -53,6 +53,11 @@ export function verifyLinearWebhookRequest(
 
 type LinearIssuePayload = {
   action?: string
+  actor?: {
+    id?: string
+    name?: string
+    type?: string
+  }
   data?: {
     assignee?: { id?: string; name?: string }
     assigneeId?: string | null
@@ -286,19 +291,27 @@ export function parseLinearAutomationEvents(payload: unknown): {
     title: data.title,
     url: data.url,
   }
+  const actor = parsed.actor?.id
+    ? {
+        actorId: parsed.actor.id,
+        ...(parsed.actor.name ? { actorName: parsed.actor.name } : {}),
+        ...(parsed.actor.type ? { actorType: parsed.actor.type } : {}),
+      }
+    : {}
 
   const events: LinearAutomationEvent[] = []
 
   if (parsed.action === "create") {
     const createdEvents: LinearAutomationEvent[] = [
-      { event: "issueCreated", issue },
+      { ...actor, event: "issueCreated", issue },
     ]
     if (assigneeId) {
-      createdEvents.push({ event: "issueAssigned", issue })
+      createdEvents.push({ ...actor, event: "issueAssigned", issue })
     }
     if (issue.labels?.length) {
       createdEvents.push({
         addedLabels: issue.labels,
+        ...actor,
         event: "labelAdded",
         issue,
       })
@@ -316,7 +329,7 @@ export function parseLinearAutomationEvents(payload: unknown): {
     assigneeId &&
     updatedFrom.assigneeId !== assigneeId
   ) {
-    events.push({ event: "issueAssigned", issue })
+    events.push({ ...actor, event: "issueAssigned", issue })
   }
 
   if (updatedFrom.labelIds) {
@@ -325,6 +338,7 @@ export function parseLinearAutomationEvents(payload: unknown): {
     if (added.length > 0) {
       events.push({
         addedLabels: added.map((id) => ({ id, name: labelNames.get(id) })),
+        ...actor,
         event: "labelAdded",
         issue,
       })
@@ -336,7 +350,7 @@ export function parseLinearAutomationEvents(payload: unknown): {
     issue.stateId &&
     updatedFrom.stateId !== issue.stateId
   ) {
-    events.push({ event: "statusChanged", issue })
+    events.push({ ...actor, event: "statusChanged", issue })
   }
 
   return { events, organizationId: parsed.organizationId }

@@ -16,13 +16,14 @@ import {
 // Bumped for instruction changes too: the version feeds the hot-continuation
 // fingerprint, forcing a cold setup that rewrites AGENTS.md on reused
 // sandboxes so updated guidance actually reaches the agent.
-const FACTORY_TOOL_VERSION = "8"
+const FACTORY_TOOL_VERSION = "10"
 
 const WAIT_DEFAULT_TTL_DAYS = FACTORY_WAIT_DEFAULT_TTL_MS / (24 * 60 * 60_000)
 const WAIT_MAX_TTL_DAYS = FACTORY_WAIT_MAX_TTL_MS / (24 * 60 * 60_000)
 
 type FactoryConfigInput = {
   accessToken?: string
+  appUrl?: string
   convexUrl?: string
   paths: Pick<DaytonaSandboxPaths, "codexHome">
   runId?: string
@@ -99,11 +100,12 @@ function readFactoryState() {
     }
   }
 
+  const appUrl = stringValue(state.appUrl || process.env.CLOUDCODE_APP_URL).replace(/\/+$/, "");
   const convexUrl = stringValue(state.convexUrl || process.env.CLOUDCODE_CONVEX_URL).replace(/\/+$/, "");
   const runId = stringValue(state.runId || process.env.CLOUDCODE_RUN_ID);
   const threadId = stringValue(state.threadId || process.env.CLOUDCODE_THREAD_ID);
   const accessToken = stringValue(state.accessToken || process.env.CLOUDCODE_FACTORY_ACCESS_TOKEN);
-  return { accessToken, convexUrl, runId, threadId };
+  return { accessToken, appUrl, convexUrl, runId, threadId };
 }
 
 function requireState() {
@@ -147,8 +149,10 @@ function numberArg(args, key) {
 function stringArrayArg(args, key) {
   const value = args?.[key];
   if (!Array.isArray(value)) return undefined;
-  const items = value.filter((item) => typeof item === "string" && item.trim());
-  return items.length ? items : undefined;
+  if (value.some((item) => typeof item !== "string" || !item.trim())) {
+    throw new Error(key + " must contain only non-empty strings.");
+  }
+  return value;
 }
 
 async function convex(kind, path, args) {
@@ -197,6 +201,18 @@ function runLine(run) {
 function waitLine(wait) {
   const parts = [wait.waitId, wait.provider, wait.status, "events:" + wait.events.join(",")];
   if (wait.note) parts.push(wait.note);
+  if (wait.eventTrigger) {
+    const trigger = wait.eventTrigger;
+    if (trigger.actorLogin) parts.push("actor:@" + trigger.actorLogin);
+    if (trigger.branch) parts.push("branch:" + trigger.branch);
+    if (trigger.teamName || trigger.teamId) parts.push("team:" + (trigger.teamName || trigger.teamId));
+    if (trigger.assigneeName || trigger.assigneeId) parts.push("assignee:" + (trigger.assigneeName || trigger.assigneeId));
+    if (trigger.labelName || trigger.labelId) parts.push("label:" + (trigger.labelName || trigger.labelId));
+    if (trigger.stateName || trigger.stateId) parts.push("state:" + (trigger.stateName || trigger.stateId));
+    if (trigger.commentAuthorMode && trigger.commentAuthorMode !== "any") {
+      parts.push("comment-authors:" + trigger.commentAuthorMode + ":" + (trigger.commentAuthorNames || trigger.commentAuthorIds || []).join(","));
+    }
+  }
   if (wait.channelId) parts.push("channel:" + wait.channelId + (wait.messageTs ? " ts:" + wait.messageTs : ""));
   if (wait.prNumber) parts.push("PR #" + wait.prNumber);
   if (wait.issueId) parts.push("issue:" + wait.issueId);
@@ -213,6 +229,22 @@ function optionalWaitParams(args) {
     ...(stringArg(args, "note") ? { note: stringArg(args, "note") } : {}),
     ...(ttlSeconds === undefined ? {} : { ttlSeconds }),
   };
+}
+
+function resolvedWebhookUrl(path) {
+  if (!path) return undefined;
+  return requireWebhookAppUrl() + path;
+}
+
+function requireWebhookAppUrl() {
+  const appUrl = readFactoryState().appUrl;
+  try {
+    const parsed = new URL(appUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error();
+  } catch {
+    throw new Error("External Factory waits require NEXT_PUBLIC_APP_URL to be configured as an absolute HTTP(S) URL.");
+  }
+  return appUrl;
 }
 
 async function callTool(name, args = {}) {
@@ -329,35 +361,44 @@ async function callTool(name, args = {}) {
       });
       return text(result.enabled ? "Automation enabled." : "Automation disabled.", result);
     }
-    case "ask_human": {
-      const result = await convex("action", "factoryWaits:askHuman", {
-        ...accessArgs(),
-        ...optionalWaitParams(args),
-        ...(stringArg(args, "channelId") ? { channelId: stringArg(args, "channelId") } : {}),
-        message: requiredStringArg(args, "message"),
-        ...(stringArg(args, "threadTs") ? { threadTs: stringArg(args, "threadTs") } : {}),
-      });
-      return text(
-        "Question queued for posting to Slack channel " + result.channelId + " (wait " + result.waitId + ", expires " + new Date(result.expiresAt).toISOString() + "). Finish your turn with a status note - a wake-up run resumes this thread on a reply, reaction, or timeout.",
-        result
-      );
-    }
     case "wait_create": {
+      const kind = requiredStringArg(args, "kind");
+      if (["sentry_event", "datadog_event", "pagerduty_event", "webhook_event"].includes(kind)) {
+        requireWebhookAppUrl();
+      }
       const prNumber = numberArg(args, "prNumber");
       const result = await convex("mutation", "factoryWaits:createWait", {
         ...accessArgs(),
         ...optionalWaitParams(args),
+        ...(stringArg(args, "actorLogin") ? { actorLogin: stringArg(args, "actorLogin") } : {}),
+        ...(stringArg(args, "assigneeId") ? { assigneeId: stringArg(args, "assigneeId") } : {}),
+        ...(stringArg(args, "assigneeName") ? { assigneeName: stringArg(args, "assigneeName") } : {}),
+        ...(stringArg(args, "branch") ? { branch: stringArg(args, "branch") } : {}),
         ...(stringArg(args, "channelId") ? { channelId: stringArg(args, "channelId") } : {}),
+        ...(stringArrayArg(args, "commentAuthorIds") ? { commentAuthorIds: stringArrayArg(args, "commentAuthorIds") } : {}),
+        ...(stringArg(args, "commentAuthorMode") ? { commentAuthorMode: stringArg(args, "commentAuthorMode") } : {}),
+        ...(stringArrayArg(args, "commentAuthorNames") ? { commentAuthorNames: stringArrayArg(args, "commentAuthorNames") } : {}),
+        ...(stringArg(args, "endpointId") ? { endpointId: stringArg(args, "endpointId") } : {}),
+        ...(stringArg(args, "event") ? { event: stringArg(args, "event") } : {}),
+        ...(args?.filters && typeof args.filters === "object" && !Array.isArray(args.filters) ? { filters: args.filters } : {}),
         ...(stringArg(args, "issueId") ? { issueId: stringArg(args, "issueId") } : {}),
-        kind: requiredStringArg(args, "kind"),
+        kind,
+        ...(stringArg(args, "labelId") ? { labelId: stringArg(args, "labelId") } : {}),
+        ...(stringArg(args, "labelName") ? { labelName: stringArg(args, "labelName") } : {}),
         ...(stringArg(args, "messageTs") ? { messageTs: stringArg(args, "messageTs") } : {}),
         ...(prNumber === undefined ? {} : { prNumber }),
         ...(stringArg(args, "prUrl") ? { prUrl: stringArg(args, "prUrl") } : {}),
+        ...(stringArg(args, "stateId") ? { stateId: stringArg(args, "stateId") } : {}),
+        ...(stringArg(args, "stateName") ? { stateName: stringArg(args, "stateName") } : {}),
+        ...(stringArg(args, "teamId") ? { teamId: stringArg(args, "teamId") } : {}),
+        ...(stringArg(args, "teamName") ? { teamName: stringArg(args, "teamName") } : {}),
         ...(stringArg(args, "threadTs") ? { threadTs: stringArg(args, "threadTs") } : {}),
       });
+      const webhookUrl = resolvedWebhookUrl(result.webhookPath);
+      const structured = webhookUrl ? { ...result, webhookUrl } : result;
       return text(
-        "Wait " + result.waitId + " armed for events [" + result.events.join(", ") + "], expires " + new Date(result.expiresAt).toISOString() + ". Finish your turn with a status note - a wake-up run resumes this thread when a matching event or the timeout arrives.",
-        result
+        "Wait " + result.waitId + " armed for events [" + result.events.join(", ") + "], expires " + new Date(result.expiresAt).toISOString() + "." + (webhookUrl ? " Configure the provider to POST JSON to this secret callback URL (shown once): " + webhookUrl + "." : "") + " Finish your turn with a status note - a wake-up run resumes this thread when a matching event or the timeout arrives.",
+        structured
       );
     }
     case "wait_list": {
@@ -371,6 +412,20 @@ async function callTool(name, args = {}) {
         waitId: requiredStringArg(args, "waitId"),
       });
       return text(result.canceled ? "Wait canceled." : "Wait was already " + result.status + ".", result);
+    }
+    case "webhook_endpoint_list": {
+      const endpoints = await convex("query", "factoryWaits:listWebhookEndpoints", accessArgs());
+      if (!endpoints.length) return text("No external webhook endpoints exist.", { endpoints });
+      return text(endpoints.map((endpoint) => [endpoint.endpointId, endpoint.provider, endpoint.lastReceivedAt ? "last received " + new Date(endpoint.lastReceivedAt).toISOString() : "no event received"].join(" | ")).join("\n"), { endpoints });
+    }
+    case "webhook_endpoint_rotate": {
+      requireWebhookAppUrl();
+      const result = await convex("mutation", "factoryWaits:rotateWebhookEndpoint", {
+        ...accessArgs(),
+        provider: requiredStringArg(args, "provider"),
+      });
+      const webhookUrl = resolvedWebhookUrl(result.webhookPath);
+      return text("Webhook credential rotated. Replace the provider callback URL immediately: " + webhookUrl, { ...result, webhookUrl });
     }
     default:
       throw new Error("Unknown Cloudcode factory tool: " + name);
@@ -489,36 +544,36 @@ const tools = [
     },
   },
   {
-    name: "ask_human",
-    description: "Ask a human a question in Slack and durably wait for the answer: posts the message and registers a wait in one call. A wake-up run resumes this thread when someone replies in the message's thread or reacts to it (or when the wait times out) - even days later, after this run has finished and its sandbox is paused. Register, then finish your turn with a status note; never poll.",
-    inputSchema: {
-      type: "object",
-      required: ["message"],
-      properties: {
-        message: { type: "string", description: "The question to post (markdown)." },
-        channelId: { type: "string", description: "Slack channel ID (like C0123456789). Defaults to this session's originating Slack conversation when it started from Slack; otherwise required." },
-        threadTs: { type: "string", description: "Post inside an existing Slack thread instead of top-level." },
-        events: { type: "array", items: { type: "string", enum: ["reply", "reaction"] }, description: "Which events wake you. Default: both." },
-        ttlSeconds: { type: "number", description: "Wait lifetime in seconds. Default ${WAIT_DEFAULT_TTL_DAYS} days, max ${WAIT_MAX_TTL_DAYS} days; on timeout you are woken with a timeout notice." },
-        note: { type: "string", description: "Short label echoed in the wake-up message so you can tell waits apart." },
-      },
-    },
-  },
-  {
     name: "wait_create",
-    description: "Register a durable wait on something that already exists: a Slack message or thread, a pull request on this repository (for example one you just created), or a Linear issue. A wake-up run resumes this thread with the event content when a matching event or the timeout arrives - even long after this run finished. Waits are single-shot: one wake-up consumes them; re-register from the wake-up run to keep listening. Register, then finish your turn; never poll.",
+    description: "Register a durable single-shot wait on a Slack thread, activity on one pull request or Linear issue, or a filtered GitHub, Linear, Sentry, Datadog, PagerDuty, or generic webhook event. A wake-up run resumes this thread with matching event context or a timeout notice, even long after this run finished. Register, then finish your turn; never poll.",
     inputSchema: {
       type: "object",
       required: ["kind"],
       properties: {
-        kind: { type: "string", enum: ["slack_thread", "github_pr", "linear_issue"] },
-        events: { type: "array", items: { type: "string" }, description: "Event filter. slack_thread: reply, reaction. github_pr: comment, review, merged, closed, reopened, checks. linear_issue: comment. Default: every event of the kind." },
+        kind: { type: "string", enum: ["slack_thread", "github_pr", "github_event", "linear_issue", "linear_event", "sentry_event", "datadog_event", "pagerduty_event", "webhook_event"] },
+        event: { type: "string", description: "Required singular event for github_event, linear_event, or an external provider event kind." },
+        events: { type: "array", items: { type: "string" }, description: "Existing-target event filter. slack_thread: reply, reaction. github_pr: comment, review, merged, closed, reopened, checks. linear_issue: comment. Omit for every event of that target kind. Do not use with github_event or linear_event." },
         channelId: { type: "string", description: "slack_thread: channel ID of the watched message." },
         messageTs: { type: "string", description: "slack_thread: ts of the watched message (reactions match on it)." },
         threadTs: { type: "string", description: "slack_thread: thread root ts when the watched message sits inside a thread (replies match on it)." },
         prNumber: { type: "number", description: "github_pr: pull request number on this repository." },
         prUrl: { type: "string", description: "github_pr: pull request URL, as an alternative to prNumber." },
         issueId: { type: "string", description: "linear_issue: the Linear issue ID (UUID)." },
+        actorLogin: { type: "string", description: "github_event: optional case-insensitive GitHub actor login filter." },
+        branch: { type: "string", description: "github_event push only: optional branch filter, without refs/heads/." },
+        teamId: { type: "string", description: "linear_event except commentCreated: optional stable Linear team ID filter." },
+        teamName: { type: "string", description: "Display label paired with teamId; matching uses teamId." },
+        assigneeId: { type: "string", description: "linear_event: required for issueAssigned; optional on issueCreated to wake only when the new issue is assigned to this stable Linear user ID." },
+        assigneeName: { type: "string", description: "Display label paired with assigneeId; matching uses assigneeId." },
+        labelId: { type: "string", description: "linear_event: required for labelAdded; optional on issueCreated to filter the new issue by stable Linear label ID." },
+        labelName: { type: "string", description: "Display label paired with labelId; matching uses labelId." },
+        stateId: { type: "string", description: "linear_event statusChanged: optional stable Linear workflow-state ID; omit for any status." },
+        stateName: { type: "string", description: "Display label paired with stateId; matching uses stateId." },
+        commentAuthorMode: { type: "string", enum: ["any", "include", "exclude"], description: "linear_event commentCreated: default any; include/exclude applies commentAuthorIds." },
+        commentAuthorIds: { type: "array", items: { type: "string" }, description: "linear_event commentCreated: stable Linear user IDs for the author filter." },
+        commentAuthorNames: { type: "array", items: { type: "string" }, description: "Display labels parallel to commentAuthorIds; matching uses IDs." },
+        endpointId: { type: "string", description: "External event kinds: reuse the endpointId returned by a prior wait or webhook_endpoint_list. Omit on first use to create a secret callback URL." },
+        filters: { type: "object", additionalProperties: { type: "string" }, description: "External event kinds: exact case-insensitive matches against normalized event fields such as project, environment, service, status, severity, team, or urgency." },
         ttlSeconds: { type: "number", description: "Wait lifetime in seconds. Default ${WAIT_DEFAULT_TTL_DAYS} days, max ${WAIT_MAX_TTL_DAYS} days; on timeout you are woken with a timeout notice." },
         note: { type: "string", description: "Short label echoed in the wake-up message so you can tell waits apart." },
       },
@@ -536,7 +591,23 @@ const tools = [
       type: "object",
       required: ["waitId"],
       properties: {
-        waitId: { type: "string", description: "The waitId from ask_human, wait_create, or wait_list." },
+        waitId: { type: "string", description: "The waitId from wait_create or wait_list." },
+      },
+    },
+  },
+  {
+    name: "webhook_endpoint_list",
+    description: "List this user's reusable authenticated Sentry, Datadog, PagerDuty, and generic webhook endpoints and their last-received time. Secret callback URLs are only returned on creation or rotation.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "webhook_endpoint_rotate",
+    description: "Rotate one external provider's webhook credential and return its new secret callback URL. The previous URL stops working immediately.",
+    inputSchema: {
+      type: "object",
+      required: ["provider"],
+      properties: {
+        provider: { type: "string", enum: ["sentry", "datadog", "pagerduty", "webhook"] },
       },
     },
   },
@@ -554,7 +625,7 @@ async function handle(message) {
           protocolVersion: params?.protocolVersion || "2025-06-18",
           capabilities: { tools: {} },
           serverInfo: { name: "cloudcode-factory", version: "1.0.0" },
-          instructions: "Use these tools to dispatch parallel Cloudcode agent runs on this repository, follow their progress, send follow-up work to them, schedule recurring agent runs, and register durable waits on external events (Slack replies/reactions via ask_human, PR activity and Linear comments via wait_create) that wake this thread when they fire. Read the cloudcode-factory skill before the first call - its argument contracts are exact. Dispatched runs bill usage like normal runs and are capped server-side.",
+          instructions: "Use these tools to dispatch parallel Cloudcode agent runs on this repository, follow their progress, schedule recurring agent runs, and register durable waits on Slack, GitHub, Linear, Sentry, Datadog, PagerDuty, or generic webhook events that wake this thread when they fire. Read the cloudcode-factory skill before the first call - its argument contracts are exact. Dispatched runs bill usage like normal runs and are capped server-side.",
         },
       });
       return;
@@ -606,7 +677,7 @@ export function cloudcodeFactoryAgentInstructions() {
   return [
     "# Cloudcode Factory",
     "",
-    "Cloudcode can dispatch autonomous child agent runs on this repository, schedule recurring runs, and register durable waits on humans and external events through the `cloudcode_factory` MCP tools (`run_dispatch`, `run_list`, `run_status`, `run_output`, `run_message`, `sandbox_delete`, `automation_create`, `automation_list`, `automation_set_enabled`, `ask_human`, `wait_create`, `wait_list`, `wait_cancel`).",
+    "Cloudcode can dispatch autonomous child agent runs on this repository, schedule recurring runs, and register durable waits on external events through the `cloudcode_factory` MCP tools (`run_dispatch`, `run_list`, `run_status`, `run_output`, `run_message`, `sandbox_delete`, `automation_create`, `automation_list`, `automation_set_enabled`, `wait_create`, `wait_list`, `wait_cancel`, `webhook_endpoint_list`, `webhook_endpoint_rotate`).",
     "Before calling any of them, read the `cloudcode-factory` skill and follow its argument contracts exactly — several arguments have strict server-validated formats (Slack channel IDs, per-kind event names, TTLs in seconds, threadId vs runId) that fail otherwise.",
     "",
     "Rules that always apply:",
@@ -618,7 +689,7 @@ export function cloudcodeFactoryAgentInstructions() {
 
 export function cloudcodeFactoryAgentContext() {
   return [
-    "Cloudcode provides the `cloudcode_factory` MCP tools to dispatch parallel child agent runs on this repository (`run_dispatch`), follow them (`run_list`, `run_status`, `run_output`), send follow-up work to them (`run_message`), schedule recurring agent runs (`automation_create`), and register durable waits on external events (`ask_human` for Slack questions, `wait_create` for PR or Linear activity). Read the `cloudcode-factory` skill before calling any of them — its argument contracts are exact.",
+    "Cloudcode provides the `cloudcode_factory` MCP tools to dispatch parallel child agent runs on this repository (`run_dispatch`), follow them (`run_list`, `run_status`, `run_output`), send follow-up work to them (`run_message`), schedule recurring agent runs (`automation_create`), and register durable waits on Slack, GitHub, Linear, Sentry, Datadog, PagerDuty, or generic webhook events (`wait_create`). Read the `cloudcode-factory` skill before calling any of them — its argument contracts are exact.",
     "Dispatch prompts must be self-sufficient — children share none of your context. Dispatched work bills usage and is capped server-side, so dispatch deliberately.",
     "When a dispatched run finishes — or an event you registered a wait for arrives or times out — you are woken with a summary message on this thread. Dispatch or register the wait, end your turn with a status note, and continue when woken instead of polling.",
     'Reserve these tools for requests that say "factory" subagents/agents or ask for dispatched runs; a request for plain "subagents" means your built-in Codex collaborator subagents inside this run, not run_dispatch.',
@@ -652,7 +723,7 @@ export async function writeCloudcodeFactoryState(
   paths: Pick<DaytonaSandboxPaths, "codexHome">,
   input: Pick<
     FactoryConfigInput,
-    "accessToken" | "convexUrl" | "runId" | "threadId"
+    "accessToken" | "appUrl" | "convexUrl" | "runId" | "threadId"
   >
 ) {
   if (
@@ -669,6 +740,7 @@ export async function writeCloudcodeFactoryState(
     cloudcodeFactoryStatePath(paths),
     JSON.stringify({
       accessToken: input.accessToken,
+      appUrl: input.appUrl,
       convexUrl: input.convexUrl,
       runId: input.runId,
       threadId: input.threadId,

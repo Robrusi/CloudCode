@@ -120,6 +120,7 @@ async function threadSummaryRecord(ctx: QueryCtx, thread: Doc<"threads">) {
     createdAt: thread.createdAt,
     factoryRootThreadId: thread.factoryRootThreadId,
     id: thread._id,
+    inboxSettledAt: thread.inboxSettledAt,
     lastUserMessageAt: thread.lastUserMessageAt ?? thread.createdAt,
     messages: [],
     model: thread.model,
@@ -441,6 +442,19 @@ export const updateThread = mutation({
       ...(trimmedTitle ? { title: trimmedTitle } : {}),
       updatedAt: Date.now(),
     })
+  },
+})
+
+export const settleThread = mutation({
+  args: {
+    threadId: v.id("threads"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await ensureCurrentUser(ctx)
+    await requireOwnedThread(ctx, args.threadId, userId)
+    // Deliberately leaves updatedAt untouched: settling is an inbox-view
+    // bookkeeping action, not thread activity.
+    await ctx.db.patch(args.threadId, { inboxSettledAt: Date.now() })
   },
 })
 

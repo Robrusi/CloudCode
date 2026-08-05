@@ -16,6 +16,8 @@ import {
 import {
   automationTrigger,
   automationTriggerKind,
+  externalFactoryWaitProvider,
+  factoryEventWaitTrigger,
   integrationProvider,
 } from "./lib/integrationTriggers"
 import {
@@ -358,18 +360,18 @@ export default defineSchema({
     .index("by_run", ["runId"])
     .index("by_user_updated", ["userId", "updatedAt"]),
 
-  // Durable agent-registered waits on external events (Slack replies and
-  // reactions, PR activity, Linear comments). A wait belongs to the thread
-  // that resumes when it fires; the creating run is usually long finished and
-  // its sandbox stopped by then. Single-shot: a wake run consumes the wait,
-  // and the agent re-arms if it wants to keep listening.
+  // Durable agent-registered waits on external events. A wait belongs to the
+  // thread that resumes when it fires; the creating run is usually long
+  // finished and its sandbox stopped by then. Single-shot: a wake run consumes
+  // the wait, and the agent registers another if it wants to keep listening.
   factoryWaits: defineTable({
     createdAt: v.number(),
     createdByRunId: v.id("codexRuns"),
-    // Fine event filter applied after the coarse sourceKey match:
-    // slack reply/reaction; github comment/review/merged/closed/reopened/
-    // checks; linear comment.
+    // Fine event filter applied after the coarse sourceKey match. Specific
+    // target waits use this array directly; repository/workspace event waits
+    // also carry their structured predicates in eventTrigger.
     events: v.array(v.string()),
+    eventTrigger: v.optional(factoryEventWaitTrigger),
     // Sliding-window counter capping how many events one wait may record, so
     // a busy PR or channel cannot flood the queue.
     eventFireCount: v.optional(v.number()),
@@ -377,9 +379,7 @@ export default defineSchema({
     expiresAt: v.number(),
     installationId: v.optional(v.id("integrationInstallations")),
     linearIssueId: v.optional(v.string()),
-    // Slack message the wait watches; set by the arm task once ask_human's
-    // message is posted (waits created against an existing message carry it
-    // from creation).
+    // Slack message or thread the wait watches.
     messageChannelId: v.optional(v.string()),
     messageThreadTs: v.optional(v.string()),
     messageTs: v.optional(v.string()),
@@ -400,11 +400,10 @@ export default defineSchema({
   })
     .index("by_thread_status", ["threadId", "status"])
     .index("by_user_status", ["userId", "status"])
-    .index("by_status_expires", ["status", "expiresAt"])
-    .index("by_status_created", ["status", "createdAt"]),
+    .index("by_status_expires", ["status", "expiresAt"]),
 
   // One row per matchable source key of an armed wait. Rows exist only while
-  // the wait is armed (deleted on fire/cancel/expire/fail), so webhook
+  // the wait is armed (deleted on fire/cancel/expire), so webhook
   // matching is a single indexed lookup with no status filtering. A Slack
   // wait needs two keys — the thread root for replies and the message ts for
   // reactions — which is why keys are normalized out of factoryWaits.
@@ -416,6 +415,34 @@ export default defineSchema({
   })
     .index("by_source", ["sourceKey"])
     .index("by_wait", ["waitId"]),
+
+  // Reusable, per-user callback endpoints for providers whose official MCP
+  // servers are query-only. Only a SHA-256 token digest is stored; the secret
+  // callback URL is returned once on creation or explicit rotation.
+  factoryWebhookEndpoints: defineTable({
+    createdAt: v.number(),
+    lastReceivedAt: v.optional(v.number()),
+    provider: externalFactoryWaitProvider,
+    tokenHash: v.string(),
+    updatedAt: v.number(),
+    userId: v.id("users"),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_provider", ["userId", "provider"])
+    .index("by_token_hash", ["tokenHash"]),
+
+  // Durable handoff between authenticated provider routes and Trigger. The
+  // normalized candidate is persisted before task enqueue; the minute tick
+  // recovers queued rows if that external enqueue fails.
+  factoryWaitIngressEvents: defineTable({
+    createdAt: v.number(),
+    dedupeKey: v.string(),
+    payloadJson: v.string(),
+    status: v.union(v.literal("queued"), v.literal("processed")),
+    updatedAt: v.number(),
+  })
+    .index("by_dedupe", ["dedupeKey"])
+    .index("by_status_updated", ["status", "updatedAt"]),
 
   // Durable queue of matched wait events. Provider deliveries land here
   // before any wake run exists, so a busy thread or transient dispatch outage
@@ -809,6 +836,10 @@ export default defineSchema({
     // dispatch tree. The sidebar nests these threads under that root.
     factoryRootThreadId: v.optional(v.id("threads")),
     hasPendingMessage: v.optional(v.boolean()),
+    // When the user settled this thread out of the sidebar inbox view. The
+    // thread stays hidden there until activity newer than this timestamp
+    // surfaces it again.
+    inboxSettledAt: v.optional(v.number()),
     lastUserMessageAt: v.optional(v.number()),
     model,
     notes: v.optional(v.string()),

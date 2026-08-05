@@ -67,9 +67,8 @@ export function verifySlackWebhookRequest(
   )
 }
 
-/** Extracts the Slack events that can drive factory waits: human messages
- * (including DMs — ask_human questions posted to a bridged DM must still be
- * answerable) and reactions. Chat mentions, bot messages, edits, removals,
+/** Extracts the Slack events that can drive factory waits: human messages,
+ * including DMs, and reactions. Chat mentions, bot messages, edits, removals,
  * and non-message reactions remain owned by the Chat SDK path. */
 export function parseSlackWaitWebhookEvent(
   value: unknown

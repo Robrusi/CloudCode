@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto"
+
 import { tasks } from "@trigger.dev/sdk"
+import { ConvexHttpClient } from "convex/browser"
 import { NextResponse } from "next/server"
 
 import {
@@ -15,8 +18,9 @@ import {
   isGitHubAutomationTriggerEvent,
   parseGitHubAutomationEvent,
 } from "@/lib/github/automation-events"
+import { requireConvexUrl } from "@/lib/convex/env"
 import { jsonError } from "@/lib/http/api-route"
-import { dispatchGitHubWaitEvent } from "@/lib/integrations/wait-dispatch"
+import { enqueueFactoryWaitIngress } from "@/lib/integrations/wait-ingress"
 import { normalizeReviewPullRequestContext } from "@/lib/reviews/pull-request"
 import type { integrationEvent } from "@/trigger/integrations"
 import type { reviewDispatch } from "@/trigger/reviews"
@@ -129,15 +133,7 @@ export async function POST(request: Request) {
         }
       : null
 
-  // Wait matching and dispatch are best-effort and fully decoupled from the
-  // review/automation dispatches below: GitHub never redelivers a failed
-  // webhook, so a wait-subsystem outage must not drop them (an undelivered
-  // wait event still resolves through the wait's TTL timeout).
-  const waitDispatched = githubEvent
-    ? await dispatchGitHubWaitEvent(githubEvent, deliveryId)
-    : false
-
-  if (!reviewPayload && !automationPayload && !waitDispatched) {
+  if (!reviewPayload && !automationPayload && !githubEvent) {
     return NextResponse.json({ ignored: true })
   }
 
@@ -159,6 +155,23 @@ export async function POST(request: Request) {
       )
     )
   }
+  if (githubEvent) {
+    const waitClient = new ConvexHttpClient(requireConvexUrl())
+    const waitDeliveryKey =
+      deliveryId ?? createHash("sha256").update(rawBody).digest("hex")
+    dispatches.push(
+      enqueueFactoryWaitIngress(waitClient, {
+        dedupeKey: `github:${githubEvent.installationId}:${waitDeliveryKey}`,
+        payload: {
+          deliveryId: deliveryId ?? undefined,
+          event: githubEvent,
+          kind: "github_wait_candidate",
+          provider: "github",
+          receivedAt: Date.now(),
+        },
+      })
+    )
+  }
   try {
     await Promise.all(dispatches)
   } catch (error) {
@@ -170,6 +183,6 @@ export async function POST(request: Request) {
     automationDispatched: Boolean(automationPayload),
     dispatched: true,
     reviewDispatched: Boolean(reviewPayload),
-    waitDispatched,
+    waitCandidateDispatched: Boolean(githubEvent),
   })
 }

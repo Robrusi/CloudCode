@@ -16,19 +16,25 @@ import { dispatchIntegrationRun } from "@/lib/integrations/dispatch"
 import { getInitializedIntegrationsBot } from "@/lib/integrations/bot"
 import {
   chatEventPrompt,
-  githubAutomationEventMatches,
+  githubIntegrationEventMatches,
   githubAutomationEventVars,
-  linearAutomationEventMatches,
+  linearIntegrationEventMatches,
   linearAutomationEventVars,
   slackAutomationEventVars,
   type EventContextVars,
+  type ExternalWaitCandidatePayload,
   type FactoryWaitEventPayload,
+  type FactoryWaitIngressCandidatePayload,
+  type FactoryWaitIngressPayload,
   type IntegrationChatEventPayload,
   type IntegrationEventPayload,
   type GitHubAutomationEventPayload,
+  type GitHubWaitCandidatePayload,
   type LinearAutomationEventPayload,
   type SlackAutomationEventPayload,
 } from "@/lib/integrations/events"
+import { matchGitHubWaitEvent } from "@/lib/integrations/wait-dispatch"
+import { externalWebhookEventMatches } from "@/lib/integrations/external-webhooks"
 import {
   postRunStarted,
   postToIntegrationThread,
@@ -399,9 +405,8 @@ async function handleLinearAutomationEvent(
 
   const events = payload.events.filter(
     (event) =>
-      event.event !== "commentCreated" ||
       !resolved.botUserId ||
-      event.comment?.authorId !== resolved.botUserId
+      (event.comment?.authorId ?? event.actorId) !== resolved.botUserId
   )
   if (events.length === 0) {
     return { fired: 0, matched: 0, reason: "self_authored" as const }
@@ -422,7 +427,7 @@ async function handleLinearAutomationEvent(
     for (const automation of automations) {
       const trigger = automation.trigger
       if (trigger.kind !== "linear") continue
-      if (!linearAutomationEventMatches(trigger, event)) continue
+      if (!linearIntegrationEventMatches(trigger, event)) continue
 
       fires.push(
         enqueueAutomationFire(
@@ -494,14 +499,16 @@ async function handleWaitEvent(payload: FactoryWaitEventPayload) {
       : payload.eventVars
 
   const result = await client.mutation(
-    api.factoryWaits.workerRecordWaitEvents,
+    api.factoryWaits.workerRecordMatchedWaitEvents,
     {
       eventKey: payload.eventKey,
-      eventName: payload.eventName,
       eventVars,
       externalThreadId: payload.externalThreadId,
+      matches: payload.waits.map((wait) => ({
+        eventName: wait.eventName ?? payload.eventName,
+        waitId: wait.waitId,
+      })),
       receivedAt: payload.receivedAt,
-      waitIds: payload.waits.map((wait) => wait.waitId),
       workerSecret,
     }
   )
@@ -545,7 +552,7 @@ async function handleGitHubAutomationEvent(
   for (const automation of automations) {
     const trigger = automation.trigger
     if (trigger.kind !== "github") continue
-    if (!githubAutomationEventMatches(trigger, event)) continue
+    if (!githubIntegrationEventMatches(trigger, event)) continue
 
     fires.push(
       enqueueAutomationFire(
@@ -562,6 +569,87 @@ async function handleGitHubAutomationEvent(
   const fired = results.filter((result) => result.value.queued).length
 
   return { fired, matched: automations.length }
+}
+
+async function handleGitHubWaitCandidate(payload: GitHubWaitCandidatePayload) {
+  const matched = await matchGitHubWaitEvent(
+    workerConvexClient(),
+    payload.event,
+    payload.deliveryId,
+    payload.receivedAt
+  )
+  if (!matched) return { matched: 0, queued: 0 }
+  return await handleWaitEvent(matched)
+}
+
+async function handleExternalWaitCandidate(
+  payload: ExternalWaitCandidatePayload
+) {
+  const client = workerConvexClient()
+  const matches = await client.query(
+    api.factoryWaits.workerMatchExternalWaitEvent,
+    {
+      endpointId: payload.endpointId,
+      event: payload.eventName,
+      provider: payload.provider,
+      workerSecret: getWorkerSecret(),
+    }
+  )
+  const waits = matches
+    .filter(
+      (match) =>
+        match.eventTrigger?.kind === "external" &&
+        externalWebhookEventMatches(
+          match.eventTrigger,
+          payload.eventName,
+          payload.eventVars
+        )
+    )
+    .map((match) => ({
+      eventName: payload.eventName,
+      threadId: match.threadId,
+      waitId: match.waitId,
+    }))
+  if (waits.length === 0) return { matched: 0, queued: 0 }
+  return await handleWaitEvent({
+    eventKey: payload.eventKey,
+    eventName: payload.eventName,
+    eventVars: payload.eventVars,
+    kind: "wait_event",
+    provider: "external",
+    receivedAt: payload.receivedAt,
+    waits,
+  })
+}
+
+async function handleWaitIngress(payload: FactoryWaitIngressPayload) {
+  const client = workerConvexClient()
+  const workerSecret = getWorkerSecret()
+  const ingress = await client.query(api.factoryWaits.workerGetWaitIngress, {
+    ingressId: payload.ingressId,
+    workerSecret,
+  })
+  if (!ingress || ingress.status === "processed") {
+    return { handled: false, reason: "already_processed" as const }
+  }
+
+  const candidate = JSON.parse(
+    ingress.payloadJson
+  ) as FactoryWaitIngressCandidatePayload
+  let result: unknown
+  if (candidate.kind === "github_wait_candidate") {
+    result = await handleGitHubWaitCandidate(candidate)
+  } else if (candidate.kind === "external_wait_candidate") {
+    result = await handleExternalWaitCandidate(candidate)
+  } else {
+    throw new Error("Invalid Factory wait ingress payload.")
+  }
+
+  await client.mutation(api.factoryWaits.workerCompleteWaitIngress, {
+    ingressId: payload.ingressId,
+    workerSecret,
+  })
+  return result
 }
 
 // One task for every integration event so webhook handlers stay thin: they
@@ -587,6 +675,12 @@ export const integrationEvent = task({
         return await handleLinearAutomationEvent(payload)
       case "github_automation":
         return await handleGitHubAutomationEvent(payload)
+      case "github_wait_candidate":
+        return await handleGitHubWaitCandidate(payload)
+      case "external_wait_candidate":
+        return await handleExternalWaitCandidate(payload)
+      case "wait_ingress":
+        return await handleWaitIngress(payload)
       case "wait_event":
         return await handleWaitEvent(payload)
     }

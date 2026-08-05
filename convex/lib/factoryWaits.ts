@@ -3,6 +3,7 @@ import type { MutationCtx, QueryCtx } from "../_generated/server"
 import {
   FACTORY_MAX_ACTIVE_WAITS_PER_THREAD,
   FACTORY_MAX_ACTIVE_WAITS_PER_USER,
+  FACTORY_MAX_ACTIVE_WAITS_PER_SOURCE,
   FACTORY_MAX_PENDING_EVENTS_PER_WAIT,
   FACTORY_WAIT_DEFAULT_TTL_MS,
   FACTORY_WAIT_EVENT_WINDOW_MAX,
@@ -18,8 +19,8 @@ import {
  * that so a Convex transaction never depends on an external API.
  */
 
-/** Waits still listening (or about to listen) for events. */
-export const ACTIVE_WAIT_STATUSES = ["arming", "armed"] as const
+/** Waits still listening for events. */
+export const ACTIVE_WAIT_STATUSES = ["armed"] as const
 
 export type ActiveWaitStatus = (typeof ACTIVE_WAIT_STATUSES)[number]
 
@@ -40,7 +41,7 @@ export async function activeWaitsForThread(
         .withIndex("by_thread_status", (q) =>
           q.eq("threadId", threadId).eq("status", status)
         )
-        .collect()
+        .take(FACTORY_MAX_ACTIVE_WAITS_PER_THREAD + 1)
     )
   )
   return byStatus.flat().sort((a, b) => a.createdAt - b.createdAt)
@@ -57,7 +58,7 @@ async function countActiveWaitsForUser(
         .withIndex("by_user_status", (q) =>
           q.eq("userId", userId).eq("status", status)
         )
-        .collect()
+        .take(FACTORY_MAX_ACTIVE_WAITS_PER_USER + 1)
     )
   )
   return byStatus.flat().length
@@ -106,8 +107,27 @@ export async function insertWaitKeys(
   wait: Pick<Doc<"factoryWaits">, "_id" | "threadId" | "userId">,
   sourceKeys: string[]
 ) {
+  const uniqueSourceKeys = [...new Set(sourceKeys)]
+  const existingBySource = await Promise.all(
+    uniqueSourceKeys.map((sourceKey) =>
+      ctx.db
+        .query("factoryWaitKeys")
+        .withIndex("by_source", (q) => q.eq("sourceKey", sourceKey))
+        .take(FACTORY_MAX_ACTIVE_WAITS_PER_SOURCE)
+    )
+  )
+  if (
+    existingBySource.some(
+      (rows) => rows.length >= FACTORY_MAX_ACTIVE_WAITS_PER_SOURCE
+    )
+  ) {
+    throw new Error(
+      "This event source already has the maximum number of active waits. Narrow the target or try again after an existing wait finishes."
+    )
+  }
+
   await Promise.all(
-    sourceKeys.map((sourceKey) =>
+    uniqueSourceKeys.map((sourceKey) =>
       ctx.db.insert("factoryWaitKeys", {
         sourceKey,
         threadId: wait.threadId,
@@ -135,7 +155,7 @@ export async function deleteWaitKeys(
 export async function closeWait(
   ctx: MutationCtx,
   wait: Doc<"factoryWaits">,
-  status: "fired" | "expired" | "canceled" | "failed",
+  status: "fired" | "expired" | "canceled",
   statusReason?: string
 ) {
   await ctx.db.patch(wait._id, {

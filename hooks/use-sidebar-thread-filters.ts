@@ -8,10 +8,12 @@ import {
   type SidebarThreadFilter,
   type SidebarThreadListOptions,
   type SidebarThreadSort,
+  type SidebarThreadView,
 } from "@/components/chat/sidebar-model"
 import { readBrowserStorage, writeBrowserStorage } from "@/lib/browser/storage"
 
 const SORT_STORAGE_KEY = "cloudcode:sidebarThreadSort"
+const VIEW_STORAGE_KEY = "cloudcode:sidebarThreadView"
 
 const SIDEBAR_THREAD_SORTS: SidebarThreadSort[] = [
   "activity",
@@ -22,6 +24,10 @@ const SIDEBAR_THREAD_SORTS: SidebarThreadSort[] = [
 
 function isSidebarThreadSort(value: string | null): value is SidebarThreadSort {
   return SIDEBAR_THREAD_SORTS.includes(value as SidebarThreadSort)
+}
+
+function isSidebarThreadView(value: string | null): value is SidebarThreadView {
+  return value === "folders" || value === "inbox"
 }
 
 export type SidebarThreadFiltersState = ReturnType<
@@ -46,19 +52,27 @@ export function useSidebarThreadFilters(
   const [sort, setSortState] = useState<SidebarThreadSort>(
     DEFAULT_SIDEBAR_THREAD_OPTIONS.sort
   )
+  const [view, setViewState] = useState<SidebarThreadView>("folders")
 
   // Hydrate once from storage after mount to avoid SSR markup mismatches.
   const hydratedRef = useRef(false)
   useEffect(() => {
     if (hydratedRef.current) return
     hydratedRef.current = true
-    const stored = readBrowserStorage(SORT_STORAGE_KEY)
-    if (isSidebarThreadSort(stored)) setSortState(stored)
+    const storedSort = readBrowserStorage(SORT_STORAGE_KEY)
+    if (isSidebarThreadSort(storedSort)) setSortState(storedSort)
+    const storedView = readBrowserStorage(VIEW_STORAGE_KEY)
+    if (isSidebarThreadView(storedView)) setViewState(storedView)
   }, [])
 
   const setSort = useCallback((value: SidebarThreadSort) => {
     setSortState(value)
     writeBrowserStorage(SORT_STORAGE_KEY, value)
+  }, [])
+
+  const setView = useCallback((value: SidebarThreadView) => {
+    setViewState(value)
+    writeBrowserStorage(VIEW_STORAGE_KEY, value)
   }, [])
 
   // Context switches swap the underlying thread list; drop the stale search
@@ -91,6 +105,8 @@ export function useSidebarThreadFilters(
     setFilter,
     setQuery,
     setSort,
+    setView,
     sort,
+    view,
   }
 }

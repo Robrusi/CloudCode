@@ -1,6 +1,10 @@
 import type { Id } from "@/convex/_generated/dataModel"
 import type { GitHubWaitEvent } from "@/convex/lib/factoryWaitTriggers"
-import type { AutomationTrigger } from "@/convex/lib/integrationTriggers"
+import type {
+  ExternalFactoryWaitProvider,
+  GitHubFactoryWaitTrigger,
+  LinearIntegrationTrigger,
+} from "@/convex/lib/integrationTriggers"
 import type { GitHubAutomationEvent } from "@/lib/github/automation-events"
 
 /** Subject context captured with a chat event: the Linear issue behind an
@@ -54,6 +58,9 @@ export type SlackAutomationEventPayload = {
 }
 
 export type LinearAutomationEvent = {
+  actorId?: string
+  actorName?: string
+  actorType?: string
   addedLabels?: Array<{ id: string; name?: string }>
   comment?: {
     authorId?: string
@@ -100,6 +107,36 @@ export type GitHubAutomationEventPayload = {
   provider: "github"
 }
 
+/** Durable ingress candidate. Matching happens in the retrying worker so a
+ * transient Convex outage cannot silently turn a received GitHub event into
+ * a Factory wait timeout. */
+export type GitHubWaitCandidatePayload = {
+  deliveryId?: string
+  event: GitHubAutomationEvent
+  kind: "github_wait_candidate"
+  provider: "github"
+  receivedAt: number
+}
+
+export type ExternalWaitCandidatePayload = {
+  endpointId: Id<"factoryWebhookEndpoints">
+  eventKey: string
+  eventName: string
+  eventVars: EventContextVars
+  kind: "external_wait_candidate"
+  provider: ExternalFactoryWaitProvider
+  receivedAt: number
+}
+
+export type FactoryWaitIngressCandidatePayload =
+  | GitHubWaitCandidatePayload
+  | ExternalWaitCandidatePayload
+
+export type FactoryWaitIngressPayload = {
+  ingressId: Id<"factoryWaitIngressEvents">
+  kind: "wait_ingress"
+}
+
 /** A provider event that pre-matched at least one armed factory wait in the
  * webhook handler. The eventVars carry the human-readable pieces the wake
  * prompt renders: summary (one line), text (quoted body), and url. */
@@ -111,7 +148,7 @@ export type FactoryWaitEventPayload = {
   // detect threads whose replies the follow-up pipeline already delivers.
   externalThreadId?: string
   kind: "wait_event"
-  provider: "slack" | "github" | "linear"
+  provider: "slack" | "github" | "linear" | "external"
   // When the verified webhook was received; wait expiry is judged against
   // this so task-queue delay cannot turn an in-time answer into a timeout.
   receivedAt?: number
@@ -120,7 +157,13 @@ export type FactoryWaitEventPayload = {
     actorUserId?: string
     externalId: string
   }
-  waits: Array<{ threadId: Id<"threads">; waitId: Id<"factoryWaits"> }>
+  waits: Array<{
+    // Structured event waits store provider event names while legacy
+    // target-specific waits retain their compact event vocabulary.
+    eventName?: string
+    threadId: Id<"threads">
+    waitId: Id<"factoryWaits">
+  }>
 }
 
 export type IntegrationEventPayload =
@@ -128,6 +171,9 @@ export type IntegrationEventPayload =
   | SlackAutomationEventPayload
   | LinearAutomationEventPayload
   | GitHubAutomationEventPayload
+  | GitHubWaitCandidatePayload
+  | ExternalWaitCandidatePayload
+  | FactoryWaitIngressPayload
   | FactoryWaitEventPayload
 
 /** Template variables an event exposes to automation prompts as
@@ -257,6 +303,68 @@ export function githubAutomationEventVars(
   }
 }
 
+/** Human-readable wake context for repository-scoped GitHub event waits.
+ * Authored comment/review text is quoted by the wake prompt; PR and issue
+ * bodies stay at the source URL because opening an item is only a signal. */
+export function githubEventWaitVars(
+  event: GitHubAutomationEvent
+): EventContextVars {
+  const vars = githubAutomationEventVars(event)
+  const actor = event.actorLogin ?? "someone"
+  const target = event.pullRequest ?? event.issue
+  const number = target ? `#${target.number}` : ""
+  const title = target?.title ? ` (${target.title})` : ""
+
+  let summary: string
+  switch (event.event) {
+    case "issueOpened":
+      summary = `GitHub issue ${number} opened by ${actor}${title}`
+      break
+    case "issueClosed":
+      summary = `GitHub issue ${number} closed by ${actor}${title}`
+      break
+    case "issueCommented":
+      summary = `GitHub ${event.issue?.isPullRequest ? "PR" : "issue"} ${number} comment from ${actor}${title}`
+      break
+    case "pullRequestOpened":
+      summary = `GitHub PR ${number} opened by ${actor}${title}`
+      break
+    case "pullRequestMerged":
+      summary = `GitHub PR ${number} merged by ${actor}${title}`
+      break
+    case "pullRequestClosed":
+      summary = `GitHub PR ${number} closed without merging by ${actor}${title}`
+      break
+    case "pullRequestReopened":
+      summary = `GitHub PR ${number} reopened by ${actor}${title}`
+      break
+    case "pullRequestReviewSubmitted":
+      summary = `GitHub PR ${number} review ${event.review?.state ?? "submitted"} by ${actor}${title}`
+      break
+    case "pullRequestReviewCommented":
+      summary = `GitHub PR ${number} review comment from ${actor}${title}`
+      break
+    case "checkSuiteCompleted":
+      summary = `GitHub checks completed with ${event.checkSuite?.conclusion ?? "an unknown conclusion"} on ${event.checkSuite?.headBranch ?? "an unknown branch"}`
+      break
+    case "push":
+      summary = `GitHub push to ${event.branch ?? "an unknown branch"} by ${actor}`
+      break
+  }
+
+  return {
+    ...vars,
+    summary,
+    text: event.comment?.body ?? event.review?.body ?? "",
+    url:
+      event.comment?.url ??
+      event.review?.url ??
+      target?.url ??
+      event.push?.compareUrl ??
+      "",
+  }
+}
+
 /** Same-repo pull requests a GitHub event concerns, for wait matching. A
  * comment on a plain issue (or a fork's check suite) yields none and can
  * never wake a PR wait. */
@@ -344,8 +452,42 @@ export function linearWaitEventVars(
   }
 }
 
-export function githubAutomationEventMatches(
-  trigger: Extract<AutomationTrigger, { kind: "github" }>,
+export function linearEventWaitVars(
+  event: LinearAutomationEvent
+): EventContextVars {
+  const vars = linearAutomationEventVars(event)
+  const issueLabel = event.issue.identifier ?? event.issue.id
+  const title = event.issue.title ? ` (${event.issue.title})` : ""
+  let summary: string
+
+  switch (event.event) {
+    case "issueCreated":
+      summary = `Linear issue ${issueLabel} created${title}`
+      break
+    case "issueAssigned":
+      summary = `Linear issue ${issueLabel} assigned to ${event.issue.assigneeName ?? event.issue.assigneeId ?? "someone"}${title}`
+      break
+    case "labelAdded":
+      summary = `Linear issue ${issueLabel} received label ${(event.addedLabels ?? []).map((label) => label.name ?? label.id).join(", ") || "unknown"}${title}`
+      break
+    case "statusChanged":
+      summary = `Linear issue ${issueLabel} moved to ${event.issue.stateName ?? event.issue.stateId ?? "an unknown status"}${title}`
+      break
+    case "commentCreated":
+      summary = `Linear comment from ${event.comment?.authorName ?? event.comment?.authorId ?? "someone"} on ${issueLabel}${title}`
+      break
+  }
+
+  return {
+    ...vars,
+    summary,
+    text: event.comment?.body ?? "",
+    url: event.comment?.url ?? event.issue.url ?? "",
+  }
+}
+
+export function githubIntegrationEventMatches(
+  trigger: GitHubFactoryWaitTrigger,
   event: GitHubAutomationEvent
 ) {
   if (trigger.event !== event.event) return false
@@ -367,8 +509,8 @@ export function githubAutomationEventMatches(
 
 /** Fine-grained predicate applied after the source-key lookup. IDs are used
  * for matching so renamed labels, statuses, teams, or people stay stable. */
-export function linearAutomationEventMatches(
-  trigger: Extract<AutomationTrigger, { kind: "linear" }>,
+export function linearIntegrationEventMatches(
+  trigger: LinearIntegrationTrigger,
   event: LinearAutomationEvent
 ) {
   if (trigger.event !== event.event) return false
@@ -385,23 +527,15 @@ export function linearAutomationEventMatches(
     return true
   }
   if (trigger.teamId && trigger.teamId !== event.issue.teamId) return false
-  if (
-    trigger.event === "issueAssigned" &&
-    trigger.assigneeId !== event.issue.assigneeId
-  ) {
+  if (trigger.assigneeId && trigger.assigneeId !== event.issue.assigneeId) {
     return false
   }
-  if (
-    trigger.event === "labelAdded" &&
-    !event.addedLabels?.some((label) => label.id === trigger.labelId)
-  ) {
-    return false
+  if (trigger.labelId) {
+    const labels =
+      trigger.event === "labelAdded" ? event.addedLabels : event.issue.labels
+    if (!labels?.some((label) => label.id === trigger.labelId)) return false
   }
-  if (
-    trigger.event === "statusChanged" &&
-    trigger.stateId &&
-    trigger.stateId !== event.issue.stateId
-  ) {
+  if (trigger.stateId && trigger.stateId !== event.issue.stateId) {
     return false
   }
   return true

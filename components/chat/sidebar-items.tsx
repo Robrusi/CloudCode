@@ -161,6 +161,7 @@ export function SidebarItem({
   childrenOpen: childrenOpenProp,
   filterKey = "",
   nested = false,
+  repoSublabel,
   showAutomationGlyph = true,
   childChats,
   activeId,
@@ -168,6 +169,7 @@ export function SidebarItem({
   onSelect,
   onDelete,
   onRename,
+  onSettle,
   onSelectId,
   onDeleteId,
   onRenameId,
@@ -184,6 +186,9 @@ export function SidebarItem({
    * that caused the subtree to match is visible. */
   filterKey?: string
   nested?: boolean
+  /** Names the row's repo in the subtitle — set by flat lists (inbox view)
+   * where no folder header provides that context. */
+  repoSublabel?: string
   /** Rows already listed under an automation header skip the Clock glyph. */
   showAutomationGlyph?: boolean
   childChats?: SidebarChat[]
@@ -192,6 +197,9 @@ export function SidebarItem({
   onSelect: () => void
   onDelete: () => void
   onRename: (title: string) => void
+  /** When set, the context menu offers Settle (hides the row from the inbox
+   * view until new activity). */
+  onSettle?: () => void
   onSelectId?: (id: Id<"threads">) => void
   onDeleteId?: (id: Id<"threads">) => void
   onRenameId?: (id: Id<"threads">, title: string) => void
@@ -345,6 +353,7 @@ export function SidebarItem({
                     nested ? "text-[0.625rem]" : "text-[0.6875rem]"
                   )}
                 >
+                  {repoSublabel ? `${repoSublabel} · ` : ""}
                   {relativeTime(chat.lastUserMessageAt)}
                 </span>
               </div>
@@ -408,6 +417,7 @@ export function SidebarItem({
             y={menu.y}
             onClose={() => setMenu(null)}
             items={[
+              ...(onSettle ? [{ label: "Settle", onSelect: onSettle }] : []),
               { label: "Rename", onSelect: startRename },
               { label: "Delete", onSelect: onDelete, destructive: true },
             ]}

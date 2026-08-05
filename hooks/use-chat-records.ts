@@ -56,6 +56,7 @@ export function useChatRecords() {
   )
   const updateThread = useMutation(api.chats.updateThread)
   const setThreadNotes = useMutation(api.chats.setThreadNotes)
+  const settleThread = useMutation(api.chats.settleThread)
   const [activeId, setActiveIdState] = useState<Id<"threads"> | null>(() => {
     // ?thread= deep-links open a specific conversation (e.g. from the review
     // comment a run posted on GitHub) and win over the remembered thread.
@@ -209,6 +210,7 @@ export function useChatRecords() {
     saveRunState,
     setActiveId,
     setThreadNotes,
+    settleThread,
     threadViewKey,
     updateThread,
     viewer,

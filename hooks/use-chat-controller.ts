@@ -67,6 +67,7 @@ export function useChatController(): ChatShellProps {
     saveRunState,
     setActiveId,
     setThreadNotes,
+    settleThread,
     threadViewKey,
     updateThread,
     viewer,
@@ -456,6 +457,13 @@ export function useChatController(): ChatShellProps {
     threadRunStateRef,
     updateThreadTitle: updateThread,
   })
+  // Hides the thread from the sidebar inbox view until it sees new activity.
+  const settleChat = useCallback(
+    (threadId: Id<"threads">) => {
+      void settleThread({ threadId })
+    },
+    [settleThread]
+  )
   const {
     onAttachmentInputChange,
     onBaseBranchChange,
@@ -813,6 +821,7 @@ export function useChatController(): ChatShellProps {
         onNewChatInRepo: startNewChatInRepo,
         onRename: renameChat,
         onSelect: selectChat,
+        onSettle: settleChat,
         onSelectSettingsSection: selectSettingsSection,
         onShowAutomations: showAutomations,
         onShowReviews: showReviews,

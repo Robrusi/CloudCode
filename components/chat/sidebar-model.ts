@@ -8,6 +8,7 @@ export type SidebarChat = {
   createdAt: number
   factoryRootThreadId?: Id<"threads">
   id: Id<"threads">
+  inboxSettledAt?: number
   lastUserMessageAt: number
   pending: boolean
   repoUrl: string
@@ -19,6 +20,10 @@ export type SidebarChat = {
 export type SidebarThreadSort = "activity" | "created" | "oldest" | "title"
 
 export type SidebarThreadFilter = "all" | "running" | "sandbox"
+
+/** How the sidebar lists threads: grouped into repo folders, or as a flat
+ * inbox where each row names its repo and stays listed until settled. */
+export type SidebarThreadView = "folders" | "inbox"
 
 export type SidebarThreadListOptions = {
   filter: SidebarThreadFilter
@@ -176,6 +181,25 @@ export function buildSidebarChatNodes(chats: SidebarChat[]): SidebarChatNode[] {
     return { chat, children, latest }
   })
   return nodes.sort((a, b) => b.latest - a.latest)
+}
+
+/** A settle covers all activity up to the moment it was clicked; anything
+ * newer (on the thread or a dispatched child) surfaces the row again. */
+export function isSidebarNodeSettled(node: SidebarChatNode) {
+  const settledAt = node.chat.inboxSettledAt
+  return typeof settledAt === "number" && settledAt >= node.latest
+}
+
+/** Flat inbox rows: filtered and sorted like the folder view, minus settled
+ * threads. */
+export function inboxSidebarChatNodes(
+  chats: SidebarChat[],
+  options: SidebarThreadListOptions = DEFAULT_SIDEBAR_THREAD_OPTIONS
+): SidebarChatNode[] {
+  return sortSidebarChatNodes(
+    filterSidebarChatNodes(buildSidebarChatNodes(chats), options),
+    options.sort
+  ).filter((node) => !isSidebarNodeSettled(node))
 }
 
 export function groupSidebarChats(

@@ -19,6 +19,7 @@ import {
 import { deleteWorkerDaytonaSandbox } from "@/lib/sandbox/delete"
 import { encryptSecret } from "@/lib/security/secret-crypto"
 import type { cloudcodeRun } from "@/trigger/cloudcode-run"
+import type { integrationEvent } from "@/trigger/integrations"
 
 const DUE_AUTOMATIONS_PER_TICK = 25
 
@@ -228,6 +229,24 @@ export const automationsTick = schedules.task({
         { now, workerSecret }
       )
       await queueFactoryWakeRuns(strandedWakes)
+
+      const pendingIngress = await client.query(
+        api.factoryWaits.workerPendingWaitIngress,
+        { workerSecret }
+      )
+      for (const ingressId of pendingIngress) {
+        await tasks
+          .trigger<typeof integrationEvent>(
+            "integration-event",
+            { ingressId, kind: "wait_ingress" },
+            {
+              idempotencyKey: `fwi:${ingressId}:recover:${Math.floor(now / 60_000)}`,
+            }
+          )
+          .catch((error) => {
+            console.warn("Unable to recover Factory wait ingress.", error)
+          })
+      }
     } catch (error) {
       console.warn("Unable to sweep factory waits.", error)
     }

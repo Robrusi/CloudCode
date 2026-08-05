@@ -573,6 +573,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
     })
     const factoryConfig = cloudcodeFactoryCodexConfig({
       accessToken: input.notesAccessToken,
+      appUrl: process.env.NEXT_PUBLIC_APP_URL,
       convexUrl: input.convexUrl,
       paths,
       runId: input.runId,
@@ -616,6 +617,7 @@ export async function runCodexInSandbox(input: RunCodexInSandboxInput) {
         factoryConfig
           ? writeCloudcodeFactoryState(sandbox, paths, {
               accessToken: input.notesAccessToken,
+              appUrl: process.env.NEXT_PUBLIC_APP_URL,
               convexUrl: input.convexUrl,
               runId: input.runId,
               threadId: input.threadId,

@@ -16,9 +16,9 @@ export async function installationForProviderExternal(
 
 /** The user's single enabled installation of a provider. Ambiguity is an
  * error, not a guess: with several enabled workspaces a silent first-match
- * would post questions to (or watch issues in) the wrong one. Callers with a
- * concrete workspace in hand (thread bridges, webhook events) resolve
- * through the installation id instead and are unaffected. */
+ * would watch the wrong source. Callers with a concrete workspace in hand
+ * (thread bridges, webhook events) resolve through the installation id and
+ * are unaffected. */
 export async function enabledInstallationForUser(
   ctx: QueryCtx | MutationCtx,
   userId: Id<"users">,
@@ -29,11 +29,11 @@ export async function enabledInstallationForUser(
     .withIndex("by_user_provider", (q) =>
       q.eq("userId", userId).eq("provider", provider)
     )
-    .collect()
+    .take(2)
   const enabled = installations.filter((installation) => installation.enabled)
   if (enabled.length > 1) {
     throw new Error(
-      `Multiple ${provider} workspaces are connected, so the target workspace is ambiguous. Waits and posts currently support one enabled ${provider} workspace; disable the others in Settings → Connections, or start the session from the intended workspace's conversation.`
+      `Multiple ${provider} workspaces are connected, so the target workspace is ambiguous. Factory waits currently support one enabled ${provider} workspace; disable the others in Settings → Connections.`
     )
   }
   return enabled[0] ?? null

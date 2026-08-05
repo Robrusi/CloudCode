@@ -14,9 +14,10 @@ import { type CSSProperties, useMemo } from "react"
 import { ResizeHandle } from "@/components/layout/resize-handle"
 import { repoLabel } from "@/components/chat/format"
 import { SidebarAutomationList } from "@/components/chat/sidebar-automations"
-import { FolderGroup } from "@/components/chat/sidebar-items"
+import { FolderGroup, SidebarItem } from "@/components/chat/sidebar-items"
 import {
   groupSidebarChats,
+  inboxSidebarChatNodes,
   sidebarThreadFilterKey,
   type SidebarChat,
 } from "@/components/chat/sidebar-model"
@@ -40,6 +41,7 @@ export function Sidebar({
   onSelect,
   onDelete,
   onRename,
+  onSettle,
   onShowAutomations,
   onShowReviews,
   onShowSettings,
@@ -59,6 +61,7 @@ export function Sidebar({
   onSelect: (id: Id<"threads">) => void
   onDelete: (id: Id<"threads">) => void
   onRename: (id: Id<"threads">, title: string) => void
+  onSettle: (id: Id<"threads">) => void
   onShowAutomations: () => void
   onShowReviews: () => void
   onShowSettings: () => void
@@ -87,20 +90,33 @@ export function Sidebar({
   const automationContext = sidebarThreadContext === "automations"
   const reviewContext = sidebarThreadContext === "reviews"
   const folders = useSidebarFolderState(sidebarThreadContext)
+  const inboxView = !automationContext && threadFilters.view === "inbox"
   // The automations context renders its own grouped list, so skip the repo
   // grouping there.
   const groups = useMemo(
     () =>
-      automationContext ? [] : groupSidebarChats(chats, threadFilters.options),
-    [automationContext, chats, threadFilters.options]
+      automationContext || inboxView
+        ? []
+        : groupSidebarChats(chats, threadFilters.options),
+    [automationContext, inboxView, chats, threadFilters.options]
   )
+  // Flat inbox rows: ungrouped, repo named on each row, settled threads
+  // hidden until new activity.
+  const inboxNodes = useMemo(
+    () =>
+      inboxView ? inboxSidebarChatNodes(chats, threadFilters.options) : [],
+    [inboxView, chats, threadFilters.options]
+  )
+  const listEmpty = inboxView ? inboxNodes.length === 0 : groups.length === 0
   // Hide the controls with an empty thread list — unless filters caused the
   // emptiness, in which case they must stay reachable to be cleared.
   const showThreadControls =
     !automationContext && (chats.length > 0 || threadFilters.filtersActive)
-  const emptyThreadsLabel = reviewContext
-    ? "No review threads yet"
-    : "No chats yet"
+  const emptyThreadsLabel = inboxView
+    ? "Inbox is clear"
+    : reviewContext
+      ? "No review threads yet"
+      : "No chats yet"
 
   return (
     <aside
@@ -186,8 +202,10 @@ export function Sidebar({
               onFilterChange={threadFilters.setFilter}
               onQueryChange={threadFilters.setQuery}
               onSortChange={threadFilters.setSort}
+              onViewChange={threadFilters.setView}
               query={threadFilters.query}
               sort={threadFilters.sort}
+              view={threadFilters.view}
             />
           ) : null}
 
@@ -201,7 +219,7 @@ export function Sidebar({
                 onRename={onRename}
                 onShowAutomations={onShowAutomations}
               />
-            ) : groups.length === 0 ? (
+            ) : listEmpty ? (
               threadFilters.filtersActive ? (
                 <div className="flex flex-col items-start gap-2.5 px-3 pt-4">
                   <p className="text-[0.6875rem] text-muted-foreground/80">
@@ -224,6 +242,32 @@ export function Sidebar({
                   {emptyThreadsLabel}
                 </div>
               )
+            ) : inboxView ? (
+              <div>
+                {inboxNodes.map((node) => (
+                  <SidebarItem
+                    key={node.chat.id}
+                    chat={node.chat}
+                    childChats={node.children}
+                    active={currentView === "chat" && node.chat.id === activeId}
+                    activeId={currentView === "chat" ? activeId : null}
+                    childrenOpen={folders.subtreeOpen(node.chat.id)}
+                    filterKey={sidebarThreadFilterKey(threadFilters.options)}
+                    pending={node.chat.pending}
+                    repoSublabel={repoLabel(node.chat.repoUrl)}
+                    onChildrenOpenChange={(open) =>
+                      folders.setSubtreeOpen(node.chat.id, open)
+                    }
+                    onSelect={() => onSelect(node.chat.id)}
+                    onDelete={() => onDelete(node.chat.id)}
+                    onRename={(title) => onRename(node.chat.id, title)}
+                    onSettle={() => onSettle(node.chat.id)}
+                    onSelectId={onSelect}
+                    onDeleteId={onDelete}
+                    onRenameId={onRename}
+                  />
+                ))}
+              </div>
             ) : (
               <div className="space-y-1">
                 {groups.map((g) => {
